@@ -3,7 +3,7 @@
 # GRAPHDECO research group, https://team.inria.fr/graphdeco
 # All rights reserved.
 #
-# This software is free for non-commercial, research and evaluation use 
+# This software is free for non-commercial, research and evaluation use
 # under the terms of the LICENSE.md file.
 #
 # For inquiries contact  george.drettakis@inria.fr
@@ -28,10 +28,14 @@ try:
 except ImportError:
     TENSORBOARD_FOUND = False
 
+import wandb
+
 def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoint_iterations, checkpoint, debug_from):
     first_iter = 0
     tb_writer = prepare_output_and_logger(dataset)
     gaussians = GaussianModel(dataset.sh_degree)
+    # wandb watch model
+    wandb.watch(gaussians)
     scene = Scene(dataset, gaussians)
     gaussians.training_setup(opt)
     if checkpoint:
@@ -48,7 +52,7 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
     ema_loss_for_log = 0.0
     progress_bar = tqdm(range(first_iter, opt.iterations), desc="Training progress")
     first_iter += 1
-    for iteration in range(first_iter, opt.iterations + 1):        
+    for iteration in range(first_iter, opt.iterations + 1):
         if network_gui.conn == None:
             network_gui.try_connect()
         while network_gui.conn != None:
@@ -115,7 +119,7 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
                 if iteration > opt.densify_from_iter and iteration % opt.densification_interval == 0:
                     size_threshold = 20 if iteration > opt.opacity_reset_interval else None
                     gaussians.densify_and_prune(opt.densify_grad_threshold, 0.005, scene.cameras_extent, size_threshold)
-                
+
                 if iteration % opt.opacity_reset_interval == 0 or (dataset.white_background and iteration == opt.densify_from_iter):
                     gaussians.reset_opacity()
 
@@ -128,14 +132,14 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
                 print("\n[ITER {}] Saving Checkpoint".format(iteration))
                 torch.save((gaussians.capture(), iteration), scene.model_path + "/chkpnt" + str(iteration) + ".pth")
 
-def prepare_output_and_logger(args):    
+def prepare_output_and_logger(args):
     if not args.model_path:
         if os.getenv('OAR_JOB_ID'):
             unique_str=os.getenv('OAR_JOB_ID')
         else:
             unique_str = str(uuid.uuid4())
         args.model_path = os.path.join("./output/", unique_str[0:10])
-        
+
     # Set up output folder
     print("Output folder: {}".format(args.model_path))
     os.makedirs(args.model_path, exist_ok = True)
@@ -159,7 +163,7 @@ def training_report(tb_writer, iteration, Ll1, loss, l1_loss, elapsed, testing_i
     # Report test and samples of training set
     if iteration in testing_iterations:
         torch.cuda.empty_cache()
-        validation_configs = ({'name': 'test', 'cameras' : scene.getTestCameras()}, 
+        validation_configs = ({'name': 'test', 'cameras' : scene.getTestCameras()},
                               {'name': 'train', 'cameras' : [scene.getTrainCameras()[idx % len(scene.getTrainCameras())] for idx in range(5, 30, 5)]})
 
         for config in validation_configs:
@@ -176,7 +180,7 @@ def training_report(tb_writer, iteration, Ll1, loss, l1_loss, elapsed, testing_i
                     l1_test += l1_loss(image, gt_image).mean().double()
                     psnr_test += psnr(image, gt_image).mean().double()
                 psnr_test /= len(config['cameras'])
-                l1_test /= len(config['cameras'])          
+                l1_test /= len(config['cameras'])
                 print("\n[ITER {}] Evaluating {}: L1 {} PSNR {}".format(iteration, config['name'], l1_test, psnr_test))
                 if tb_writer:
                     tb_writer.add_scalar(config['name'] + '/loss_viewpoint - l1_loss', l1_test, iteration)
@@ -186,6 +190,46 @@ def training_report(tb_writer, iteration, Ll1, loss, l1_loss, elapsed, testing_i
             tb_writer.add_histogram("scene/opacity_histogram", scene.gaussians.get_opacity, iteration)
             tb_writer.add_scalar('total_points', scene.gaussians.get_xyz.shape[0], iteration)
         torch.cuda.empty_cache()
+
+
+def init_wandb(cfg, wandb_id=None, project="", run_name=None, mode="online", resume=False, use_group=False):
+    r"""Initialize Weights & Biases (wandb) logger.
+
+    Args:
+        cfg (obj): Global configuration.
+        wandb_id (str): A unique ID for this run, used for resuming.
+        project (str): The name of the project where you're sending the new run.
+            If the project is not specified, the run is put in an "Uncategorized" project.
+        run_name (str): name for each wandb run (useful for logging changes)
+        mode (str): online/offline/disabled
+    """
+    print('Initialize wandb')
+    if not wandb_id:
+        wandb_path = os.path.join(cfg.model_path, "wandb_id.txt")
+        if resume and os.path.exists(wandb_path):
+            with open(wandb_path, "r") as f:
+                wandb_id = f.read()
+        else:
+            wandb_id = wandb.util.generate_id()
+            with open(wandb_path, "w") as f:
+                f.write(wandb_id)
+    if use_group:
+        group, name = cfg.model_path.split("/")[-2:]
+    else:
+        group, name = None, os.path.basename(cfg.model_path)
+
+    if run_name is not None:
+        name = run_name
+    wandb.init(id=wandb_id,
+               project=project,
+               config=vars(cfg),
+               group=group,
+               name=name,
+               dir=cfg.model_path,
+               resume=resume,
+               settings=wandb.Settings(start_method="fork"),
+               mode=mode)
+    wandb.config.update({'dataset': cfg.source_path})
 
 if __name__ == "__main__":
     # Set up command line argument parser
@@ -202,10 +246,24 @@ if __name__ == "__main__":
     parser.add_argument("--quiet", action="store_true")
     parser.add_argument("--checkpoint_iterations", nargs="+", type=int, default=[])
     parser.add_argument("--start_checkpoint", type=str, default = None)
+    # wandb setting
+    parser.add_argument("--wandb", action="store_true", default=False)
+    parser.add_argument("--wandb_name", type=str, default = None)
+    parser.add_argument("--wandb_mode", type=str, default = "online")
+    parser.add_argument("--resume", action="store_true", default=False)
+
     args = parser.parse_args(sys.argv[1:])
     args.save_iterations.append(args.iterations)
-    
     print("Optimizing " + args.model_path)
+
+    # Initialize wandb
+    if args.wandb:
+        wandb.login()
+        wandb_run = init_wandb(args,
+                               project=args.wandb_name,
+                               mode=args.wandb_mode,
+                               resume=args.resume,
+                               use_group=True)
 
     # Initialize system state (RNG)
     safe_state(args.quiet)
