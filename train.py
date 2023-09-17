@@ -20,6 +20,7 @@ from utils.general_utils import safe_state
 import uuid
 from tqdm import tqdm
 from utils.image_utils import psnr
+from utils.visualization import wandb_image
 from argparse import ArgumentParser, Namespace
 from arguments import ModelParams, PipelineParams, OptimizationParams
 try:
@@ -34,8 +35,6 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
     first_iter = 0
     tb_writer = prepare_output_and_logger(dataset)
     gaussians = GaussianModel(dataset.sh_degree)
-    # wandb watch model
-    wandb.watch(gaussians)
     scene = Scene(dataset, gaussians)
     gaussians.training_setup(opt)
     if checkpoint:
@@ -90,8 +89,28 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
         # Loss
         gt_image = viewpoint_cam.original_image.cuda()
         Ll1 = l1_loss(image, gt_image)
-        loss = (1.0 - opt.lambda_dssim) * Ll1 + opt.lambda_dssim * (1.0 - ssim(image, gt_image))
+        ssim_loss = ssim(image, gt_image)
+        loss = (1.0 - opt.lambda_dssim) * Ll1 + opt.lambda_dssim * (1.0 - ssim_loss)
         loss.backward()
+
+        # wandb record loss and images
+        if iteration % 10 == 0:
+            scalars = {
+                f"loss/l1_loss": Ll1,
+                f"loss/ssim": ssim_loss,
+                f"loss/overall_loss": loss,
+            }
+            wandb.log(scalars, step=iteration)
+        if iteration % 5000 == 0 or iteration == 1:
+            wandb_img = image.unsqueeze(0).permute(0, 1, 3, 2).detach()
+            wandb_img_gt = gt_image.unsqueeze(0).permute(0, 1, 3, 2).detach()
+            images_error = (wandb_img_gt - wandb_img).abs()
+            images = {
+                f"vis/rgb_target": wandb_image(gt_image),
+                f"vis/rgb_render": wandb_image(wandb_img),
+                f"vis/rgb_error": wandb_image(images_error),
+            }
+            wandb.log(images, step=iteration)
 
         iter_end.record()
 
