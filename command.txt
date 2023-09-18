@@ -1,0 +1,1 @@
+python train.py -s datasets/grand_place_brussels/ -m log/grand --wandb --wandb_name grand --wandb_mode online
