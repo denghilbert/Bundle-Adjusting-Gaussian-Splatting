@@ -31,7 +31,12 @@ except ImportError:
 
 import wandb
 
-def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoint_iterations, checkpoint, debug_from):
+# set random seeds
+import random
+random.seed(0)
+torch.manual_seed(0)
+
+def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoint_iterations, checkpoint, debug_from, use_wandb=False):
     first_iter = 0
     tb_writer = prepare_output_and_logger(dataset)
     gaussians = GaussianModel(dataset.sh_degree)
@@ -40,7 +45,6 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
     if checkpoint:
         (model_params, first_iter) = torch.load(checkpoint)
         gaussians.restore(model_params, opt)
-
     bg_color = [1, 1, 1] if dataset.white_background else [0, 0, 0]
     background = torch.tensor(bg_color, dtype=torch.float32, device="cuda")
 
@@ -91,7 +95,21 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
         Ll1 = l1_loss(image, gt_image)
         ssim_loss = ssim(image, gt_image)
         loss = (1.0 - opt.lambda_dssim) * Ll1 + opt.lambda_dssim * (1.0 - ssim_loss)
+
         loss.backward()
+
+        """Verify effect of gaussian scale on loss"""
+        #base_scaling = gaussians._scaling.clone()
+        ##for i in range(1, 11):
+        #for i in range(10, 0, -1):
+        #    ratio = i / 10
+        #    gaussians._scaling =  base_scaling * ratio
+        #    render_pkg = render(viewpoint_cam, gaussians, pipe, background)
+        #    image = render_pkg["render"]
+        #    Ll1 = l1_loss(image, gt_image)
+        #    print(str(i) + ':' + str(Ll1))
+        #import pdb
+        #pdb.set_trace()
 
         # wandb record loss and images
         if iteration % 10 == 0:
@@ -100,7 +118,8 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
                 f"loss/ssim": ssim_loss,
                 f"loss/overall_loss": loss,
             }
-            wandb.log(scalars, step=iteration)
+            if use_wandb:
+                wandb.log(scalars, step=iteration)
         if iteration % 5000 == 0 or iteration == 1:
             wandb_img = image.unsqueeze(0).permute(0, 1, 3, 2).detach()
             wandb_img_gt = gt_image.unsqueeze(0).permute(0, 1, 3, 2).detach()
@@ -110,7 +129,8 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
                 f"vis/rgb_render": wandb_image(wandb_img),
                 f"vis/rgb_error": wandb_image(images_error),
             }
-            wandb.log(images, step=iteration)
+            if use_wandb:
+                wandb.log(images, step=iteration)
 
         iter_end.record()
 
