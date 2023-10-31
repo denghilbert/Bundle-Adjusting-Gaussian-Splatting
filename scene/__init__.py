@@ -3,7 +3,7 @@
 # GRAPHDECO research group, https://team.inria.fr/graphdeco
 # All rights reserved.
 #
-# This software is free for non-commercial, research and evaluation use 
+# This software is free for non-commercial, research and evaluation use
 # under the terms of the LICENSE.md file.
 #
 # For inquiries contact  george.drettakis@inria.fr
@@ -17,6 +17,44 @@ from scene.dataset_readers import sceneLoadTypeCallbacks
 from scene.gaussian_model import GaussianModel
 from arguments import ModelParams
 from utils.camera_utils import cameraList_from_camInfos, camera_to_JSON
+import torch
+
+def skew_symmetric(w):
+    w0,w1,w2 = w.unbind(dim=-1)
+    O = torch.zeros_like(w0)
+    wx = torch.stack([torch.stack([O,-w2,w1],dim=-1),
+                      torch.stack([w2,O,-w0],dim=-1),
+                      torch.stack([-w1,w0,O],dim=-1)],dim=-2)
+    return wx
+
+
+def taylor_A(x,nth=10):
+    # taylor expansion of sin(x)/x
+    ans = torch.zeros_like(x)
+    denom = 1.
+    for i in range(nth+1):
+        if i>0: denom *= (2*i)*(2*i+1)
+        ans = ans+(-1)**i*x**(2*i)/denom
+    return ans
+def taylor_B(x,nth=10):
+    # taylor expansion of (1-cos(x))/x**2
+    ans = torch.zeros_like(x)
+    denom = 1.
+    for i in range(nth+1):
+        denom *= (2*i+1)*(2*i+2)
+        ans = ans+(-1)**i*x**(2*i)/denom
+    return ans
+
+
+def so3_to_SO3(w): # [...,3]
+    wx = skew_symmetric(w)
+    theta = w.norm(dim=-1)[...,None,None]
+    I = torch.eye(3,device=w.device,dtype=torch.float32)
+    A = taylor_A(theta)
+    B = taylor_B(theta)
+    R = I+A*wx+B*wx@wx
+    return R
+
 
 class Scene:
 
@@ -70,6 +108,19 @@ class Scene:
 
         for resolution_scale in resolution_scales:
             print("Loading Training Cameras")
+            #import pdb; pdb.set_trace()
+            so3_noise = torch.randn(len(scene_info.train_cameras), 3).cuda() * 0.07
+            t_noise = (torch.randn(len(scene_info.train_cameras), 3).cuda() * 0.5).cpu().detach().numpy()
+            so3 = so3_to_SO3(so3_noise).cpu().detach().numpy()
+            for index in range(len(scene_info.train_cameras)):
+                # import pdb; pdb.set_trace()
+                #print(scene_info.train_cameras[index])
+                tmp_R = so3[index] @ scene_info.train_cameras[index].R
+                tmp_T = so3[index] @ scene_info.train_cameras[index].T + t_noise[index]
+                scene_info.train_cameras[index] = scene_info.train_cameras[index]._replace(T=tmp_T, R=tmp_R)
+                # import pdb; pdb.set_trace()
+                #print(scene_info.train_cameras[index])
+            #import pdb; pdb.set_trace()
             self.train_cameras[resolution_scale] = cameraList_from_camInfos(scene_info.train_cameras, resolution_scale, args)
             print("Loading Test Cameras")
             self.test_cameras[resolution_scale] = cameraList_from_camInfos(scene_info.test_cameras, resolution_scale, args)
