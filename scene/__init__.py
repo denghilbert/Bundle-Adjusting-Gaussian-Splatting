@@ -109,8 +109,8 @@ class Scene:
         for resolution_scale in resolution_scales:
             print("Loading Training Cameras")
             #import pdb; pdb.set_trace()
-            so3_noise = torch.randn(len(scene_info.train_cameras), 3).cuda() * 0.07
-            t_noise = (torch.randn(len(scene_info.train_cameras), 3).cuda() * 0.5).cpu().detach().numpy()
+            so3_noise = torch.randn(len(scene_info.train_cameras), 3).cuda() * 0.04
+            t_noise = (torch.randn(len(scene_info.train_cameras), 3).cuda() * 0.3).cpu().detach().numpy()
             so3 = so3_to_SO3(so3_noise).cpu().detach().numpy()
             for index in range(len(scene_info.train_cameras)):
                 # import pdb; pdb.set_trace()
