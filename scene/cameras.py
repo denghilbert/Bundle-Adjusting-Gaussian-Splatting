@@ -3,7 +3,7 @@
 # GRAPHDECO research group, https://team.inria.fr/graphdeco
 # All rights reserved.
 #
-# This software is free for non-commercial, research and evaluation use 
+# This software is free for non-commercial, research and evaluation use
 # under the terms of the LICENSE.md file.
 #
 # For inquiries contact  george.drettakis@inria.fr
@@ -12,7 +12,7 @@
 import torch
 from torch import nn
 import numpy as np
-from utils.graphics_utils import getWorld2View2, getProjectionMatrix
+from utils.graphics_utils import getWorld2View2, getProjectionMatrix, getWorld2View2_torch_tensor
 
 class Camera(nn.Module):
     def __init__(self, colmap_id, R, T, FoVx, FoVy, image, gt_alpha_mask,
@@ -23,8 +23,10 @@ class Camera(nn.Module):
 
         self.uid = uid
         self.colmap_id = colmap_id
-        self.R = R
-        self.T = T
+        self.R = nn.Parameter(torch.tensor(R).float().cuda().requires_grad_(True))
+        self.T = nn.Parameter(torch.tensor(T).float().cuda().requires_grad_(True))
+        #self.R = R
+        #self.T = T
         self.FoVx = FoVx
         self.FoVy = FoVy
         self.image_name = image_name
@@ -48,18 +50,41 @@ class Camera(nn.Module):
         self.zfar = 100.0
         self.znear = 0.01
 
-        self.trans = trans
-        self.scale = scale
+        self.trans = torch.tensor(trans).cuda()
+        self.scale = torch.tensor(scale).cuda()
+        #self.trans = trans
+        #self.scale = scale
 
-        self.world_view_transform = torch.tensor(getWorld2View2(R, T, trans, scale)).transpose(0, 1).cuda()
-        self.projection_matrix = getProjectionMatrix(znear=self.znear, zfar=self.zfar, fovX=self.FoVx, fovY=self.FoVy).transpose(0,1).cuda()
-        self.full_proj_transform = (self.world_view_transform.unsqueeze(0).bmm(self.projection_matrix.unsqueeze(0))).squeeze(0)
-        self.camera_center = self.world_view_transform.inverse()[3, :3]
+        #self.world_view_transform = torch.tensor(getWorld2View2(R, T, trans, scale)).transpose(0, 1).cuda()
+        self.world_view_transform = getWorld2View2_torch_tensor(torch.tensor(R).float().cuda(), torch.tensor(T).float().cuda(), torch.tensor(trans).float().cuda(), torch.tensor(scale).float().cuda()).transpose(0, 1).requires_grad_(True)
+        self.projection_matrix = getProjectionMatrix(znear=self.znear, zfar=self.zfar, fovX=self.FoVx, fovY=self.FoVy).transpose(0,1).cuda().requires_grad_(True)
+        self.full_proj_transform = (self.world_view_transform.unsqueeze(0).bmm(self.projection_matrix.unsqueeze(0))).squeeze(0).requires_grad_(True)
+        self.camera_center = self.world_view_transform.inverse()[3, :3].requires_grad_(True)
+
+    @property
+    def get_world_view(self):
+        return self.world_view_transform
+
+    @property
+    def get_full_proj(self):
+        return self.full_proj_transform
+
+    @property
+    def get_camera_center(self):
+        return self.camera_center
+
+    @property
+    def get_R(self):
+        return self.R
+
+    @property
+    def get_T(self):
+        return self.T
 
 class MiniCam:
     def __init__(self, width, height, fovy, fovx, znear, zfar, world_view_transform, full_proj_transform):
         self.image_width = width
-        self.image_height = height    
+        self.image_height = height
         self.FoVy = fovy
         self.FoVx = fovx
         self.znear = znear
