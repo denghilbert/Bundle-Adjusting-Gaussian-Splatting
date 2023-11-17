@@ -14,6 +14,10 @@ import logging
 from argparse import ArgumentParser
 import shutil
 
+import time
+
+start = time.time()
+print (time.asctime(time.localtime(time.time())))
 # This Python script is based on the shell converter script provided in the MipNerF 360 repository.
 parser = ArgumentParser("Colmap converter")
 parser.add_argument("--no_gpu", action='store_true')
@@ -123,3 +127,6 @@ if(args.resize):
             exit(exit_code)
 
 print("Done.")
+end = time.time()
+print (time.asctime(time.localtime(time.time())))
+print(end - start)
