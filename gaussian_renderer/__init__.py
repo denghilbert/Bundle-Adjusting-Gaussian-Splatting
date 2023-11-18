@@ -40,10 +40,10 @@ def render(viewpoint_camera, pc : GaussianModel, pipe, bg_color : torch.Tensor, 
         tanfovy=tanfovy,
         bg=bg_color,
         scale_modifier=scaling_modifier,
-        viewmatrix=viewpoint_camera.world_view_transform,
-        projmatrix=viewpoint_camera.full_proj_transform,
+        viewmatrix=viewpoint_camera.get_world_view_transform,
+        projmatrix=viewpoint_camera.get_full_proj_transform,
         sh_degree=pc.active_sh_degree,
-        campos=viewpoint_camera.camera_center,
+        campos=viewpoint_camera.get_camera_center,
         prefiltered=False,
         debug=pipe.debug
     )
@@ -81,8 +81,8 @@ def render(viewpoint_camera, pc : GaussianModel, pipe, bg_color : torch.Tensor, 
     else:
         colors_precomp = override_color
 
-    world_view = viewpoint_camera.get_world_view
-    full_proj = viewpoint_camera.get_full_proj
+    world_view = viewpoint_camera.get_world_view_transform
+    full_proj = viewpoint_camera.get_full_proj_transform
     camera_center = viewpoint_camera.get_camera_center
     # Rasterize visible Gaussians to image, obtain their radii (on screen).
     rendered_image, radii = rasterizer(
