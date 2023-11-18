@@ -168,15 +168,20 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
 
             # Optimizer step
             if iteration < opt.iterations:
-                #viewpoint_cam.full_proj_transform.grad
-                #viewpoint_cam.world_view_transform.grad
-                #viewspace_point_tensor
-                #viewpoint_cam.world_view_transform.grad/3.129
-                #import pdb; pdb.set_trace()
                 gaussians.optimizer.step()
                 gaussians.optimizer.zero_grad(set_to_none = True)
-                #scene.optimizer.step()
-                #scene.optimizer.zero_grad(set_to_none=True)
+                print(viewpoint_cam.world_view_transform)
+                print(viewpoint_cam.world_view_transform.grad)
+                print(viewpoint_cam.camera_center)
+                scene.optimizer.step()
+                scene.optimizer.zero_grad(set_to_none=True)
+                print(viewpoint_cam.world_view_transform)
+                print(viewpoint_cam.world_view_transform.grad)
+                print(viewpoint_cam.camera_center)
+                print(viewpoint_cam.get_camera_center)
+                print(viewpoint_cam.camera_center)
+                import pdb;pdb.set_trace()
+                #print(0)
 
             if (iteration in checkpoint_iterations):
                 print("\n[ITER {}] Saving Checkpoint".format(iteration))
