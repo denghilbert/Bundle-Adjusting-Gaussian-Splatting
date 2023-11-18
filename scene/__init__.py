@@ -110,8 +110,8 @@ class Scene:
         for resolution_scale in resolution_scales:
             print("Loading Training Cameras")
             #import pdb; pdb.set_trace()
-            so3_noise = torch.randn(len(scene_info.train_cameras), 3).cuda() * 0.004
-            t_noise = (torch.randn(len(scene_info.train_cameras), 3).cuda() * 0.03).cpu().detach().numpy()
+            so3_noise = torch.randn(len(scene_info.train_cameras), 3).cuda() * 0.0
+            t_noise = (torch.randn(len(scene_info.train_cameras), 3).cuda() * 0.0).cpu().detach().numpy()
             so3 = so3_to_SO3(so3_noise).cpu().detach().numpy()
             for index in range(len(scene_info.train_cameras)):
                 # import pdb; pdb.set_trace()
@@ -134,7 +134,7 @@ class Scene:
         # naive implementation to deal with pose noise
         # set camera parameters as learnbale parameters
         l = [{'params': camera.parameters(), 'lr': 0.00016} for camera in self.train_cameras[resolution_scale]]
-        self.optimizer = torch.optim.Adam(l, lr=0.0, eps=1e-15)
+        self.optimizer = torch.optim.Adam(l, eps=1e-15)
 
     def save(self, iteration):
         point_cloud_path = os.path.join(self.model_path, "point_cloud/iteration_{}".format(iteration))
