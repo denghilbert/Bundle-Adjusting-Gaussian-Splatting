@@ -32,15 +32,25 @@ except ImportError:
 import wandb
 
 # set random seeds
+import numpy as np
 import random
-random.seed(0)
-torch.manual_seed(0)
+seed_value = 42  # Replace this with your desired seed value
 
-def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoint_iterations, checkpoint, debug_from, use_wandb=False):
+torch.manual_seed(seed_value)
+if torch.cuda.is_available():
+    torch.cuda.manual_seed(seed_value)
+    torch.cuda.manual_seed_all(seed_value)  # if you are using multi-GPU.
+    torch.backends.cudnn.deterministic = True
+    torch.backends.cudnn.benchmark = False
+
+np.random.seed(seed_value)
+random.seed(seed_value)
+
+def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoint_iterations, checkpoint, debug_from, use_wandb=False, random_init=False):
     first_iter = 0
     tb_writer = prepare_output_and_logger(dataset)
     gaussians = GaussianModel(dataset.sh_degree)
-    scene = Scene(dataset, gaussians)
+    scene = Scene(dataset, gaussians, random_init=random_init)
     gaussians.training_setup(opt)
     if checkpoint:
         (model_params, first_iter) = torch.load(checkpoint)
@@ -89,7 +99,7 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
             pipe.debug = True
         # input type
         # viewpoint_cam: Camera, gaussians: <scene.gaussian_model.GaussianModel object at 0x7fd570fd9650>
-        render_pkg = render(viewpoint_cam, gaussians, pipe, background)
+        render_pkg = render(viewpoint_cam, gaussians, pipe, background, iteration=iteration)
         image, viewspace_point_tensor, visibility_filter, radii = render_pkg["render"], render_pkg["viewspace_points"], render_pkg["visibility_filter"], render_pkg["radii"]
 
         # Loss
@@ -170,17 +180,20 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
             if iteration < opt.iterations:
                 gaussians.optimizer.step()
                 gaussians.optimizer.zero_grad(set_to_none = True)
-                print(viewpoint_cam.world_view_transform)
-                print(viewpoint_cam.world_view_transform.grad)
-                print(viewpoint_cam.camera_center)
+                #if iteration in [1001, 1002]:
+                #    print(viewpoint_cam.world_view_transform)
+                #    print(viewpoint_cam.world_view_transform.grad)
+                #    #print(viewpoint_cam.camera_center)
+                #if iteration == 1002:
+                #    import pdb;pdb.set_trace()
                 scene.optimizer.step()
                 scene.optimizer.zero_grad(set_to_none=True)
-                print(viewpoint_cam.world_view_transform)
-                print(viewpoint_cam.world_view_transform.grad)
-                print(viewpoint_cam.camera_center)
-                print(viewpoint_cam.get_camera_center)
-                print(viewpoint_cam.camera_center)
-                import pdb;pdb.set_trace()
+                #print(viewpoint_cam.world_view_transform)
+                #print(viewpoint_cam.world_view_transform.grad)
+                #print(viewpoint_cam.camera_center)
+                #print(viewpoint_cam.get_camera_center)
+                #print(viewpoint_cam.camera_center)
+                #import pdb;pdb.set_trace()
                 #print(0)
 
             if (iteration in checkpoint_iterations):
@@ -306,6 +319,8 @@ if __name__ == "__main__":
     parser.add_argument("--wandb_name", type=str, default = None)
     parser.add_argument("--wandb_mode", type=str, default = "online")
     parser.add_argument("--resume", action="store_true", default=False)
+    # random init point cloud
+    parser.add_argument("--random_init_pc", action="store_true", default=False)
 
     args = parser.parse_args(sys.argv[1:])
     args.save_iterations.append(args.iterations)
@@ -326,7 +341,7 @@ if __name__ == "__main__":
     # Start GUI server, configure and run training
     network_gui.init(args.ip, args.port)
     torch.autograd.set_detect_anomaly(args.detect_anomaly)
-    training(lp.extract(args), op.extract(args), pp.extract(args), args.test_iterations, args.save_iterations, args.checkpoint_iterations, args.start_checkpoint, args.debug_from)
+    training(lp.extract(args), op.extract(args), pp.extract(args), args.test_iterations, args.save_iterations, args.checkpoint_iterations, args.start_checkpoint, args.debug_from, random_init = args.random_init_pc)
 
     # All done
     print("\nTraining complete.")

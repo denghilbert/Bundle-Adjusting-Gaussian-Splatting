@@ -60,7 +60,7 @@ class Scene:
 
     gaussians : GaussianModel
 
-    def __init__(self, args : ModelParams, gaussians : GaussianModel, load_iteration=None, shuffle=True, resolution_scales=[1.0]):
+    def __init__(self, args : ModelParams, gaussians : GaussianModel, load_iteration=None, shuffle=True, resolution_scales=[1.0], random_init=False):
         """b
         :param path: Path to colmap scene main folder.
         """
@@ -110,8 +110,8 @@ class Scene:
         for resolution_scale in resolution_scales:
             print("Loading Training Cameras")
             #import pdb; pdb.set_trace()
-            so3_noise = torch.randn(len(scene_info.train_cameras), 3).cuda() * 0.0
-            t_noise = (torch.randn(len(scene_info.train_cameras), 3).cuda() * 0.0).cpu().detach().numpy()
+            so3_noise = torch.randn(len(scene_info.train_cameras), 3).cuda() * 0.001
+            t_noise = (torch.randn(len(scene_info.train_cameras), 3).cuda() * 0.001).cpu().detach().numpy()
             so3 = so3_to_SO3(so3_noise).cpu().detach().numpy()
             for index in range(len(scene_info.train_cameras)):
                 # import pdb; pdb.set_trace()
@@ -129,7 +129,7 @@ class Scene:
         if self.loaded_iter:
             self.gaussians.load_ply(os.path.join(self.model_path, "point_cloud", "iteration_" + str(self.loaded_iter), "point_cloud.ply"))
         else:
-            self.gaussians.create_from_pcd(scene_info.point_cloud, self.cameras_extent)
+            self.gaussians.create_from_pcd(scene_info.point_cloud, self.cameras_extent, random_init=random_init)
 
         # naive implementation to deal with pose noise
         # set camera parameters as learnbale parameters
