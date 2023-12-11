@@ -109,17 +109,21 @@ class Scene:
         self.cameras_torch = []
         for resolution_scale in resolution_scales:
             print("Loading Training Cameras")
-            #import pdb; pdb.set_trace()
-            so3_noise = torch.randn(len(scene_info.train_cameras), 3).cuda() * 0.001
-            t_noise = (torch.randn(len(scene_info.train_cameras), 3).cuda() * 0.001).cpu().detach().numpy()
+
+            # simply add noise
+            so3_noise = torch.randn(len(scene_info.train_cameras), 3) * 0.00
+            t_noise = (torch.randn(len(scene_info.train_cameras), 3) * 0.00).numpy()
+            # apply global transformation and rotation
+            so3_noise = torch.tensor([3.1415926 / 4, 0., 0.])[None, :].repeat(len(scene_info.train_cameras), 1)
+            #t_noise = torch.tensor([0., 0., 1.])[None, :].repeat(len(scene_info.train_cameras), 1).numpy()
+
             so3 = so3_to_SO3(so3_noise).cpu().detach().numpy()
             for index in range(len(scene_info.train_cameras)):
-                # import pdb; pdb.set_trace()
-                #print(scene_info.train_cameras[index])
                 tmp_R = so3[index] @ scene_info.train_cameras[index].R
-                tmp_T = so3[index] @ scene_info.train_cameras[index].T + t_noise[index]
+                #tmp_T = so3[index] @ (scene_info.train_cameras[index].T + t_noise[index])
+                tmp_T = (scene_info.train_cameras[index].T + t_noise[index])
                 scene_info.train_cameras[index] = scene_info.train_cameras[index]._replace(T=tmp_T, R=tmp_R)
-                # import pdb; pdb.set_trace()
+                #import pdb; pdb.set_trace()
                 #print(scene_info.train_cameras[index])
             #import pdb; pdb.set_trace()
             self.train_cameras[resolution_scale] = cameraList_from_camInfos(scene_info.train_cameras, resolution_scale, args)
