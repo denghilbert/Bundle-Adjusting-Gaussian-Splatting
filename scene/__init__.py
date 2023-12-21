@@ -111,10 +111,10 @@ class Scene:
             print("Loading Training Cameras")
 
             # simply add noise
-            so3_noise = torch.randn(len(scene_info.train_cameras), 3) * 0.00
-            t_noise = (torch.randn(len(scene_info.train_cameras), 3) * 0.00).numpy()
+            so3_noise = torch.randn(len(scene_info.train_cameras), 3) * 0.000
+            t_noise = (torch.randn(len(scene_info.train_cameras), 3) * 0.000).numpy()
             # apply global transformation and rotation
-            so3_noise = torch.tensor([3.1415926 / 4, 0., 0.])[None, :].repeat(len(scene_info.train_cameras), 1)
+            # so3_noise = torch.tensor([3.1415926 / 4, 0., 0.])[None, :].repeat(len(scene_info.train_cameras), 1)
             #t_noise = torch.tensor([0., 0., 1.])[None, :].repeat(len(scene_info.train_cameras), 1).numpy()
 
             so3 = so3_to_SO3(so3_noise).cpu().detach().numpy()
