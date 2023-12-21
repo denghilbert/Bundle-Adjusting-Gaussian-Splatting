@@ -180,10 +180,10 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
             if iteration < opt.iterations:
                 gaussians.optimizer.step()
                 gaussians.optimizer.zero_grad(set_to_none = True)
-                if iteration in [1001, 1002, 3000]:
-                    print(viewpoint_cam.world_view_transform)
-                    print(viewpoint_cam.world_view_transform.grad)
-                    #print(viewpoint_cam.camera_center)
+                #if iteration in [1001, 1002, 3000]:
+                #    print(viewpoint_cam.world_view_transform)
+                #    print(viewpoint_cam.world_view_transform.grad)
+                #    #print(viewpoint_cam.camera_center)
                 #if iteration == 1002:
                 #    import pdb;pdb.set_trace()
                 scene.optimizer.step()
