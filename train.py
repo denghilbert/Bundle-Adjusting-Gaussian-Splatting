@@ -12,11 +12,11 @@
 import os
 import torch
 from random import randint
-from utils.loss_utils import l1_loss, ssim
+from utils.loss_utils import l1_loss, ssim, kl_divergence, l2_loss
 from gaussian_renderer import render, network_gui
 import sys
-from scene import Scene, GaussianModel
-from utils.general_utils import safe_state
+from scene import Scene, GaussianModel, SpecularModel
+from utils.general_utils import safe_state, get_linear_noise_func, linear_to_srgb
 import uuid
 from tqdm import tqdm
 from utils.image_utils import psnr
@@ -46,11 +46,14 @@ if torch.cuda.is_available():
 np.random.seed(seed_value)
 random.seed(seed_value)
 
-def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoint_iterations, checkpoint, debug_from, use_wandb=False, random_init=False):
+def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoint_iterations, checkpoint, debug_from, use_wandb=False, random_init=False, hybrid=False, opt_cam=False, r_t_noise=[0., 0.]):
     first_iter = 0
     tb_writer = prepare_output_and_logger(dataset)
-    gaussians = GaussianModel(dataset.sh_degree)
-    scene = Scene(dataset, gaussians, random_init=random_init)
+    gaussians = GaussianModel(dataset.sh_degree, dataset.asg_degree)
+    specular_mlp = SpecularModel()
+    specular_mlp.train_setting(opt)
+
+    scene = Scene(dataset, gaussians, random_init=random_init, r_t_noise=r_t_noise)
     gaussians.training_setup(opt)
     if checkpoint:
         (model_params, first_iter) = torch.load(checkpoint)
@@ -63,8 +66,11 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
 
     viewpoint_stack = None
     ema_loss_for_log = 0.0
+    best_psnr = 0.0
+    best_iteration = 0
     progress_bar = tqdm(range(first_iter, opt.iterations), desc="Training progress")
     first_iter += 1
+    smooth_term = get_linear_noise_func(lr_init=0.1, lr_final=1e-15, lr_delay_mult=0.01, max_steps=20000)
     for iteration in range(first_iter, opt.iterations + 1):
         if network_gui.conn == None:
             network_gui.try_connect()
@@ -84,6 +90,7 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
         iter_start.record()
 
         gaussians.update_learning_rate(iteration)
+        specular_mlp.update_learning_rate(iteration)
 
         # Every 1000 its we increase the levels of SH up to a maximum degree
         if iteration % 1000 == 0:
@@ -98,8 +105,16 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
         if (iteration - 1) == debug_from:
             pipe.debug = True
         # input type
+        N = gaussians.get_xyz.shape[0]
+        if iteration > 3000 and hybrid:
+            dir_pp = (gaussians.get_xyz - viewpoint_cam.camera_center.repeat(gaussians.get_features.shape[0], 1))
+            dir_pp_normalized = dir_pp / dir_pp.norm(dim=1, keepdim=True)
+            mlp_color = specular_mlp.step(gaussians.get_asg_features, dir_pp_normalized)
+        else:
+            mlp_color = 0
+
         # viewpoint_cam: Camera, gaussians: <scene.gaussian_model.GaussianModel object at 0x7fd570fd9650>
-        render_pkg = render(viewpoint_cam, gaussians, pipe, background, iteration=iteration)
+        render_pkg = render(viewpoint_cam, gaussians, pipe, background, mlp_color, iteration=iteration, hybrid=hybrid)
         image, viewspace_point_tensor, visibility_filter, radii = render_pkg["render"], render_pkg["viewspace_points"], render_pkg["visibility_filter"], render_pkg["radii"]
 
         # Loss
@@ -107,6 +122,10 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
         Ll1 = l1_loss(image, gt_image)
         ssim_loss = ssim(image, gt_image)
         loss = (1.0 - opt.lambda_dssim) * Ll1 + opt.lambda_dssim * (1.0 - ssim_loss)
+        #if iteration > 3000:
+        #    residual_color = render(viewpoint_cam, gaussians, pipe, background, mlp_color, hybrid=hybrid)["render"]
+        #    reflect_loss = l1_loss(gt_image - image, residual_color)
+        #    loss = loss + reflect_loss
 
         loss.backward(retain_graph=True)
 
@@ -156,10 +175,11 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
                 progress_bar.close()
 
             # Log and save
-            training_report(tb_writer, iteration, Ll1, loss, l1_loss, iter_start.elapsed_time(iter_end), testing_iterations, scene, render, (pipe, background))
+            training_report(tb_writer, iteration, Ll1, loss, l1_loss, iter_start.elapsed_time(iter_end), testing_iterations, scene, render, (pipe, background, mlp_color))
             if (iteration in saving_iterations):
                 print("\n[ITER {}] Saving Gaussians".format(iteration))
                 scene.save(iteration)
+                specular_mlp.save_weights(args.model_path, iteration)
 
 
             # Densification
@@ -186,13 +206,17 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
                 #    #print(viewpoint_cam.camera_center)
                 #if iteration == 1002:
                 #    import pdb;pdb.set_trace()
-                scene.optimizer.step()
-                scene.optimizer.zero_grad(set_to_none=True)
+                if opt_cam:
+                    scene.optimizer.step()
+                    scene.optimizer.zero_grad(set_to_none=True)
                 #print(viewpoint_cam.world_view_transform)
                 #print(viewpoint_cam.world_view_transform.grad)
                 #print(viewpoint_cam.camera_center)
                 #print(viewpoint_cam.get_camera_center)
                 #print(viewpoint_cam.camera_center)
+                if hybrid:
+                    specular_mlp.optimizer.step()
+                    specular_mlp.optimizer.zero_grad()
                 #import pdb;pdb.set_trace()
                 #print(0)
 
@@ -322,6 +346,13 @@ if __name__ == "__main__":
     # random init point cloud
     parser.add_argument("--random_init_pc", action="store_true", default=False)
 
+    # use hybrid for specular
+    parser.add_argument("--hybrid", action="store_true", default=False)
+    # if optimize camera poses
+    parser.add_argument("--opt_cam", action="store_true", default=False)
+    # noise for rotation and translation
+    parser.add_argument("--r_t_noise", nargs="+", type=float, default=[0., 0.])
+
     args = parser.parse_args(sys.argv[1:])
     args.save_iterations.append(args.iterations)
     print("Optimizing " + args.model_path)
@@ -341,7 +372,7 @@ if __name__ == "__main__":
     # Start GUI server, configure and run training
     network_gui.init(args.ip, args.port)
     torch.autograd.set_detect_anomaly(args.detect_anomaly)
-    training(lp.extract(args), op.extract(args), pp.extract(args), args.test_iterations, args.save_iterations, args.checkpoint_iterations, args.start_checkpoint, args.debug_from, random_init = args.random_init_pc)
+    training(lp.extract(args), op.extract(args), pp.extract(args), args.test_iterations, args.save_iterations, args.checkpoint_iterations, args.start_checkpoint, args.debug_from, random_init = args.random_init_pc, hybrid=args.hybrid, opt_cam=args.opt_cam, r_t_noise=args.r_t_noise)
 
     # All done
     print("\nTraining complete.")

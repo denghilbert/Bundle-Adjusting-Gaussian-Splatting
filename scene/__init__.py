@@ -15,6 +15,7 @@ import json
 from utils.system_utils import searchForMaxIteration
 from scene.dataset_readers import sceneLoadTypeCallbacks
 from scene.gaussian_model import GaussianModel
+from scene.specular_model import SpecularModel
 from arguments import ModelParams
 from utils.camera_utils import cameraList_from_camInfos, camera_to_JSON
 import torch
@@ -60,7 +61,7 @@ class Scene:
 
     gaussians : GaussianModel
 
-    def __init__(self, args : ModelParams, gaussians : GaussianModel, load_iteration=None, shuffle=True, resolution_scales=[1.0], random_init=False):
+    def __init__(self, args : ModelParams, gaussians : GaussianModel, load_iteration=None, shuffle=True, resolution_scales=[1.0], random_init=False, r_t_noise=[0., 0.]):
         """b
         :param path: Path to colmap scene main folder.
         """
@@ -111,8 +112,8 @@ class Scene:
             print("Loading Training Cameras")
 
             # simply add noise
-            so3_noise = torch.randn(len(scene_info.train_cameras), 3) * 0.000
-            t_noise = (torch.randn(len(scene_info.train_cameras), 3) * 0.000).numpy()
+            so3_noise = torch.randn(len(scene_info.train_cameras), 3) * r_t_noise[0]
+            t_noise = (torch.randn(len(scene_info.train_cameras), 3) * r_t_noise[1]).numpy()
             # apply global transformation and rotation
             # so3_noise = torch.tensor([3.1415926 / 4, 0., 0.])[None, :].repeat(len(scene_info.train_cameras), 1)
             #t_noise = torch.tensor([0., 0., 1.])[None, :].repeat(len(scene_info.train_cameras), 1).numpy()

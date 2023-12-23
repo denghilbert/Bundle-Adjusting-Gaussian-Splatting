@@ -63,6 +63,20 @@ class Camera(nn.Module):
         self.full_proj_transform = (self.world_view_transform.unsqueeze(0).bmm(self.projection_matrix.unsqueeze(0))).squeeze(0)
         self.camera_center = self.world_view_transform.inverse()[3, :3]
 
+    def reset_extrinsic(self, R, T):
+        self.world_view_transform = torch.tensor(getWorld2View2(R, T, self.trans, self.scale)).transpose(0, 1).cuda()
+        self.full_proj_transform = (
+            self.world_view_transform.unsqueeze(0).bmm(self.projection_matrix.unsqueeze(0))).squeeze(0)
+        self.camera_center = self.world_view_transform.inverse()[3, :3]
+
+    def load2device(self, data_device='cuda'):
+        self.original_image = self.original_image.to(data_device)
+        self.world_view_transform = self.world_view_transform.to(data_device)
+        self.projection_matrix = self.projection_matrix.to(data_device)
+        self.full_proj_transform = self.full_proj_transform.to(data_device)
+        self.camera_center = self.camera_center.to(data_device)
+        self.fid = self.fid.to(data_device)
+
     @property
     def get_world_view_transform(self):
         return self.world_view_transform
