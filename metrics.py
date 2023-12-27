@@ -51,7 +51,6 @@ def evaluate(model_paths, eval_set):
 
             #test_dir = Path(scene_dir) / "train"
             test_dir = Path(scene_dir) / eval_set
-            import pdb;pdb.set_trace()
 
             for method in os.listdir(test_dir):
                 print("Method:", method)
