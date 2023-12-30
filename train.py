@@ -50,8 +50,9 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
     first_iter = 0
     tb_writer = prepare_output_and_logger(dataset)
     gaussians = GaussianModel(dataset.sh_degree, dataset.asg_degree)
-    specular_mlp = SpecularModel()
-    specular_mlp.train_setting(opt)
+    if hybrid:
+        specular_mlp = SpecularModel()
+        specular_mlp.train_setting(opt)
 
     scene = Scene(dataset, gaussians, random_init=random_init, r_t_noise=r_t_noise)
     gaussians.training_setup(opt)
@@ -90,7 +91,8 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
         iter_start.record()
 
         gaussians.update_learning_rate(iteration)
-        specular_mlp.update_learning_rate(iteration)
+        if hybrid:
+            specular_mlp.update_learning_rate(iteration)
 
         # Every 1000 its we increase the levels of SH up to a maximum degree
         if iteration % 1000 == 0:
@@ -107,7 +109,7 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
         # input type
         N = gaussians.get_xyz.shape[0]
         if iteration > 3000 and hybrid:
-            dir_pp = (gaussians.get_xyz - viewpoint_cam.camera_center.repeat(gaussians.get_features.shape[0], 1))
+            dir_pp = (gaussians.get_xyz - viewpoint_cam.get_camera_center.repeat(gaussians.get_features.shape[0], 1))
             dir_pp_normalized = dir_pp / dir_pp.norm(dim=1, keepdim=True)
             mlp_color = specular_mlp.step(gaussians.get_asg_features, dir_pp_normalized)
         else:
@@ -129,19 +131,6 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
 
         loss.backward(retain_graph=True)
 
-        """Verify effect of gaussian scale on loss"""
-        #base_scaling = gaussians._scaling.clone()
-        ##for i in range(1, 11):
-        #for i in range(10, 0, -1):
-        #    ratio = i / 10
-        #    gaussians._scaling =  base_scaling * ratio
-        #    render_pkg = render(viewpoint_cam, gaussians, pipe, background)
-        #    image = render_pkg["render"]
-        #    Ll1 = l1_loss(image, gt_image)
-        #    print(str(i) + ':' + str(Ll1))
-        #import pdb
-        #pdb.set_trace()
-
         # wandb record loss and images
         if iteration % 10 == 0:
             scalars = {
@@ -151,9 +140,9 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
             }
             if use_wandb:
                 wandb.log(scalars, step=iteration)
-        if iteration % 5000 == 0 or iteration == 1:
-            wandb_img = image.unsqueeze(0).permute(0, 1, 3, 2).detach()
-            wandb_img_gt = gt_image.unsqueeze(0).permute(0, 1, 3, 2).detach()
+        if iteration % 3000 == 0 or iteration == 1:
+            wandb_img = image.unsqueeze(0).detach()
+            wandb_img_gt = gt_image.unsqueeze(0).detach()
             images_error = (wandb_img_gt - wandb_img).abs()
             images = {
                 f"vis/rgb_target": wandb_image(gt_image),
@@ -179,7 +168,8 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
             if (iteration in saving_iterations):
                 print("\n[ITER {}] Saving Gaussians".format(iteration))
                 scene.save(iteration)
-                specular_mlp.save_weights(args.model_path, iteration)
+                if hybrid:
+                    specular_mlp.save_weights(args.model_path, iteration)
 
 
             # Densification
@@ -204,8 +194,6 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
                 #    print(viewpoint_cam.world_view_transform)
                 #    print(viewpoint_cam.world_view_transform.grad)
                 #    #print(viewpoint_cam.camera_center)
-                #if iteration == 1002:
-                #    import pdb;pdb.set_trace()
                 if opt_cam:
                     scene.optimizer.step()
                     scene.optimizer.zero_grad(set_to_none=True)
@@ -284,7 +272,7 @@ def training_report(tb_writer, iteration, Ll1, loss, l1_loss, elapsed, testing_i
         torch.cuda.empty_cache()
 
 
-def init_wandb(cfg, wandb_id=None, project="", run_name=None, mode="online", resume=False, use_group=False):
+def init_wandb(cfg, wandb_id=None, project="", run_name=None, mode="online", resume=False, use_group=False, set_group=None):
     r"""Initialize Weights & Biases (wandb) logger.
 
     Args:
@@ -307,8 +295,10 @@ def init_wandb(cfg, wandb_id=None, project="", run_name=None, mode="online", res
                 f.write(wandb_id)
     if use_group:
         group, name = cfg.model_path.split("/")[-2:]
+        group = set_group
     else:
         group, name = None, os.path.basename(cfg.model_path)
+        group = set_group
 
     if run_name is not None:
         name = run_name
@@ -340,7 +330,8 @@ if __name__ == "__main__":
     parser.add_argument("--start_checkpoint", type=str, default = None)
     # wandb setting
     parser.add_argument("--wandb", action="store_true", default=False)
-    parser.add_argument("--wandb_name", type=str, default = None)
+    parser.add_argument("--wandb_project_name", type=str, default = None)
+    parser.add_argument("--wandb_group_name", type=str, default = None)
     parser.add_argument("--wandb_mode", type=str, default = "online")
     parser.add_argument("--resume", action="store_true", default=False)
     # random init point cloud
@@ -361,10 +352,12 @@ if __name__ == "__main__":
     if args.wandb:
         wandb.login()
         wandb_run = init_wandb(args,
-                               project=args.wandb_name,
+                               project=args.wandb_project_name,
                                mode=args.wandb_mode,
                                resume=args.resume,
-                               use_group=True)
+                               use_group=True,
+                               set_group=args.wandb_group_name
+                               )
 
     # Initialize system state (RNG)
     safe_state(args.quiet)
@@ -372,7 +365,7 @@ if __name__ == "__main__":
     # Start GUI server, configure and run training
     network_gui.init(args.ip, args.port)
     torch.autograd.set_detect_anomaly(args.detect_anomaly)
-    training(lp.extract(args), op.extract(args), pp.extract(args), args.test_iterations, args.save_iterations, args.checkpoint_iterations, args.start_checkpoint, args.debug_from, random_init = args.random_init_pc, hybrid=args.hybrid, opt_cam=args.opt_cam, r_t_noise=args.r_t_noise)
+    training(lp.extract(args), op.extract(args), pp.extract(args), args.test_iterations, args.save_iterations, args.checkpoint_iterations, args.start_checkpoint, args.debug_from, use_wandb=args.wandb, random_init=args.random_init_pc, hybrid=args.hybrid, opt_cam=args.opt_cam, r_t_noise=args.r_t_noise)
 
     # All done
     print("\nTraining complete.")

@@ -83,12 +83,12 @@ class Camera(nn.Module):
 
     @property
     def get_full_proj_transform(self):
-        self.full_proj_transform = (self.world_view_transform.unsqueeze(0).bmm(self.projection_matrix.unsqueeze(0))).squeeze(0)
+        self.full_proj_transform = (self.get_world_view_transform.unsqueeze(0).bmm(self.projection_matrix.unsqueeze(0))).squeeze(0)
         return self.full_proj_transform
 
     @property
     def get_camera_center(self):
-        self.camera_center = self.world_view_transform.inverse()[3, :3]
+        self.camera_center = self.get_world_view_transform.inverse()[3, :3]
         return self.camera_center
 
 
