@@ -25,7 +25,7 @@ import imageio
 import numpy as np
 import cv2
 
-def render_set(model_path, name, iteration, views, gaussians, pipeline, background, specular, hybrid):
+def render_set(model_path, name, iteration, views, gaussians, pipeline, background, specular=None, hybrid=False):
     render_path = os.path.join(model_path, name, "ours_{}".format(iteration), "renders")
     gts_path = os.path.join(model_path, name, "ours_{}".format(iteration), "gt")
     depth_path = os.path.join(model_path, name, "ours_{}".format(iteration), "depth")
@@ -57,8 +57,10 @@ def render_sets(dataset : ModelParams, iteration : int, pipeline : PipelineParam
     with torch.no_grad():
         gaussians = GaussianModel(dataset.sh_degree, dataset.asg_degree)
         scene = Scene(dataset, gaussians, load_iteration=iteration, shuffle=False)
-        specular = SpecularModel()
-        specular.load_weights(dataset.model_path)
+        specular = None
+        if hybrid:
+            specular = SpecularModel()
+            specular.load_weights(dataset.model_path)
 
         bg_color = [1,1,1] if dataset.white_background else [0, 0, 0]
         background = torch.tensor(bg_color, dtype=torch.float32, device="cuda")
