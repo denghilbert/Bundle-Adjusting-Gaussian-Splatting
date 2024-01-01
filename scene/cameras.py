@@ -12,7 +12,7 @@
 import torch
 from torch import nn
 import numpy as np
-from utils.graphics_utils import getWorld2View2, getProjectionMatrix, getWorld2View2_torch_tensor
+from utils.graphics_utils import getWorld2View2, getProjectionMatrix, getWorld2View2_torch_tensor, get_rays
 
 class Camera(nn.Module):
     def __init__(self, colmap_id, R, T, FoVx, FoVy, image, gt_alpha_mask,
@@ -76,6 +76,11 @@ class Camera(nn.Module):
         self.full_proj_transform = self.full_proj_transform.to(data_device)
         self.camera_center = self.camera_center.to(data_device)
         self.fid = self.fid.to(data_device)
+
+    @property
+    def get_rays(self):
+        rays_o, rays_d = get_rays(self.image_height, self.image_width, self.projection_matrix[:3, :3].transpose(0, 1), self.world_view_transform.transpose(0, 1).inverse())
+        return rays_o, rays_d
 
     @property
     def get_world_view_transform(self):

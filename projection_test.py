@@ -31,6 +31,9 @@ except ImportError:
     TENSORBOARD_FOUND = False
 
 import wandb
+from lightglue import LightGlue, SuperPoint, DISK, SIFT, ALIKED
+from lightglue.utils import load_image, rbd
+from lightglue import viz2d
 
 # set random seeds
 import numpy as np
@@ -65,22 +68,84 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
     mlp_color = 0
 
     viewpoint_stack = scene.getTrainCameras().copy()
-    viewpoint_cam = viewpoint_stack.pop(randint(0, len(viewpoint_stack)-1))
+    viewpoint_stack_constant = scene.getTrainCameras().copy()
 
 
-    render_pkg = render(viewpoint_cam, gaussians, pipe, background, mlp_color, iteration=7000, hybrid=False)
+    # first view
+    viewpoint_cam_1 = viewpoint_stack[0]
+
+    render_pkg = render(viewpoint_cam_1, gaussians, pipe, background, mlp_color, iteration=7000, hybrid=False)
     image, viewspace_point_tensor, visibility_filter, radii = render_pkg["render"], render_pkg["viewspace_points"], render_pkg["visibility_filter"], render_pkg["radii"]
-    gt_image = viewpoint_cam.original_image.cuda()
-
+    gt_image = viewpoint_cam_1.original_image.cuda()
+    # transform to wandb
     wandb_img = image.unsqueeze(0).detach()
     wandb_img_gt = gt_image.unsqueeze(0).detach()
     images_error = (wandb_img_gt - wandb_img).abs()
-    images = {
-        f"vis/rgb_target": wandb_image(gt_image),
-        f"vis/rgb_render": wandb_image(wandb_img),
-        f"vis/rgb_error": wandb_image(images_error),
-    }
-    wandb.log(images, step=0)
+    #images = {
+    #    f"vis/rgb_target1": wandb_image(gt_image),
+    #    f"vis/rgb_render1": wandb_image(wandb_img),
+    #    f"vis/rgb_error1": wandb_image(images_error),
+    #}
+
+
+    # view2
+    for i in range(len(viewpoint_stack)):
+        viewpoint_cam_2 = viewpoint_stack[i]
+        render_pkg = render(viewpoint_cam_2, gaussians, pipe, background, mlp_color, iteration=7000, hybrid=False)
+        image_1, viewspace_point_tensor, visibility_filter, radii = render_pkg["render"], render_pkg["viewspace_points"], render_pkg["visibility_filter"], render_pkg["radii"]
+        gt_image = viewpoint_cam_2.original_image.cuda()
+
+        with torch.no_grad():
+            matched_imgs, m_kpts0, m_kpts1 = light_glue(image, image_1)
+            matched_imgs = matched_imgs[:, :, :3].permute(2, 0, 1)
+
+        wandb_img = image_1.unsqueeze(0).detach()
+        wandb_img_gt = gt_image.unsqueeze(0).detach()
+        wandb_matched_img = matched_imgs.unsqueeze(0).detach()
+        images_error = (wandb_img_gt - wandb_img).abs()
+        images = {
+            #f"vis/rgb_target": wandb_image(gt_image),
+            #f"vis/rgb_render": wandb_image(wandb_img),
+            #f"vis/rgb_error": wandb_image(images_error),
+            f"matching/matched_img{i}": wandb_image(wandb_matched_img),
+        }
+
+        if use_wandb:
+            wandb.log(images, step=0)
+
+
+    viewpoint_cam_1.camera_center
+    viewpoint_cam_2.camera_center
+    rays_o, rays_d = viewpoint_cam_1.get_rays
+    rays_o, rays_d = viewpoint_cam_2.get_rays
+
+def light_glue(image0, image1):
+    # SuperPoint+LightGlue
+    extractor = SuperPoint(max_num_keypoints=2048).eval().cuda()  # load the extractor
+    matcher = LightGlue(features='superpoint').eval().cuda()  # load the matcher
+
+    # or DISK+LightGlue, ALIKED+LightGlue or SIFT+LightGlue
+    extractor = DISK(max_num_keypoints=2048).eval().cuda()  # load the extractor
+    matcher = LightGlue(features='disk').eval().cuda()  # load the matcher
+
+    # extract local features
+    feats0 = extractor.extract(image0)  # auto-resize the image, disable with resize=None
+    feats1 = extractor.extract(image1)
+
+    # match the features
+    matches01 = matcher({'image0': feats0, 'image1': feats1})
+    feats0, feats1, matches01 = [rbd(x) for x in [feats0, feats1, matches01]]  # remove batch dimension
+    kpts0, kpts1, matches = feats0["keypoints"], feats1["keypoints"], matches01["matches"]
+    m_kpts0, m_kpts1 = kpts0[matches[..., 0]], kpts1[matches[..., 1]]
+
+    axes = viz2d.plot_images([image0, image1])
+    viz2d.plot_matches(m_kpts0, m_kpts1, color="lime", lw=0.2)
+    viz2d.add_text(0, f'Stop after {matches01["stop"]} layers', fs=20)
+
+    #kpc0, kpc1 = viz2d.cm_prune(matches01["prune0"]), viz2d.cm_prune(matches01["prune1"])
+    #viz2d.plot_images([image0, image1])
+    #viz2d.plot_keypoints([kpts0, kpts1], colors=[kpc0, kpc1], ps=10)
+    return viz2d.get_plot(), m_kpts0, m_kpts1
 
 def prepare_output_and_logger(args):
     if not args.model_path:
