@@ -29,6 +29,7 @@ class CameraInfo(NamedTuple):
     T: np.array
     FovY: np.array
     FovX: np.array
+    intrinsic_matrix: np.array
     image: np.array
     image_path: str
     image_name: str
@@ -83,6 +84,15 @@ def readColmapCameras(cam_extrinsics, cam_intrinsics, images_folder):
         R = np.transpose(qvec2rotmat(extr.qvec))
         T = np.array(extr.tvec)
 
+        # test of rotation matrix
+        #def mat_from_quat(quat):
+        #    # quat is [w, x, y, z]
+        #    from scipy.spatial.transform import Rotation as R
+        #    rot = R.from_quat([quat[1], quat[2], quat[3], quat[0]]) # expects [x, y, z, w]
+        #    mat = rot.as_matrix()
+        #    return mat
+        #R_test = mat_from_quat(extr.qvec)
+
         if intr.model=="SIMPLE_PINHOLE":
             focal_length_x = intr.params[0]
             FovY = focal2fov(focal_length_x, height)
@@ -100,8 +110,7 @@ def readColmapCameras(cam_extrinsics, cam_intrinsics, images_folder):
         image = Image.open(image_path)
         # depth = imageio.imread(depth_name)
 
-        cam_info = CameraInfo(uid=uid, R=R, T=T, FovY=FovY, FovX=FovX, image=image,
-                              image_path=image_path, image_name=image_name, width=width, height=height)
+        cam_info = CameraInfo(uid=uid, R=R, T=T, FovY=FovY, FovX=FovX, image=image,                              image_path=image_path, image_name=image_name, width=width, height=height)
         cam_infos.append(cam_info)
     sys.stdout.write('\n')
     return cam_infos
