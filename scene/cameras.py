@@ -15,7 +15,7 @@ import numpy as np
 from utils.graphics_utils import getWorld2View2, getProjectionMatrix, getWorld2View2_torch_tensor, get_rays
 
 class Camera(nn.Module):
-    def __init__(self, colmap_id, R, T, FoVx, FoVy, image, gt_alpha_mask,
+    def __init__(self, colmap_id, R, T, intrinsic_matrix, FoVx, FoVy, image, gt_alpha_mask,
                  image_name, uid,
                  trans=np.array([0.0, 0.0, 0.0]), scale=1.0, data_device = "cuda", depth=None):
         super(Camera, self).__init__()
@@ -26,6 +26,7 @@ class Camera(nn.Module):
         #self.T = nn.Parameter(torch.tensor(T).float().cuda().requires_grad_(True))
         self.R = R
         self.T = T
+        self.intrinsic_matrix = torch.from_numpy(intrinsic_matrix).cuda()
         self.FoVx = FoVx
         self.FoVy = FoVy
         self.image_name = image_name
@@ -79,7 +80,7 @@ class Camera(nn.Module):
 
     @property
     def get_rays(self):
-        rays_o, rays_d = get_rays(self.image_height, self.image_width, self.projection_matrix[:3, :3].transpose(0, 1), self.world_view_transform.transpose(0, 1).inverse())
+        rays_o, rays_d = get_rays(self.image_height, self.image_width, self.intrinsic_matrix, self.world_view_transform.transpose(0, 1).inverse())
         return rays_o, rays_d
 
     @property
