@@ -79,9 +79,22 @@ class Camera(nn.Module):
         self.fid = self.fid.to(data_device)
 
     @property
-    def get_rays(self):
-        rays_o, rays_d = get_rays(self.image_height, self.image_width, self.intrinsic_matrix, self.world_view_transform.transpose(0, 1).inverse())
+    def get_rays(self, noise_d=None, noise_o=None):
+        rays_o, rays_d = get_rays(self.image_height, self.image_width, self.intrinsic_matrix,
+                                  self.world_view_transform.transpose(0, 1).inverse())
+        #if noise_o:
+        #    rays_o = rays_o + noise_o
+        #if noise_d:
+        #    rays_d = rays_d + noise_d
         return rays_o, rays_d
+
+    @property
+    def get_intrinsic(self):
+        return self.intrinsic_matrix
+
+    @property
+    def get_w2c(self):
+        return self.world_view_transform.t()
 
     @property
     def get_world_view_transform(self):
