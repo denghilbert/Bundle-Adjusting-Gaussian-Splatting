@@ -72,61 +72,194 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
 
 
     # first view
-    viewpoint_cam_1 = viewpoint_stack[0]
+    viewpoint_cam_0 = viewpoint_stack[0]
 
-    render_pkg = render(viewpoint_cam_1, gaussians, pipe, background, mlp_color, iteration=7000, hybrid=False)
+    render_pkg = render(viewpoint_cam_0, gaussians, pipe, background, mlp_color, iteration=7000, hybrid=False)
     image, viewspace_point_tensor, visibility_filter, radii = render_pkg["render"], render_pkg["viewspace_points"], render_pkg["visibility_filter"], render_pkg["radii"]
-    gt_image = viewpoint_cam_1.original_image.cuda()
+    gt_image = viewpoint_cam_0.original_image.cuda()
     # transform to wandb
-    wandb_img = image.unsqueeze(0).detach()
-    wandb_img_gt = gt_image.unsqueeze(0).detach()
-    images_error = (wandb_img_gt - wandb_img).abs()
-    #images = {
-    #    f"vis/rgb_target1": wandb_image(gt_image),
-    #    f"vis/rgb_render1": wandb_image(wandb_img),
-    #    f"vis/rgb_error1": wandb_image(images_error),
-    #}
+    images_error = (image - gt_image).abs()
+    images = {
+        f"vis/rgb_target1": wandb_image(gt_image),
+        f"vis/rgb_render1": wandb_image(image),
+        f"vis/rgb_error1": wandb_image(images_error),
+    }
 
+
+
+    import time
+    from contextlib import contextmanager
+    @contextmanager
+    def timer(if_print=True):
+        start = time.perf_counter()
+        yield
+        end = time.perf_counter()
+        if if_print:
+            print("Elapsed Time:", end - start, "seconds")
 
     # view2
-    for i in range(len(viewpoint_stack)):
-        viewpoint_cam_2 = viewpoint_stack[i]
-        render_pkg = render(viewpoint_cam_2, gaussians, pipe, background, mlp_color, iteration=7000, hybrid=False)
-        image_1, viewspace_point_tensor, visibility_filter, radii = render_pkg["render"], render_pkg["viewspace_points"], render_pkg["visibility_filter"], render_pkg["radii"]
-        gt_image = viewpoint_cam_2.original_image.cuda()
+    match_features = ['superpoint', 'disk', 'aliked', 'sift']
+    #for match_feature in match_features:
+    match_feature = 'disk'
+    with timer(if_print=False):
+        #for i in range(len(viewpoint_stack)):
+        #for i in [39, 61, 0]:
+        for i in [4]:
+            viewpoint_cam_1 = viewpoint_stack[i]
+            render_pkg = render(viewpoint_cam_1, gaussians, pipe, background, mlp_color, iteration=7000, hybrid=False)
+            image_1, viewspace_point_tensor, visibility_filter, radii = render_pkg["render"], render_pkg["viewspace_points"], render_pkg["visibility_filter"], render_pkg["radii"]
+            gt_image = viewpoint_cam_1.original_image.cuda()
 
-        with torch.no_grad():
-            matched_imgs, m_kpts0, m_kpts1 = light_glue(image, image_1)
-            matched_imgs = matched_imgs[:, :, :3].permute(2, 0, 1)
+            with torch.no_grad():
+                #image = image.permute(0, 2, 1)
+                #image_1 = image_1.permute(0, 2, 1)
+                matched_imgs, correspondence_img, m_kpts0, m_kpts1 = light_glue(image, image_1, match_feature)
+                matched_imgs = matched_imgs[:, :, :3].permute(2, 0, 1)
+                correspondence_img = correspondence_img[:, :, :3].permute(2, 0, 1)
 
-        wandb_img = image_1.unsqueeze(0).detach()
-        wandb_img_gt = gt_image.unsqueeze(0).detach()
-        wandb_matched_img = matched_imgs.unsqueeze(0).detach()
-        images_error = (wandb_img_gt - wandb_img).abs()
-        images = {
-            #f"vis/rgb_target": wandb_image(gt_image),
-            #f"vis/rgb_render": wandb_image(wandb_img),
-            #f"vis/rgb_error": wandb_image(images_error),
-            f"matching/matched_img{i}": wandb_image(wandb_matched_img),
-        }
+            wandb_matched_img = matched_imgs.unsqueeze(0).detach()
+            wandb_correspondence_img = correspondence_img.unsqueeze(0).detach()
+            images_error = (gt_image - image_1).abs()
+            images.update(
+                {f"vis/rgb_target": wandb_image(gt_image),
+                f"vis/rgb_render": wandb_image(image_1),
+                f"vis/rgb_error": wandb_image(images_error),
+                f"{match_feature}/matched_img{i}": wandb_image(wandb_matched_img),
+                f"{match_feature}/correspondence_img{i}": wandb_image(wandb_correspondence_img)}
+            )
 
-        if use_wandb:
-            wandb.log(images, step=0)
+            if use_wandb:
+                wandb.log(images, step=0)
 
-
+    viewpoint_cam_0.camera_center
     viewpoint_cam_1.camera_center
-    viewpoint_cam_2.camera_center
-    rays_o, rays_d = viewpoint_cam_1.get_rays
-    rays_o, rays_d = viewpoint_cam_2.get_rays
+    rays_o, rays_d = viewpoint_cam_0.get_rays
+    rays_o_2, rays_d_2 = viewpoint_cam_1.get_rays
 
-def light_glue(image0, image1):
-    # SuperPoint+LightGlue
-    extractor = SuperPoint(max_num_keypoints=2048).eval().cuda()  # load the extractor
-    matcher = LightGlue(features='superpoint').eval().cuda()  # load the matcher
 
-    # or DISK+LightGlue, ALIKED+LightGlue or SIFT+LightGlue
-    extractor = DISK(max_num_keypoints=2048).eval().cuda()  # load the extractor
-    matcher = LightGlue(features='disk').eval().cuda()  # load the matcher
+    # 1 [287, 156], [666, 402]
+    direction0 = rays_d[[402, 156], [666, 287], :]
+    # 2 [261, 182], [668, 224]
+    direction1 = rays_d_2[[224, 182], [668, 261], :]
+    origin0 = rays_o[[402, 156], [666, 287], :]
+    origin1 = rays_o_2[[224, 182], [668, 261], :]
+    t1, t2 = mutual_projection(direction0, direction1, origin0, origin1, viewpoint_cam_0, viewpoint_cam_1)
+    import pdb;pdb.set_trace()
+    print(0)
+
+def mutual_projection(direction0, direction1, origin0, origin1, viewpoint_cam_0, viewpoint_cam_1):
+    """
+    direction: [number_points, 3]
+    origin: [number_points, 3]
+    """
+    direction0 = direction0.unsqueeze(0)
+    direction1 = direction1.unsqueeze(0)
+    origin0 = origin0.unsqueeze(0)
+    origin1 = origin1.unsqueeze(0)
+    direction0 = direction0 / (direction0.norm(p=2, dim=-1)[:, :, None] + 1e-10)
+    direction1 = direction1 / (direction1.norm(p=2, dim=-1)[:, :, None] + 1e-10)
+
+    origin0 = torch.cat([origin0, torch.ones((origin0.shape[:2]), device='cuda')[:, :, None]], dim=-1)[:, :, :3]
+    origin1 = torch.cat([origin1, torch.ones((origin1.shape[:2]), device='cuda')[:, :, None]], dim=-1)[:, :, :3]
+
+    intrinsic0 = viewpoint_cam_0.get_intrinsic
+    intrinsic1 = viewpoint_cam_1.get_intrinsic
+    intrinsic0[0][0] = -intrinsic0[0][0]
+    intrinsic1[0][0] = -intrinsic1[0][0]
+    w2c0 = viewpoint_cam_0.get_w2c[:3, :]
+    w2c1 = viewpoint_cam_1.get_w2c[:3, :]
+
+
+    r0_r1 = torch.einsum(
+        "ijk, ijk -> ij",
+        direction0,
+        direction1
+    )
+    t0 = (
+        torch.einsum(
+            "ijk, ijk -> ij",
+            direction0,
+            origin0 - origin1
+        ) - r0_r1
+        * torch.einsum(
+            "ijk, ijk -> ij",
+            direction1,
+            origin0 - origin1
+        )
+    ) / (r0_r1 ** 2 - 1 + 1e-10)
+
+    t1 = (
+        torch.einsum(
+            "ijk, ijk -> ij",
+            direction1,
+            origin1 - origin0
+        ) - r0_r1
+        * torch.einsum(
+            "ijk, ijk -> ij",
+            direction0,
+            origin1 - origin0
+        )
+    ) / (r0_r1 ** 2 - 1 + 1e-10)
+
+    p0 = t0[:, :, None] * direction0 + origin0
+    p1 = t1[:, :, None] * direction1 + origin1
+    p0_4d = torch.cat(
+        [p0, torch.ones((p0.shape[:2]), device='cuda')[:, :, None]], dim=-1
+    )
+    p1_4d = torch.cat(
+        [p1, torch.ones((p1.shape[:2]), device='cuda')[:, :, None]], dim=-1
+    )
+
+    avg_p0_p1 = (p0_4d + p1_4d) / 2
+
+    ## project 3d points (world coordinate) back to original images to see if projection is correct..
+    ######
+    #p0_proj_to_im0 = torch.einsum("ijk, pk -> ijp", p0_4d, w2c0)
+    #p1_proj_to_im1 = torch.einsum("ijk, pk -> ijp", p1_4d, w2c1)
+    #p0_norm_im0 = torch.einsum("ijk, pk -> ijp", p0_proj_to_im0, intrinsic0)
+    #p1_norm_im1 = torch.einsum("ijk, pk -> ijp", p1_proj_to_im1, intrinsic1)
+    #p0_norm_im0_2d = p0_norm_im0[:, :, :2] / (p0_norm_im0[:, :, 2, None] + 1e-10)
+    #p1_norm_im1_2d = p1_norm_im1[:, :, :2] / (p1_norm_im1[:, :, 2, None] + 1e-10)
+    #return p0_norm_im0_2d, p1_norm_im1_2d
+    ######
+
+
+    # project 3d points to target image
+    #####
+    p0_proj_to_im1 = torch.einsum("ijk, pk -> ijp", p0_4d, w2c1)
+    p1_proj_to_im0 = torch.einsum("ijk, pk -> ijp", p1_4d, w2c0)
+
+    p0_norm_im1 = torch.einsum("ijk, pk -> ijp", p0_proj_to_im1, intrinsic1)
+    p1_norm_im0 = torch.einsum("ijk, pk -> ijp", p1_proj_to_im0, intrinsic0)
+
+    p0_norm_im1_2d = p0_norm_im1[:, :, :2] / (p0_norm_im1[:, :, 2, None] + 1e-10)
+    p1_norm_im0_2d = p1_norm_im0[:, :, :2] / (p1_norm_im0[:, :, 2, None] + 1e-10)
+    return p0_norm_im1_2d, p1_norm_im0_2d
+    #####
+
+
+    # project avg of 3d points to target image
+    #####
+    avg_proj_to_im1 = torch.einsum("ijk, pk -> ijp", avg_p0_p1, w2c1)
+    avg_proj_to_im0 = torch.einsum("ijk, pk -> ijp", avg_p0_p1, w2c0)
+    avg_norm_im1 = torch.einsum("ijk, pk -> ijp", avg_proj_to_im1, intrinsic1)
+    avg_norm_im0 = torch.einsum("ijk, pk -> ijp", avg_proj_to_im0, intrinsic0)
+    avg_norm_im1_2d = avg_norm_im1[:, :, :2] / (avg_norm_im1[:, :, 2, None] + 1e-10)
+    avg_norm_im0_2d = avg_norm_im0[:, :, :2] / (avg_norm_im0[:, :, 2, None] + 1e-10)
+    #####
+    return avg_norm_im0_2d, avg_norm_im1_2d
+
+
+def light_glue(image0, image1, features='superpoint'):
+    if features == 'superpoint':
+        extractor = SuperPoint(max_num_keypoints=2048).eval().cuda()  # load the extractor
+    if features == 'disk':
+        extractor = DISK(max_num_keypoints=2048).eval().cuda()  # load the extractor
+    if features == 'aliked':
+        extractor = ALIKED(max_num_keypoints=2048).eval().cuda()  # load the extractor
+    if features == 'sift':
+        extractor = SIFT(max_num_keypoints=2048).eval().cuda()  # load the extractor
+    matcher = LightGlue(features=features).eval().cuda()  # load the matcher
 
     # extract local features
     feats0 = extractor.extract(image0)  # auto-resize the image, disable with resize=None
@@ -141,11 +274,13 @@ def light_glue(image0, image1):
     axes = viz2d.plot_images([image0, image1])
     viz2d.plot_matches(m_kpts0, m_kpts1, color="lime", lw=0.2)
     viz2d.add_text(0, f'Stop after {matches01["stop"]} layers', fs=20)
+    first_plot = viz2d.get_plot()
 
-    #kpc0, kpc1 = viz2d.cm_prune(matches01["prune0"]), viz2d.cm_prune(matches01["prune1"])
-    #viz2d.plot_images([image0, image1])
-    #viz2d.plot_keypoints([kpts0, kpts1], colors=[kpc0, kpc1], ps=10)
-    return viz2d.get_plot(), m_kpts0, m_kpts1
+    kpc0, kpc1 = viz2d.cm_prune(matches01["prune0"]), viz2d.cm_prune(matches01["prune1"])
+    viz2d.plot_images([image0, image1])
+    viz2d.plot_keypoints([kpts0, kpts1], colors=[kpc0, kpc1], ps=10)
+    second_plot = viz2d.get_plot()
+    return first_plot, second_plot, m_kpts0, m_kpts1
 
 def prepare_output_and_logger(args):
     if not args.model_path:

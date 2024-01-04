@@ -100,7 +100,7 @@ def readColmapCameras(cam_extrinsics, cam_intrinsics, images_folder):
                 [focal_length_x, 0., width * 0.5],
                 [0., focal_length_x, height * 0.5],
                 [0., 0., 1.]
-            ])
+            ], dtype=np.float32)
         elif intr.model=="PINHOLE":
             focal_length_x = intr.params[0]
             focal_length_y = intr.params[1]
@@ -110,7 +110,7 @@ def readColmapCameras(cam_extrinsics, cam_intrinsics, images_folder):
                 [focal_length_x, 0., width * 0.5],
                 [0., focal_length_y, height * 0.5],
                 [0., 0., 1.]
-            ])
+            ], dtype=np.float32)
         else:
             assert False, "Colmap camera model not handled: only undistorted datasets (PINHOLE or SIMPLE_PINHOLE cameras) supported!"
 
