@@ -80,9 +80,9 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
     # transform to wandb
     images_error = (image - gt_image).abs()
     images = {
-        f"vis/rgb_target1": wandb_image(gt_image),
-        f"vis/rgb_render1": wandb_image(image),
-        f"vis/rgb_error1": wandb_image(images_error),
+        f"vis/rgb_target0": wandb_image(gt_image),
+        f"vis/rgb_render0": wandb_image(image),
+        f"vis/rgb_error0": wandb_image(images_error),
     }
 
 
@@ -121,9 +121,9 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
             wandb_correspondence_img = correspondence_img.unsqueeze(0).detach()
             images_error = (gt_image - image_1).abs()
             images.update(
-                {f"vis/rgb_target": wandb_image(gt_image),
-                f"vis/rgb_render": wandb_image(image_1),
-                f"vis/rgb_error": wandb_image(images_error),
+                {f"vis/rgb_target{i}": wandb_image(gt_image),
+                f"vis/rgb_render{i}": wandb_image(image_1),
+                f"vis/rgb_error{i}": wandb_image(images_error),
                 f"{match_feature}/matched_img{i}": wandb_image(wandb_matched_img),
                 f"{match_feature}/correspondence_img{i}": wandb_image(wandb_correspondence_img)}
             )
@@ -136,13 +136,20 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
     rays_o, rays_d = viewpoint_cam_0.get_rays
     rays_o_2, rays_d_2 = viewpoint_cam_1.get_rays
 
+    # use the center of image, and it will also become the center in pixel space of img0 and img39
+    #direction0 = rays_d[[399], [399], :]
+    #direction1 = rays_d_2[[399], [399], :]
+    #origin0 = rays_o[[399], [399], :]
+    #origin1 = rays_o_2[[399], [399], :]
+    #t1, t2 = mutual_projection(direction0, direction1, origin0, origin1, viewpoint_cam_0, viewpoint_cam_1)
 
-    # 1 [287, 156], [666, 402]
-    direction0 = rays_d[[402, 156], [666, 287], :]
-    # 2 [261, 182], [668, 224]
-    direction1 = rays_d_2[[224, 182], [668, 261], :]
-    origin0 = rays_o[[402, 156], [666, 287], :]
-    origin1 = rays_o_2[[224, 182], [668, 261], :]
+    # img0 and img4
+    # 1 [666, 402], [287, 156], [455, 786]
+    direction0 = rays_d[[402, 156, 786], [666, 287, 455], :]
+    # 2 [668, 224], [261, 182], [603, 670]
+    direction1 = rays_d_2[[224, 182, 670], [668, 261, 603], :]
+    origin0 = rays_o[[402, 156, 786], [666, 287, 455], :]
+    origin1 = rays_o_2[[224, 182, 670], [668, 261, 603], :]
     t1, t2 = mutual_projection(direction0, direction1, origin0, origin1, viewpoint_cam_0, viewpoint_cam_1)
     import pdb;pdb.set_trace()
     print(0)
@@ -164,6 +171,7 @@ def mutual_projection(direction0, direction1, origin0, origin1, viewpoint_cam_0,
 
     intrinsic0 = viewpoint_cam_0.get_intrinsic
     intrinsic1 = viewpoint_cam_1.get_intrinsic
+
     intrinsic0[0][0] = -intrinsic0[0][0]
     intrinsic1[0][0] = -intrinsic1[0][0]
     w2c0 = viewpoint_cam_0.get_w2c[:3, :]
@@ -220,32 +228,33 @@ def mutual_projection(direction0, direction1, origin0, origin1, viewpoint_cam_0,
     #p1_norm_im1 = torch.einsum("ijk, pk -> ijp", p1_proj_to_im1, intrinsic1)
     #p0_norm_im0_2d = p0_norm_im0[:, :, :2] / (p0_norm_im0[:, :, 2, None] + 1e-10)
     #p1_norm_im1_2d = p1_norm_im1[:, :, :2] / (p1_norm_im1[:, :, 2, None] + 1e-10)
+    ##import pdb;pdb.set_trace()
     #return p0_norm_im0_2d, p1_norm_im1_2d
     ######
 
 
-    # project 3d points to target image
-    #####
-    p0_proj_to_im1 = torch.einsum("ijk, pk -> ijp", p0_4d, w2c1)
-    p1_proj_to_im0 = torch.einsum("ijk, pk -> ijp", p1_4d, w2c0)
+    ## project 3d points to target image
+    ######
+    #p0_proj_to_im1 = torch.einsum("ijk, pk -> ijp", p0_4d, w2c1)
+    #p1_proj_to_im0 = torch.einsum("ijk, pk -> ijp", p1_4d, w2c0)
 
-    p0_norm_im1 = torch.einsum("ijk, pk -> ijp", p0_proj_to_im1, intrinsic1)
-    p1_norm_im0 = torch.einsum("ijk, pk -> ijp", p1_proj_to_im0, intrinsic0)
+    #p0_norm_im1 = torch.einsum("ijk, pk -> ijp", p0_proj_to_im1, intrinsic1)
+    #p1_norm_im0 = torch.einsum("ijk, pk -> ijp", p1_proj_to_im0, intrinsic0)
 
-    p0_norm_im1_2d = p0_norm_im1[:, :, :2] / (p0_norm_im1[:, :, 2, None] + 1e-10)
-    p1_norm_im0_2d = p1_norm_im0[:, :, :2] / (p1_norm_im0[:, :, 2, None] + 1e-10)
-    return p0_norm_im1_2d, p1_norm_im0_2d
-    #####
+    #p0_norm_im1_2d = p0_norm_im1[:, :, :2] / (p0_norm_im1[:, :, 2, None] + 1e-10)
+    #p1_norm_im0_2d = p1_norm_im0[:, :, :2] / (p1_norm_im0[:, :, 2, None] + 1e-10)
+    #return p0_norm_im1_2d, p1_norm_im0_2d
+    ######
 
 
     # project avg of 3d points to target image
     #####
-    avg_proj_to_im1 = torch.einsum("ijk, pk -> ijp", avg_p0_p1, w2c1)
     avg_proj_to_im0 = torch.einsum("ijk, pk -> ijp", avg_p0_p1, w2c0)
-    avg_norm_im1 = torch.einsum("ijk, pk -> ijp", avg_proj_to_im1, intrinsic1)
+    avg_proj_to_im1 = torch.einsum("ijk, pk -> ijp", avg_p0_p1, w2c1)
     avg_norm_im0 = torch.einsum("ijk, pk -> ijp", avg_proj_to_im0, intrinsic0)
-    avg_norm_im1_2d = avg_norm_im1[:, :, :2] / (avg_norm_im1[:, :, 2, None] + 1e-10)
+    avg_norm_im1 = torch.einsum("ijk, pk -> ijp", avg_proj_to_im1, intrinsic1)
     avg_norm_im0_2d = avg_norm_im0[:, :, :2] / (avg_norm_im0[:, :, 2, None] + 1e-10)
+    avg_norm_im1_2d = avg_norm_im1[:, :, :2] / (avg_norm_im1[:, :, 2, None] + 1e-10)
     #####
     return avg_norm_im0_2d, avg_norm_im1_2d
 
