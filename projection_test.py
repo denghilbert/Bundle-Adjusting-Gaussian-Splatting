@@ -172,8 +172,9 @@ def mutual_projection(direction0, direction1, origin0, origin1, viewpoint_cam_0,
     intrinsic0 = viewpoint_cam_0.get_intrinsic
     intrinsic1 = viewpoint_cam_1.get_intrinsic
 
-    intrinsic0[0][0] = -intrinsic0[0][0]
-    intrinsic1[0][0] = -intrinsic1[0][0]
+    # we have different x axis from Multiple view geometry Book
+    #intrinsic0[0][0] = -intrinsic0[0][0]
+    #intrinsic1[0][0] = -intrinsic1[0][0]
     w2c0 = viewpoint_cam_0.get_w2c[:3, :]
     w2c1 = viewpoint_cam_1.get_w2c[:3, :]
 
