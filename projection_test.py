@@ -12,6 +12,7 @@
 
 import os
 import torch
+from typing import NamedTuple, Optional
 from random import randint
 from utils.loss_utils import l1_loss, ssim, kl_divergence, l2_loss
 from gaussian_renderer import render, network_gui
@@ -131,34 +132,81 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
             if use_wandb:
                 wandb.log(images, step=0)
 
-    viewpoint_cam_0.camera_center
-    viewpoint_cam_1.camera_center
     rays_o, rays_d = viewpoint_cam_0.get_rays
     rays_o_2, rays_d_2 = viewpoint_cam_1.get_rays
 
-    # use the center of image, and it will also become the center in pixel space of img0 and img39
-    #direction0 = rays_d[[399], [399], :]
-    #direction1 = rays_d_2[[399], [399], :]
-    #origin0 = rays_o[[399], [399], :]
-    #origin1 = rays_o_2[[399], [399], :]
-    #t1, t2 = mutual_projection(direction0, direction1, origin0, origin1, viewpoint_cam_0, viewpoint_cam_1)
 
     # img0 and img4
-    # 1 [666, 402], [287, 156], [455, 786]
-    direction0 = rays_d[[402, 156, 786], [666, 287, 455], :]
-    # 2 [668, 224], [261, 182], [603, 670]
-    direction1 = rays_d_2[[224, 182, 670], [668, 261, 603], :]
-    origin0 = rays_o[[402, 156, 786], [666, 287, 455], :]
-    origin1 = rays_o_2[[224, 182, 670], [668, 261, 603], :]
-    t1, t2 = mutual_projection(direction0, direction1, origin0, origin1, viewpoint_cam_0, viewpoint_cam_1)
+    # 0 xy [666, 402], [287, 156], [455, 786]
+    # 1 xy [668, 224], [261, 182], [603, 670]
+    # x is on width axis which is col
+    img0_row_col = [[402, 156, 786], [666, 287, 455]]
+    img1_row_col = [[224, 182, 670], [668, 261, 603]]
+    print(correspondence_projection(img0_row_col, img1_row_col, viewpoint_cam_0, viewpoint_cam_1, projection_type='self'))
+    print("\n")
+    print(correspondence_projection(img0_row_col, img1_row_col, viewpoint_cam_0, viewpoint_cam_1, projection_type='average'))
+    print("\n")
+    print(correspondence_projection(img0_row_col, img1_row_col, viewpoint_cam_0, viewpoint_cam_1, projection_type='separate'))
     import pdb;pdb.set_trace()
-    print(0)
 
-def mutual_projection(direction0, direction1, origin0, origin1, viewpoint_cam_0, viewpoint_cam_1):
+
+
+def dist_point_line(a, b, c):
+    """
+    a, b, c: [number of points, 3]
+    return: distance of a to bc
+    """
+    cross_product = torch.cross(a - b, a - c)
+    cross_norm = torch.norm(cross_product, dim=1)
+    BC_norm = torch.norm(c - b, dim=1)
+    return cross_norm / BC_norm
+
+def dist_point_point(ref_points, points):
+    return torch.sqrt(torch.sum((ref_points - points)**2, dim=1))
+
+def epipolar_correspondence_test(points, intrinsic0, intrinsic1, w2c0, w2c1):
+    """
+    points: [1, 3, 4], [1, number of points, xyz1]
+    intrinsic: [3, 3]
+    w2c: [4, 4]
+    return: points_to_img0, points_to_img1, origin0_to_img1, origin1_to_img0
+    """
+    origin0 = w2c0.inverse()[:4, -1].expand(points.shape)
+    origin1 = w2c1.inverse()[:4, -1].expand(points.shape)
+
+    # project 3d points
+    p_proj_to_im0 = torch.einsum("ijk, pk -> ijp", points, w2c0[:3, :])
+    p_proj_to_im1 = torch.einsum("ijk, pk -> ijp", points, w2c1[:3, :])
+    p_norm_im0 = torch.einsum("ijk, pk -> ijp", p_proj_to_im0, intrinsic0)
+    p_norm_im1 = torch.einsum("ijk, pk -> ijp", p_proj_to_im1, intrinsic1)
+    p_norm_im0_2d = p_norm_im0[:, :, :2] / (p_norm_im0[:, :, 2, None] + 1e-10)
+    p_norm_im1_2d = p_norm_im1[:, :, :2] / (p_norm_im1[:, :, 2, None] + 1e-10)
+
+    # project origins
+    ori1_proj_to_im0 = torch.einsum("ijk, pk -> ijp", origin1, w2c0[:3, :])
+    ori0_proj_to_im1 = torch.einsum("ijk, pk -> ijp", origin0, w2c1[:3, :])
+    ori1_norm_im0 = torch.einsum("ijk, pk -> ijp", ori1_proj_to_im0, intrinsic0)
+    ori0_norm_im1 = torch.einsum("ijk, pk -> ijp", ori0_proj_to_im1, intrinsic1)
+    ori1_norm_im0_2d = ori1_norm_im0[:, :, :2] / (ori1_norm_im0[:, :, 2, None] + 1e-10)
+    ori0_norm_im1_2d = ori0_norm_im1[:, :, :2] / (ori0_norm_im1[:, :, 2, None] + 1e-10)
+
+    return p_norm_im0_2d[0], p_norm_im1_2d[0], ori0_norm_im1_2d[0], ori1_norm_im0_2d[0]
+
+
+def correspondence_projection(img0_row_col, img1_row_col, viewpoint_cam_0, viewpoint_cam_1, projection_type='separate'):
     """
     direction: [number_points, 3]
     origin: [number_points, 3]
+    return: points_projected_img0, points_projected_img1
     """
+    rays_o_0, rays_d_0 = viewpoint_cam_0.get_rays
+    rays_o_1, rays_d_1 = viewpoint_cam_1.get_rays
+    direction0 = rays_d_0[img0_row_col[0], img0_row_col[1], :]
+    direction1 = rays_d_1[img1_row_col[0], img1_row_col[1], :]
+    origin0 = rays_o_0[img0_row_col[0], img0_row_col[1], :]
+    origin1 = rays_o_1[img1_row_col[0], img1_row_col[1], :]
+
+
     direction0 = direction0.unsqueeze(0)
     direction1 = direction1.unsqueeze(0)
     origin0 = origin0.unsqueeze(0)
@@ -178,7 +226,56 @@ def mutual_projection(direction0, direction1, origin0, origin1, viewpoint_cam_0,
     w2c0 = viewpoint_cam_0.get_w2c[:3, :]
     w2c1 = viewpoint_cam_1.get_w2c[:3, :]
 
+    p0_4d, p1_4d = lines_intersect(origin0, origin1, direction0, direction1)
 
+    avg_p0_p1 = (p0_4d + p1_4d) / 2
+
+    if projection_type == 'self':
+        # project 3d points (world coordinate) back to original images to see if projection is correct..
+        #####
+        p0_proj_to_im0 = torch.einsum("ijk, pk -> ijp", p0_4d, w2c0)
+        p1_proj_to_im1 = torch.einsum("ijk, pk -> ijp", p1_4d, w2c1)
+        p0_norm_im0 = torch.einsum("ijk, pk -> ijp", p0_proj_to_im0, intrinsic0)
+        p1_norm_im1 = torch.einsum("ijk, pk -> ijp", p1_proj_to_im1, intrinsic1)
+        p0_norm_im0_2d = p0_norm_im0[:, :, :2] / (p0_norm_im0[:, :, 2, None] + 1e-10)
+        p1_norm_im1_2d = p1_norm_im1[:, :, :2] / (p1_norm_im1[:, :, 2, None] + 1e-10)
+        return p0_norm_im0_2d, p1_norm_im1_2d
+        #####
+
+
+    if projection_type == 'separate':
+        # project 3d points to target image
+        #####
+        p0_proj_to_im1 = torch.einsum("ijk, pk -> ijp", p0_4d, w2c1)
+        p1_proj_to_im0 = torch.einsum("ijk, pk -> ijp", p1_4d, w2c0)
+
+        p0_norm_im1 = torch.einsum("ijk, pk -> ijp", p0_proj_to_im1, intrinsic1)
+        p1_norm_im0 = torch.einsum("ijk, pk -> ijp", p1_proj_to_im0, intrinsic0)
+
+        p0_norm_im1_2d = p0_norm_im1[:, :, :2] / (p0_norm_im1[:, :, 2, None] + 1e-10)
+        p1_norm_im0_2d = p1_norm_im0[:, :, :2] / (p1_norm_im0[:, :, 2, None] + 1e-10)
+        return p1_norm_im0_2d, p0_norm_im1_2d
+        #####
+
+
+    if projection_type == 'average':
+        # project avg of 3d points to target image
+        #####
+        avg_proj_to_im0 = torch.einsum("ijk, pk -> ijp", avg_p0_p1, w2c0)
+        avg_proj_to_im1 = torch.einsum("ijk, pk -> ijp", avg_p0_p1, w2c1)
+        avg_norm_im0 = torch.einsum("ijk, pk -> ijp", avg_proj_to_im0, intrinsic0)
+        avg_norm_im1 = torch.einsum("ijk, pk -> ijp", avg_proj_to_im1, intrinsic1)
+        avg_norm_im0_2d = avg_norm_im0[:, :, :2] / (avg_norm_im0[:, :, 2, None] + 1e-10)
+        avg_norm_im1_2d = avg_norm_im1[:, :, :2] / (avg_norm_im1[:, :, 2, None] + 1e-10)
+        #####
+        return avg_norm_im0_2d, avg_norm_im1_2d
+
+def lines_intersect(origin0, origin1, direction0, direction1):
+    """
+    origin: [1, number_of_points, 3]
+    direction: [1, number_of_points, 3]
+    return: [1, number_of_points, 4] homogenous xyz1
+    """
     r0_r1 = torch.einsum(
         "ijk, ijk -> ij",
         direction0,
@@ -218,47 +315,7 @@ def mutual_projection(direction0, direction1, origin0, origin1, viewpoint_cam_0,
     p1_4d = torch.cat(
         [p1, torch.ones((p1.shape[:2]), device='cuda')[:, :, None]], dim=-1
     )
-
-    avg_p0_p1 = (p0_4d + p1_4d) / 2
-
-    ## project 3d points (world coordinate) back to original images to see if projection is correct..
-    ######
-    #p0_proj_to_im0 = torch.einsum("ijk, pk -> ijp", p0_4d, w2c0)
-    #p1_proj_to_im1 = torch.einsum("ijk, pk -> ijp", p1_4d, w2c1)
-    #p0_norm_im0 = torch.einsum("ijk, pk -> ijp", p0_proj_to_im0, intrinsic0)
-    #p1_norm_im1 = torch.einsum("ijk, pk -> ijp", p1_proj_to_im1, intrinsic1)
-    #p0_norm_im0_2d = p0_norm_im0[:, :, :2] / (p0_norm_im0[:, :, 2, None] + 1e-10)
-    #p1_norm_im1_2d = p1_norm_im1[:, :, :2] / (p1_norm_im1[:, :, 2, None] + 1e-10)
-    ##import pdb;pdb.set_trace()
-    #return p0_norm_im0_2d, p1_norm_im1_2d
-    ######
-
-
-    ## project 3d points to target image
-    ######
-    #p0_proj_to_im1 = torch.einsum("ijk, pk -> ijp", p0_4d, w2c1)
-    #p1_proj_to_im0 = torch.einsum("ijk, pk -> ijp", p1_4d, w2c0)
-
-    #p0_norm_im1 = torch.einsum("ijk, pk -> ijp", p0_proj_to_im1, intrinsic1)
-    #p1_norm_im0 = torch.einsum("ijk, pk -> ijp", p1_proj_to_im0, intrinsic0)
-
-    #p0_norm_im1_2d = p0_norm_im1[:, :, :2] / (p0_norm_im1[:, :, 2, None] + 1e-10)
-    #p1_norm_im0_2d = p1_norm_im0[:, :, :2] / (p1_norm_im0[:, :, 2, None] + 1e-10)
-    #return p0_norm_im1_2d, p1_norm_im0_2d
-    ######
-
-
-    # project avg of 3d points to target image
-    #####
-    avg_proj_to_im0 = torch.einsum("ijk, pk -> ijp", avg_p0_p1, w2c0)
-    avg_proj_to_im1 = torch.einsum("ijk, pk -> ijp", avg_p0_p1, w2c1)
-    avg_norm_im0 = torch.einsum("ijk, pk -> ijp", avg_proj_to_im0, intrinsic0)
-    avg_norm_im1 = torch.einsum("ijk, pk -> ijp", avg_proj_to_im1, intrinsic1)
-    avg_norm_im0_2d = avg_norm_im0[:, :, :2] / (avg_norm_im0[:, :, 2, None] + 1e-10)
-    avg_norm_im1_2d = avg_norm_im1[:, :, :2] / (avg_norm_im1[:, :, 2, None] + 1e-10)
-    #####
-    return avg_norm_im0_2d, avg_norm_im1_2d
-
+    return p0_4d, p1_4d
 
 def light_glue(image0, image1, features='superpoint'):
     if features == 'superpoint':
