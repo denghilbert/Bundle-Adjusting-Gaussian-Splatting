@@ -132,23 +132,47 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
             if use_wandb:
                 wandb.log(images, step=0)
 
-    rays_o, rays_d = viewpoint_cam_0.get_rays
-    rays_o_2, rays_d_2 = viewpoint_cam_1.get_rays
-
-
     # img0 and img4
     # 0 xy [666, 402], [287, 156], [455, 786]
     # 1 xy [668, 224], [261, 182], [603, 670]
     # x is on width axis which is col
     img0_row_col = [[402, 156, 786], [666, 287, 455]]
     img1_row_col = [[224, 182, 670], [668, 261, 603]]
-    print(correspondence_projection(img0_row_col, img1_row_col, viewpoint_cam_0, viewpoint_cam_1, projection_type='self'))
-    print("\n")
-    print(correspondence_projection(img0_row_col, img1_row_col, viewpoint_cam_0, viewpoint_cam_1, projection_type='average'))
-    print("\n")
-    print(correspondence_projection(img0_row_col, img1_row_col, viewpoint_cam_0, viewpoint_cam_1, projection_type='separate'))
+    points_img0 = torch.tensor([[666, 402],
+                                [287, 156],
+                                [455, 786]]).cuda()
+    points_img1 = torch.tensor([[668, 224],
+                                [261, 182],
+                                [603, 670]]).cuda()
+    #print(correspondence_projection(img0_row_col, img1_row_col, viewpoint_cam_0, viewpoint_cam_1, projection_type='self'))
+    #print("\n")
+    #print(correspondence_projection(img0_row_col, img1_row_col, viewpoint_cam_0, viewpoint_cam_1, projection_type='average'))
+    #print("\n")
+    #print(correspondence_projection(img0_row_col, img1_row_col, viewpoint_cam_0, viewpoint_cam_1, projection_type='separate'))
+    points_proj_img0, points_proj_img1, valid = correspondence_projection(img0_row_col, img1_row_col, viewpoint_cam_0, viewpoint_cam_1, projection_type='average')
+
+    point_dists_0 = dist_point_point(points_img0[valid], points_proj_img0[valid])
+    point_dists_1 = dist_point_point(points_img1[valid], points_proj_img1[valid])
+    proj_ray_dist_threshold = 5.0
+
+    loss = projection_loss(point_dists_0, point_dists_1, proj_ray_dist_threshold)
     import pdb;pdb.set_trace()
 
+
+def projection_loss(point_dists_0, point_dists_1, proj_ray_dist_threshold):
+
+    loss0_valid_idx = torch.logical_and(
+        point_dists_0 < proj_ray_dist_threshold,
+        torch.isfinite(point_dists_0)
+    )
+    loss1_valid_idx = torch.logical_and(
+        point_dists_1 < proj_ray_dist_threshold,
+        torch.isfinite(point_dists_1)
+    )
+    loss0 = point_dists_0[loss0_valid_idx].mean()
+    loss1 = point_dists_1[loss1_valid_idx].mean()
+
+    return 0.5 * (loss0 + loss1)
 
 
 def dist_point_line(a, b, c):
@@ -226,7 +250,7 @@ def correspondence_projection(img0_row_col, img1_row_col, viewpoint_cam_0, viewp
     w2c0 = viewpoint_cam_0.get_w2c[:3, :]
     w2c1 = viewpoint_cam_1.get_w2c[:3, :]
 
-    p0_4d, p1_4d = lines_intersect(origin0, origin1, direction0, direction1)
+    p0_4d, p1_4d, valid = lines_intersect(origin0, origin1, direction0, direction1)
 
     avg_p0_p1 = (p0_4d + p1_4d) / 2
 
@@ -239,7 +263,7 @@ def correspondence_projection(img0_row_col, img1_row_col, viewpoint_cam_0, viewp
         p1_norm_im1 = torch.einsum("ijk, pk -> ijp", p1_proj_to_im1, intrinsic1)
         p0_norm_im0_2d = p0_norm_im0[:, :, :2] / (p0_norm_im0[:, :, 2, None] + 1e-10)
         p1_norm_im1_2d = p1_norm_im1[:, :, :2] / (p1_norm_im1[:, :, 2, None] + 1e-10)
-        return p0_norm_im0_2d, p1_norm_im1_2d
+        return p0_norm_im0_2d[0], p1_norm_im1_2d[0], valid
         #####
 
 
@@ -254,7 +278,7 @@ def correspondence_projection(img0_row_col, img1_row_col, viewpoint_cam_0, viewp
 
         p0_norm_im1_2d = p0_norm_im1[:, :, :2] / (p0_norm_im1[:, :, 2, None] + 1e-10)
         p1_norm_im0_2d = p1_norm_im0[:, :, :2] / (p1_norm_im0[:, :, 2, None] + 1e-10)
-        return p1_norm_im0_2d, p0_norm_im1_2d
+        return p1_norm_im0_2d[0], p0_norm_im1_2d[0], valid
         #####
 
 
@@ -268,7 +292,7 @@ def correspondence_projection(img0_row_col, img1_row_col, viewpoint_cam_0, viewp
         avg_norm_im0_2d = avg_norm_im0[:, :, :2] / (avg_norm_im0[:, :, 2, None] + 1e-10)
         avg_norm_im1_2d = avg_norm_im1[:, :, :2] / (avg_norm_im1[:, :, 2, None] + 1e-10)
         #####
-        return avg_norm_im0_2d, avg_norm_im1_2d
+        return avg_norm_im0_2d[0], avg_norm_im1_2d[0], valid
 
 def lines_intersect(origin0, origin1, direction0, direction1):
     """
@@ -315,7 +339,13 @@ def lines_intersect(origin0, origin1, direction0, direction1):
     p1_4d = torch.cat(
         [p1, torch.ones((p1.shape[:2]), device='cuda')[:, :, None]], dim=-1
     )
-    return p0_4d, p1_4d
+
+    # Chirality check: remove rays behind cameras
+    # Find indices of valid rays
+    valid_t0 = (t0 > 0).flatten()
+    valid_t1 = (t1 > 0).flatten()
+    valid = torch.logical_and(valid_t0, valid_t1)
+    return p0_4d, p1_4d, valid
 
 def light_glue(image0, image1, features='superpoint'):
     if features == 'superpoint':
