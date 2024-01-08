@@ -70,7 +70,10 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
     mlp_color = 0
 
     viewpoint_stack = scene.getTrainCameras().copy()
-    viewpoint_stack_constant = scene.getTrainCameras().copy()
+    camera_id = [camera.uid for camera in viewpoint_stack]
+    extrinsic_list = [camera.get_w2c for camera in viewpoint_stack ]
+    angle_threshold = 30
+    pairs = image_pair_candidates(extrinsic_list, angle_threshold, camera_id)
 
 
     # first view
@@ -106,7 +109,8 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
     with timer(if_print=False):
         #for i in range(len(viewpoint_stack)):
         #for i in [39, 61, 0]:
-        for i in [4]:
+        #for i in [4]:
+        for i in pairs[viewpoint_cam_0.uid]:
             viewpoint_cam_1 = viewpoint_stack[i]
             render_pkg = render(viewpoint_cam_1, gaussians, pipe, background, mlp_color, iteration=7000, hybrid=False)
             image_1, viewspace_point_tensor, visibility_filter, radii = render_pkg["render"], render_pkg["viewspace_points"], render_pkg["visibility_filter"], render_pkg["radii"]
@@ -157,8 +161,45 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
     proj_ray_dist_threshold = 5.0
 
     loss = projection_loss(point_dists_0, point_dists_1, proj_ray_dist_threshold)
-    import pdb;pdb.set_trace()
 
+def image_pair_candidates(extrinsics, pairing_angle_threshold, i_map=None):
+    """
+    i_map is used when provided extrinsics are not having sequentiall
+    index. i_map is a list of ints where each element corresponds to
+    image index.
+    """
+
+    pairs = {}
+
+    assert i_map is None or len(i_map) == len(extrinsics)
+
+    num_images = len(extrinsics)
+
+    for i in range(num_images):
+
+        rot_mat_i = extrinsics[i][:3, :3]
+
+        for j in range(i + 1, num_images):
+
+            rot_mat_j = extrinsics[j][:3, :3]
+            rot_mat_ij = rot_mat_i @ rot_mat_j.inverse()
+            angle_rad = torch.acos((torch.trace(rot_mat_ij) - 1) / 2)
+            angle_deg = angle_rad / np.pi * 180
+
+            if torch.abs(angle_deg) < pairing_angle_threshold:
+
+                i_entry = i if i_map is None else i_map[i]
+                j_entry = j if i_map is None else i_map[j]
+
+                if not i_entry in pairs.keys():
+                    pairs[i_entry] = []
+                if not j_entry in pairs.keys():
+                    pairs[j_entry] = []
+
+                pairs[i_entry].append(j_entry)
+                pairs[j_entry].append(i_entry)
+
+    return pairs
 
 def projection_loss(point_dists_0, point_dists_1, proj_ray_dist_threshold):
 
