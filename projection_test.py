@@ -19,6 +19,7 @@ from gaussian_renderer import render, network_gui
 import sys
 from scene import Scene, GaussianModel, SpecularModel
 from utils.general_utils import safe_state, get_linear_noise_func, linear_to_srgb
+import math
 import uuid
 from tqdm import tqdm
 from utils.image_utils import psnr
@@ -136,20 +137,20 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
     # 0 xy [666, 402], [287, 156], [455, 786]
     # 1 xy [668, 224], [261, 182], [603, 670]
     # x is on width axis which is col
-    img0_row_col = [[402, 156, 786], [666, 287, 455]]
-    img1_row_col = [[224, 182, 670], [668, 261, 603]]
-    points_img0 = torch.tensor([[666, 402],
-                                [287, 156],
-                                [455, 786]]).cuda()
-    points_img1 = torch.tensor([[668, 224],
-                                [261, 182],
-                                [603, 670]]).cuda()
-    #print(correspondence_projection(img0_row_col, img1_row_col, viewpoint_cam_0, viewpoint_cam_1, projection_type='self'))
-    #print("\n")
-    #print(correspondence_projection(img0_row_col, img1_row_col, viewpoint_cam_0, viewpoint_cam_1, projection_type='average'))
-    #print("\n")
-    #print(correspondence_projection(img0_row_col, img1_row_col, viewpoint_cam_0, viewpoint_cam_1, projection_type='separate'))
-    points_proj_img0, points_proj_img1, valid = correspondence_projection(img0_row_col, img1_row_col, viewpoint_cam_0, viewpoint_cam_1, projection_type='average')
+    #img0_row_col = [[402, 156, 786], [666, 287, 455]]
+    #img1_row_col = [[224, 182, 670], [668, 261, 603]]
+    #points_img0 = torch.tensor([[666, 402],
+    #                            [287, 156],
+    #                            [455, 786]]).cuda()
+    #points_img1 = torch.tensor([[668, 224],
+    #                            [261, 182],
+    #                            [603, 670]]).cuda()
+
+    points_img0 = m_kpts0
+    points_img1 = m_kpts1
+    img0_row_col = m_kpts0.t()[[1, 0], :]
+    img1_row_col = m_kpts1.t()[[1, 0], :]
+    points_proj_img0, points_proj_img1, valid = correspondence_projection(img0_row_col, img1_row_col, viewpoint_cam_0, viewpoint_cam_1, projection_type='average') # average, self, separate
 
     point_dists_0 = dist_point_point(points_img0[valid], points_proj_img0[valid])
     point_dists_1 = dist_point_point(points_img1[valid], points_proj_img1[valid])
@@ -212,24 +213,43 @@ def epipolar_correspondence_test(points, intrinsic0, intrinsic1, w2c0, w2c1):
     ori1_norm_im0 = torch.einsum("ijk, pk -> ijp", ori1_proj_to_im0, intrinsic0)
     ori0_norm_im1 = torch.einsum("ijk, pk -> ijp", ori0_proj_to_im1, intrinsic1)
     ori1_norm_im0_2d = ori1_norm_im0[:, :, :2] / (ori1_norm_im0[:, :, 2, None] + 1e-10)
-    ori0_norm_im1_2d = ori0_norm_im1[:, :, :2] / (ori0_norm_im1[:, :, 2, None] + 1e-10)
 
     return p_norm_im0_2d[0], p_norm_im1_2d[0], ori0_norm_im1_2d[0], ori1_norm_im0_2d[0]
+
+def direction_origin_interpolation(img_row_col, rays_d_o):
+    lb2center = torch.floor(img_row_col) - img_row_col
+    rt2center = torch.ceil(img_row_col) - img_row_col
+    lt2center = torch.stack((lb2center[0], rt2center[1]))
+    rb2center = torch.stack((rt2center[0], lb2center[1]))
+
+    w0 = torch.norm(lb2center, p=2, dim=0).unsqueeze(-1)
+    w1 = torch.norm(rt2center, p=2, dim=0).unsqueeze(-1)
+    w2 = torch.norm(lt2center, p=2, dim=0).unsqueeze(-1)
+    w3 = torch.norm(rb2center, p=2, dim=0).unsqueeze(-1)
+
+    left_bottom = torch.floor(img_row_col).int().tolist()
+    right_top = torch.ceil(img_row_col).int().tolist()
+    direction_lb = rays_d_o[left_bottom[0], left_bottom[1], :]
+    direction_lt = rays_d_o[left_bottom[0], right_top[1], :]
+    direction_rb = rays_d_o[right_top[0], left_bottom[1], :]
+    direction_rt = rays_d_o[right_top[0], right_top[1], :]
+
+    return (direction_lb * w0 + direction_rt * w1 + direction_lt * w2 + direction_rb * w3) / (w0 + w1 + w2 + w3)
 
 
 def correspondence_projection(img0_row_col, img1_row_col, viewpoint_cam_0, viewpoint_cam_1, projection_type='separate'):
     """
-    direction: [number_points, 3]
-    origin: [number_points, 3]
-    return: points_projected_img0, points_projected_img1
+    img_row_col: [2, number_points]
+    viewpoint_cam_i: camera information
+    return: points_projected_img0, points_projected_img1, valid
     """
+
     rays_o_0, rays_d_0 = viewpoint_cam_0.get_rays
     rays_o_1, rays_d_1 = viewpoint_cam_1.get_rays
-    direction0 = rays_d_0[img0_row_col[0], img0_row_col[1], :]
-    direction1 = rays_d_1[img1_row_col[0], img1_row_col[1], :]
-    origin0 = rays_o_0[img0_row_col[0], img0_row_col[1], :]
-    origin1 = rays_o_1[img1_row_col[0], img1_row_col[1], :]
-
+    direction0 = direction_origin_interpolation(img0_row_col, rays_d_0)
+    direction1 = direction_origin_interpolation(img1_row_col, rays_d_1)
+    origin0 = rays_o_0.reshape(-1, rays_o_0.shape[-1])[:direction0.shape[0]]
+    origin1 = rays_o_1.reshape(-1, rays_o_1.shape[-1])[:direction1.shape[0]]
 
     direction0 = direction0.unsqueeze(0)
     direction1 = direction1.unsqueeze(0)
