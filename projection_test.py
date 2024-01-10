@@ -270,8 +270,8 @@ def direction_origin_interpolation(img_row_col, rays_d_o):
     w2 = torch.norm(lt2center, p=2, dim=0).unsqueeze(-1)
     w3 = torch.norm(rb2center, p=2, dim=0).unsqueeze(-1)
 
-    left_bottom = torch.floor(img_row_col).int().tolist()
-    right_top = torch.ceil(img_row_col).int().tolist()
+    left_bottom = torch.floor(img_row_col).long()
+    right_top = torch.ceil(img_row_col).long()
     direction_lb = rays_d_o[left_bottom[0], left_bottom[1], :]
     direction_lt = rays_d_o[left_bottom[0], right_top[1], :]
     direction_rb = rays_d_o[right_top[0], left_bottom[1], :]

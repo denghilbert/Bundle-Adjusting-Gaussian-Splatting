@@ -66,11 +66,14 @@ class GaussianModel:
         return (
             self.active_sh_degree,
             self._xyz,
+            self._normal,
+            self._normal2,
             self._features_dc,
             self._features_rest,
             self._scaling,
             self._rotation,
             self._opacity,
+            self._features_asg,
             self.max_radii2D,
             self.xyz_gradient_accum,
             self.denom,
@@ -79,13 +82,17 @@ class GaussianModel:
         )
 
     def restore(self, model_args, training_args):
+        import pdb;pdb.set_trace()
         (self.active_sh_degree,
         self._xyz,
+        self._normal,
+        self._normal2,
         self._features_dc,
         self._features_rest,
         self._scaling,
         self._rotation,
         self._opacity,
+        self._features_asg,
         self.max_radii2D,
         xyz_gradient_accum,
         denom,
