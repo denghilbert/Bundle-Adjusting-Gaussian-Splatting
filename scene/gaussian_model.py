@@ -82,7 +82,6 @@ class GaussianModel:
         )
 
     def restore(self, model_args, training_args):
-        import pdb;pdb.set_trace()
         (self.active_sh_degree,
         self._xyz,
         self._normal,

@@ -12,11 +12,13 @@
 import os
 import torch
 from random import randint
+import random
 from utils.loss_utils import l1_loss, ssim, kl_divergence, l2_loss
 from gaussian_renderer import render, network_gui
 import sys
 from scene import Scene, GaussianModel, SpecularModel
 from utils.general_utils import safe_state, get_linear_noise_func, linear_to_srgb
+from projection_test import image_pair_candidates, light_glue_simple, projection_loss, dist_point_point, dist_point_line, correspondence_projection
 import uuid
 from tqdm import tqdm
 from utils.image_utils import psnr
@@ -66,6 +68,13 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
     iter_end = torch.cuda.Event(enable_timing = True)
 
     viewpoint_stack = None
+    viewpoint_stack_constant = scene.getTrainCameras()
+    camera_id = [camera.uid for camera in viewpoint_stack_constant]
+    extrinsic_list = [camera.get_w2c for camera in viewpoint_stack_constant]
+    camera_pairs = image_pair_candidates(extrinsic_list, args.angle_threshold, camera_id)
+    camera_matching_points = {}
+    projection_loss_count = 0
+
     ema_loss_for_log = 0.0
     best_psnr = 0.0
     best_iteration = 0
@@ -115,15 +124,54 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
         else:
             mlp_color = 0
 
-        # viewpoint_cam: Camera, gaussians: <scene.gaussian_model.GaussianModel object at 0x7fd570fd9650>
+        # other views rendering
+        if (iteration == 10001 or iteration == 20001) and args.projection_loss:
+            progress_bar_matching = tqdm(range(0, len(viewpoint_stack_constant)), desc="Matching pairs")
+            for viewpoint_cam_0 in viewpoint_stack_constant:
+                progress_bar_matching.update(1)
+
+                render_pkg = render(viewpoint_cam_0, gaussians, pipe, background, mlp_color, iteration=iteration, hybrid=hybrid)
+                image = render_pkg["render"]
+                matching_point_dic = {}
+                for camera_id in camera_pairs[viewpoint_cam_0.uid]:
+                    viewpoint_cam_i = viewpoint_stack_constant[camera_id]
+                    render_pkg_i = render(viewpoint_cam_i, gaussians, pipe, background, mlp_color, iteration=iteration, hybrid=hybrid)
+                    image_i = render_pkg_i["render"]
+                    matching_point_dic[camera_id] = light_glue_simple(image, image_i, 'disk')
+                camera_matching_points[viewpoint_cam_0.uid] = matching_point_dic
+
+            progress_bar_matching.close()
+            projection_loss_count = 10000
+
+        # render current view
         render_pkg = render(viewpoint_cam, gaussians, pipe, background, mlp_color, iteration=iteration, hybrid=hybrid)
         image, viewspace_point_tensor, visibility_filter, radii = render_pkg["render"], render_pkg["viewspace_points"], render_pkg["visibility_filter"], render_pkg["radii"]
+
+
+        loss_projection = 0.
+        if camera_matching_points != {} and projection_loss_count > 0:
+            projection_loss_count = projection_loss_count - 1
+            for matched_camera_id in camera_pairs[viewpoint_cam.uid]:
+                m_kpts0, m_kpts1 = camera_matching_points[viewpoint_cam.uid][matched_camera_id]
+                points_img0 = m_kpts0
+                points_img1 = m_kpts1
+                img0_row_col = m_kpts0.t()[[1, 0], :]
+                img1_row_col = m_kpts1.t()[[1, 0], :]
+                points_proj_img0, points_proj_img1, valid = correspondence_projection(img0_row_col, img1_row_col, viewpoint_cam, viewpoint_stack_constant[matched_camera_id], projection_type='average') # average, self, separate
+
+                point_dists_0 = dist_point_point(points_img0[valid], points_proj_img0[valid])
+                point_dists_1 = dist_point_point(points_img1[valid], points_proj_img1[valid])
+                proj_ray_dist_threshold = 5.0
+
+                loss_projection += projection_loss(point_dists_0, point_dists_1, proj_ray_dist_threshold)
+
 
         # Loss
         gt_image = viewpoint_cam.original_image.cuda()
         Ll1 = l1_loss(image, gt_image)
         ssim_loss = ssim(image, gt_image)
-        loss = (1.0 - opt.lambda_dssim) * Ll1 + opt.lambda_dssim * (1.0 - ssim_loss)
+        loss = (1.0 - opt.lambda_dssim) * Ll1 + opt.lambda_dssim * (1.0 - ssim_loss) + 0.1 * (loss_projection / len(camera_pairs[viewpoint_cam.uid]))
+
         #if iteration > 3000:
         #    residual_color = render(viewpoint_cam, gaussians, pipe, background, mlp_color, hybrid=hybrid)["render"]
         #    reflect_loss = l1_loss(gt_image - image, residual_color)
@@ -138,6 +186,8 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
                 f"loss/ssim": ssim_loss,
                 f"loss/overall_loss": loss,
             }
+            if projection_loss_count > 0:
+                scalars["loss/projection_loss"] = (loss_projection / len(camera_pairs[viewpoint_cam.uid]))
             if use_wandb:
                 wandb.log(scalars, step=iteration)
         if iteration % 3000 == 0 or iteration == 1:
@@ -158,7 +208,8 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
             # Progress bar
             ema_loss_for_log = 0.4 * loss.item() + 0.6 * ema_loss_for_log
             if iteration % 10 == 0:
-                progress_bar.set_postfix({"Loss": f"{ema_loss_for_log:.{7}f}"})
+                #progress_bar.set_postfix({"Loss": f"{ema_loss_for_log:.{7}f}"})
+                progress_bar.set_postfix({"Loss": f"{loss.item():.{7}f}"})
                 progress_bar.update(10)
             if iteration == opt.iterations:
                 progress_bar.close()
@@ -176,6 +227,7 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
             if iteration < opt.densify_until_iter:
                 # Keep track of max radii in image-space for pruning
                 gaussians.max_radii2D[visibility_filter] = torch.max(gaussians.max_radii2D[visibility_filter], radii[visibility_filter])
+
                 gaussians.add_densification_stats(viewspace_point_tensor, visibility_filter)
 
                 if iteration > opt.densify_from_iter and iteration % opt.densification_interval == 0:
@@ -343,6 +395,10 @@ if __name__ == "__main__":
     parser.add_argument("--opt_cam", action="store_true", default=False)
     # noise for rotation and translation
     parser.add_argument("--r_t_noise", nargs="+", type=float, default=[0., 0.])
+    # rotation filter for light_glue
+    parser.add_argument('--angle_threshold', type=float, default=30.)
+    # if optimize camera poses with projection_loss
+    parser.add_argument("--projection_loss", action="store_true", default=False)
 
     args = parser.parse_args(sys.argv[1:])
     args.save_iterations.append(args.iterations)
