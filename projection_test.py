@@ -106,36 +106,38 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
     match_features = ['superpoint', 'disk', 'aliked', 'sift']
     #for match_feature in match_features:
     match_feature = 'disk'
-    with timer(if_print=False):
+    with timer(if_print=True):
         #for i in range(len(viewpoint_stack)):
         #for i in [39, 61, 0]:
-        #for i in [4]:
-        for i in pairs[viewpoint_cam_0.uid]:
-            viewpoint_cam_1 = viewpoint_stack[i]
-            render_pkg = render(viewpoint_cam_1, gaussians, pipe, background, mlp_color, iteration=7000, hybrid=False)
-            image_1, viewspace_point_tensor, visibility_filter, radii = render_pkg["render"], render_pkg["viewspace_points"], render_pkg["visibility_filter"], render_pkg["radii"]
-            gt_image = viewpoint_cam_1.original_image.cuda()
+        for i in [4]:
+        #for viewpoint_cam_0 in viewpoint_stack:
+            render_pkg = render(viewpoint_cam_0, gaussians, pipe, background, mlp_color, iteration=7000, hybrid=False)
+            image = render_pkg["render"]
+            for i in pairs[viewpoint_cam_0.uid]:
+                viewpoint_cam_1 = viewpoint_stack[i]
+                render_pkg = render(viewpoint_cam_1, gaussians, pipe, background, mlp_color, iteration=7000, hybrid=False)
+                image_1 = render_pkg["render"]
+                gt_image = viewpoint_cam_1.original_image.cuda()
 
-            with torch.no_grad():
-                #image = image.permute(0, 2, 1)
-                #image_1 = image_1.permute(0, 2, 1)
-                matched_imgs, correspondence_img, m_kpts0, m_kpts1 = light_glue(image, image_1, match_feature)
-                matched_imgs = matched_imgs[:, :, :3].permute(2, 0, 1)
-                correspondence_img = correspondence_img[:, :, :3].permute(2, 0, 1)
+                with torch.no_grad():
+                    #m_kpts0, m_kpts1 = light_glue_simple(image, image_1, match_feature)
+                    matched_imgs, correspondence_img, m_kpts0, m_kpts1 = light_glue(image, image_1, match_feature)
+                    matched_imgs = matched_imgs[:, :, :3].permute(2, 0, 1)
+                    correspondence_img = correspondence_img[:, :, :3].permute(2, 0, 1)
 
-            wandb_matched_img = matched_imgs.unsqueeze(0).detach()
-            wandb_correspondence_img = correspondence_img.unsqueeze(0).detach()
-            images_error = (gt_image - image_1).abs()
-            images.update(
-                {f"vis/rgb_target{i}": wandb_image(gt_image),
-                f"vis/rgb_render{i}": wandb_image(image_1),
-                f"vis/rgb_error{i}": wandb_image(images_error),
-                f"{match_feature}/matched_img{i}": wandb_image(wandb_matched_img),
-                f"{match_feature}/correspondence_img{i}": wandb_image(wandb_correspondence_img)}
-            )
+                wandb_matched_img = matched_imgs.unsqueeze(0).detach()
+                wandb_correspondence_img = correspondence_img.unsqueeze(0).detach()
+                images_error = (gt_image - image_1).abs()
+                images.update(
+                    {f"vis/rgb_target{i}": wandb_image(gt_image),
+                    f"vis/rgb_render{i}": wandb_image(image_1),
+                    f"vis/rgb_error{i}": wandb_image(images_error),
+                    f"{match_feature}/matched_img{i}": wandb_image(wandb_matched_img),
+                    f"{match_feature}/correspondence_img{i}": wandb_image(wandb_correspondence_img)}
+                )
 
-            if use_wandb:
-                wandb.log(images, step=0)
+                if use_wandb:
+                    wandb.log(images, step=0)
 
     # img0 and img4
     # 0 xy [666, 402], [287, 156], [455, 786]
@@ -407,6 +409,29 @@ def lines_intersect(origin0, origin1, direction0, direction1):
     valid_t1 = (t1 > 0).flatten()
     valid = torch.logical_and(valid_t0, valid_t1)
     return p0_4d, p1_4d, valid
+
+def light_glue_simple(image0, image1, features='superpoint'):
+    if features == 'superpoint':
+        extractor = SuperPoint(max_num_keypoints=1024).eval().cuda()  # load the extractor
+    if features == 'disk':
+        extractor = DISK(max_num_keypoints=1024).eval().cuda()  # load the extractor
+    if features == 'aliked':
+        extractor = ALIKED(max_num_keypoints=1024).eval().cuda()  # load the extractor
+    if features == 'sift':
+        extractor = SIFT(max_num_keypoints=1024).eval().cuda()  # load the extractor
+    matcher = LightGlue(features=features).eval().cuda()  # load the matcher
+
+    # extract local features
+    feats0 = extractor.extract(image0)  # auto-resize the image, disable with resize=None
+    feats1 = extractor.extract(image1)
+
+    # match the features
+    matches01 = matcher({'image0': feats0, 'image1': feats1})
+    feats0, feats1, matches01 = [rbd(x) for x in [feats0, feats1, matches01]]  # remove batch dimension
+    kpts0, kpts1, matches = feats0["keypoints"], feats1["keypoints"], matches01["matches"]
+    m_kpts0, m_kpts1 = kpts0[matches[..., 0]], kpts1[matches[..., 1]]
+
+    return m_kpts0, m_kpts1
 
 def light_glue(image0, image1, features='superpoint'):
     if features == 'superpoint':
