@@ -213,8 +213,14 @@ def projection_loss(point_dists_0, point_dists_1, proj_ray_dist_threshold):
         point_dists_1 < proj_ray_dist_threshold,
         torch.isfinite(point_dists_1)
     )
-    loss0 = point_dists_0[loss0_valid_idx].mean()
-    loss1 = point_dists_1[loss1_valid_idx].mean()
+    if point_dists_0[loss0_valid_idx].nelement() == 0:
+        loss0 = 0.
+    else:
+        loss0 = point_dists_0[loss0_valid_idx].mean()
+    if point_dists_1[loss1_valid_idx].nelement() == 0:
+        loss1 = 0.
+    else:
+        loss1 = point_dists_1[loss1_valid_idx].mean()
 
     return 0.5 * (loss0 + loss1)
 
