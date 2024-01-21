@@ -233,7 +233,13 @@ def readCamerasFromTransforms(path, transformsfile, white_background, extension=
             FovY = fovy
             FovX = fovx
 
-            cam_infos.append(CameraInfo(uid=idx, R=R, T=T, FovY=FovY, FovX=FovX, image=image,
+            intrinsic_matrix = np.array([
+                [fov2focal(FovX, image.size[0]), 0., image.size[0] * 0.5],
+                [0., fov2focal(FovY, image.size[1]), image.size[1] * 0.5],
+                [0., 0., 1.]
+            ], dtype=np.float32)
+
+            cam_infos.append(CameraInfo(uid=idx, R=R, T=T, FovY=FovY, FovX=FovX, image=image, intrinsic_matrix=intrinsic_matrix,
                             image_path=image_path, image_name=image_name, width=image.size[0], height=image.size[1]))
 
     return cam_infos
