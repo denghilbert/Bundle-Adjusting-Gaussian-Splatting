@@ -77,6 +77,7 @@ class Scene:
             print("Loading trained model at iteration {}".format(self.loaded_iter))
 
         self.train_cameras = {}
+        self.unnoisy_train_cameras = {}
         self.test_cameras = {}
 
         if os.path.exists(os.path.join(args.source_path, "sparse")):
@@ -111,6 +112,7 @@ class Scene:
         for resolution_scale in resolution_scales:
             print("Loading Training Cameras")
 
+            self.unnoisy_train_cameras[resolution_scale] = cameraList_from_camInfos(scene_info.train_cameras, resolution_scale, args)
             # simply add noise
             so3_noise = torch.randn(len(scene_info.train_cameras), 3) * r_t_noise[0]
             t_noise = (torch.randn(len(scene_info.train_cameras), 3) * r_t_noise[1]).numpy()
@@ -138,7 +140,7 @@ class Scene:
 
         # naive implementation to deal with pose noise
         # set camera parameters as learnbale parameters
-        l = [{'params': camera.parameters(), 'lr': 0.00016} for camera in self.train_cameras[resolution_scale]]
+        l = [{'params': camera.parameters(), 'lr': 0.001} for camera in self.train_cameras[resolution_scale]]
         self.optimizer = torch.optim.Adam(l, eps=1e-15)
 
     def save(self, iteration):
@@ -147,6 +149,9 @@ class Scene:
 
     def getTrainCameras(self, scale=1.0):
         return self.train_cameras[scale]
+
+    def get_unnoisy_TrainCameras(self, scale=1.0):
+        return self.unnoisy_train_cameras[scale]
 
     def getTestCameras(self, scale=1.0):
         return self.test_cameras[scale]

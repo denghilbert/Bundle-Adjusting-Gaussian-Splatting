@@ -23,6 +23,8 @@ import uuid
 from tqdm import tqdm
 from utils.image_utils import psnr
 from utils.visualization import wandb_image
+from utils.util_vis import vis_cameras
+from utils.util import check_socket_open
 from argparse import ArgumentParser, Namespace
 from arguments import ModelParams, PipelineParams, OptimizationParams
 try:
@@ -32,6 +34,8 @@ except ImportError:
     TENSORBOARD_FOUND = False
 
 import wandb
+import visdom
+from easydict import EasyDict
 
 # set random seeds
 import numpy as np
@@ -74,6 +78,21 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
     camera_pairs = image_pair_candidates(extrinsic_list, args.angle_threshold, camera_id)
     camera_matching_points = {}
     projection_loss_count = 0
+    opt_vis = EasyDict({'group': 'exp_synthetic', 'name': 'l2g_lego', 'model': 'l2g_nerf', 'yaml': 'l2g_nerf_blender', 'seed': 0, 'gpu': 0, 'cpu': False, 'load': None, 'arch': {'layers_feat': [None, 256, 256, 256, 256, 256, 256, 256, 256], 'layers_rgb': [None, 128, 3], 'skip': [4], 'posenc': {'L_3D': 10, 'L_view': 4}, 'density_activ': 'softplus', 'tf_init': True, 'layers_warp': [None, 256, 256, 256, 256, 256, 256, 6], 'skip_warp': [4], 'embedding_dim': 128}, 'data': {'root': '/the/data/path/of/nerf_synthetic/', 'dataset': 'blender', 'image_size': [400, 400], 'num_workers': 4, 'preload': True, 'augment': {}, 'center_crop': None, 'val_on_test': False, 'train_sub': None, 'val_sub': 4, 'scene': 'lego', 'bgcolor': 1}, 'loss_weight': {'render': 0, 'render_fine': None, 'global_alignment': 2}, 'optim': {'lr': 0.0005, 'lr_end': 0.0001, 'algo': 'Adam', 'sched': {'type': 'ExponentialLR', 'gamma': None}, 'lr_pose': 0.001, 'lr_pose_end': 1e-08, 'sched_pose': {'type': 'ExponentialLR', 'gamma': None}, 'warmup_pose': None, 'test_photo': True, 'test_iter': 100}, 'batch_size': None, 'max_epoch': None, 'resume': False, 'output_root': 'output', 'tb': {'num_images': [4, 8]}, 'visdom': {'server': 'localhost', 'port': 8600, 'cam_depth': 0.5}, 'freq': {'scalar': 200, 'vis': 1000, 'val': 2000, 'ckpt': 5000}, 'nerf': {'view_dep': True, 'depth': {'param': 'metric', 'range': [2, 6]}, 'sample_intvs': 128, 'sample_stratified': True, 'fine_sampling': False, 'sample_intvs_fine': None, 'rand_rays': 1024, 'density_noise_reg': None, 'setbg_opaque': False}, 'camera': {'model': 'perspective', 'ndc': False, 'noise': True, 'noise_r': 0.07, 'noise_t': 0.5}, 'max_iter': 200000, 'trimesh': {'res': 128, 'range': [-1.2, 1.2], 'thres': 25.0, 'chunk_size': 16384}, 'barf_c2f': [0.1, 0.5], 'error_map_size': None, 'output_path': 'output/exp_synthetic/l2g_lego', 'device': 'cuda:0', 'H': 400, 'W': 400})
+    if opt_vis.visdom:
+        # check if visdom server is runninng
+        is_open = check_socket_open(opt_vis.visdom.server,opt_vis.visdom.port)
+        retry = None
+        while not is_open:
+            retry = input("visdom port ({}) not open, retry? (y/n) ".format(opt_vis.visdom.port))
+            if retry not in ["y","n"]: continue
+            if retry=="y":
+                is_open = check_socket_open(opt_vis.visdom.server,opt_vis.visdom.port)
+            else: break
+        vis = visdom.Visdom(server=opt_vis.visdom.server,port=opt_vis.visdom.port,env=opt_vis.group)
+    pose_GT = torch.stack([camera.get_w2c[:3, :4] for camera in scene.get_unnoisy_TrainCameras()])
+    pose_aligned = torch.stack([camera.get_w2c[:3, :4] for camera in viewpoint_stack_constant])
+    vis_cameras(opt_vis, vis, step=0, poses=[pose_aligned, pose_GT])
 
     ema_loss_for_log = 0.0
     best_psnr = 0.0
@@ -213,6 +232,11 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
                 progress_bar.update(10)
             if iteration == opt.iterations:
                 progress_bar.close()
+
+            if iteration in testing_iterations:
+                pose_GT = torch.stack([camera.get_w2c[:3, :4] for camera in scene.get_unnoisy_TrainCameras()])
+                pose_aligned = torch.stack([camera.get_w2c[:3, :4] for camera in viewpoint_stack_constant])
+                vis_cameras(opt_vis, vis, step=iteration, poses=[pose_aligned, pose_GT])
 
             # Log and save
             training_report(tb_writer, iteration, Ll1, loss, l1_loss, iter_start.elapsed_time(iter_end), testing_iterations, scene, render, (pipe, background, mlp_color))
