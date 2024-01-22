@@ -140,8 +140,10 @@ class Scene:
 
         # naive implementation to deal with pose noise
         # set camera parameters as learnbale parameters
-        l = [{'params': camera.parameters(), 'lr': 0.001} for camera in self.train_cameras[resolution_scale]]
+        l = [{'params': camera.parameters(), 'lr': 0.01} for camera in self.train_cameras[resolution_scale]]
         self.optimizer = torch.optim.Adam(l, eps=1e-15)
+        self.scheduler = torch.optim.lr_scheduler.MultiStepLR(self.optimizer, milestones=[30000, 40000], gamma=0.1)
+
 
     def save(self, iteration):
         point_cloud_path = os.path.join(self.model_path, "point_cloud/iteration_{}".format(iteration))
