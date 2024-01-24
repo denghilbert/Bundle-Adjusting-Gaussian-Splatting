@@ -13,6 +13,7 @@ import torch
 from torch import nn
 import numpy as np
 from utils.graphics_utils import getWorld2View2, getProjectionMatrix, getWorld2View2_torch_tensor, get_rays
+from utils.camera import Lie
 
 class Camera(nn.Module):
     def __init__(self, colmap_id, R, T, intrinsic_matrix, FoVx, FoVy, image, gt_alpha_mask,
@@ -30,6 +31,7 @@ class Camera(nn.Module):
         self.FoVx = FoVx
         self.FoVy = FoVy
         self.image_name = image_name
+        self.lie = Lie()
 
         try:
             self.data_device = torch.device(data_device)
@@ -58,14 +60,27 @@ class Camera(nn.Module):
 
         #self.world_view_transform = torch.tensor(getWorld2View2(R, T, trans, scale)).transpose(0, 1).cuda()
 
-        #self.world_view_transform = getWorld2View2_torch_tensor(self.R, self.T, torch.tensor(trans).float().cuda(), torch.tensor(scale).float().cuda()).transpose(0, 1).requires_grad_(True) # We can no use linalg.inv() on parameters (e.g., self.R == nn.Parameters)
-        self.world_view_transform = nn.Parameter(getWorld2View2_torch_tensor(torch.tensor(R).float().cuda(), torch.tensor(T).float().cuda(), torch.tensor(trans).float().cuda(), torch.tensor(scale).float().cuda()).transpose(0, 1).requires_grad_(True))
+        #self.world_view_transform_0 = getWorld2View2_torch_tensor(torch.tensor(R).float().cuda(), torch.tensor(T).float().cuda(), torch.tensor(trans).float().cuda(), torch.tensor(scale).float().cuda()).transpose(0, 1).requires_grad_(True) # We can no use linalg.inv() on parameters (e.g., self.R == nn.Parameters)
+        #self.Rt = nn.Parameter(getWorld2View2_torch_tensor(torch.tensor(R).float().cuda(), torch.tensor(T).float().cuda(), torch.tensor(trans).float().cuda(), torch.tensor(scale).float().cuda()).transpose(0, 1)[:, :3].requires_grad_(True))
+
+        # represent translation and rotation with so3
+        self.translation = nn.Parameter(torch.tensor(T).float().view(-1, 1).cuda().requires_grad_(True))
+        self.so3 = nn.Parameter(self.lie.SO3_to_so3(torch.tensor(R).float().t().cuda()).requires_grad_(True))
+        self.rotation = self.lie.so3_to_SO3(self.so3) # we have error right here, but it doesn't matter
+        # get Rt and last row, finally get extrinsic (w2c)
+        self.last_row = torch.tensor([[0., 0., 0., 1.]]).cuda()
+        self.Rt = torch.cat((self.rotation, self.translation), dim=1)
+        self.world_view_transform = torch.cat((self.Rt, self.last_row), dim=0).t()
         self.projection_matrix = getProjectionMatrix(znear=self.znear, zfar=self.zfar, fovX=self.FoVx, fovY=self.FoVy).transpose(0,1).cuda()
         self.full_proj_transform = (self.world_view_transform.unsqueeze(0).bmm(self.projection_matrix.unsqueeze(0))).squeeze(0)
         self.camera_center = self.world_view_transform.inverse()[3, :3]
 
     def reset_extrinsic(self, R, T):
-        self.world_view_transform = torch.tensor(getWorld2View2(R, T, self.trans, self.scale)).transpose(0, 1).cuda()
+        self.translation = nn.Parameter(torch.tensor(T).float().view(-1, 1).cuda().requires_grad_(True))
+        self.so3 = nn.Parameter(self.lie.SO3_to_so3(torch.tensor(R).float().t().cuda()).requires_grad_(True))
+        self.rotation = self.lie.so3_to_SO3(self.so3) # we have error right here, but it doesn't matter
+        self.Rt = torch.cat((self.rotation, self.translation), dim=1)
+        self.world_view_transform = torch.cat((self.Rt, self.last_row), dim=0).t()
         self.full_proj_transform = (
             self.world_view_transform.unsqueeze(0).bmm(self.projection_matrix.unsqueeze(0))).squeeze(0)
         self.camera_center = self.world_view_transform.inverse()[3, :3]
@@ -94,19 +109,30 @@ class Camera(nn.Module):
 
     @property
     def get_w2c(self):
+        self.rotation = self.lie.so3_to_SO3(self.so3) # we have error right here, but it doesn't matter
+        self.Rt = torch.cat((self.rotation, self.translation), dim=1)
+        self.world_view_transform = torch.cat((self.Rt, self.last_row), dim=0).t()
         return self.world_view_transform.t()
 
     @property
     def get_world_view_transform(self):
+        self.Rt = torch.cat((self.rotation, self.translation), dim=1)
+        self.world_view_transform = torch.cat((self.Rt, self.last_row), dim=0).t()
         return self.world_view_transform
 
     @property
     def get_full_proj_transform(self):
+        self.rotation = self.lie.so3_to_SO3(self.so3) # we have error right here, but it doesn't matter
+        self.Rt = torch.cat((self.rotation, self.translation), dim=1)
+        self.world_view_transform = torch.cat((self.Rt, self.last_row), dim=0).t()
         self.full_proj_transform = (self.get_world_view_transform.unsqueeze(0).bmm(self.projection_matrix.unsqueeze(0))).squeeze(0)
         return self.full_proj_transform
 
     @property
     def get_camera_center(self):
+        self.rotation = self.lie.so3_to_SO3(self.so3) # we have error right here, but it doesn't matter
+        self.Rt = torch.cat((self.rotation, self.translation), dim=1)
+        self.world_view_transform = torch.cat((self.Rt, self.last_row), dim=0).t()
         self.camera_center = self.get_world_view_transform.inverse()[3, :3]
         return self.camera_center
 

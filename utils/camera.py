@@ -111,7 +111,7 @@ class Lie():
                           torch.stack([-w1,w0,O],dim=-1)],dim=-2)
         return wx
 
-    def taylor_a(self,x,nth=10):
+    def taylor_A(self,x,nth=10):
         # taylor expansion of sin(x)/x
         ans = torch.zeros_like(x)
         denom = 1.
@@ -119,7 +119,7 @@ class Lie():
             if i>0: denom *= (2*i)*(2*i+1)
             ans = ans+(-1)**i*x**(2*i)/denom
         return ans
-    def taylor_b(self,x,nth=10):
+    def taylor_B(self,x,nth=10):
         # taylor expansion of (1-cos(x))/x**2
         ans = torch.zeros_like(x)
         denom = 1.

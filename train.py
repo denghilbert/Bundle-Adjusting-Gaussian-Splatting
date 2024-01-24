@@ -190,7 +190,7 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
         gt_image = viewpoint_cam.original_image.cuda()
         Ll1 = l1_loss(image, gt_image)
         ssim_loss = ssim(image, gt_image)
-        loss = (1.0 - opt.lambda_dssim) * Ll1 + opt.lambda_dssim * (1.0 - ssim_loss) + 0.1 * (loss_projection / len(camera_pairs[viewpoint_cam.uid]))
+        loss = (1.0 - opt.lambda_dssim) * Ll1 + opt.lambda_dssim * (1.0 - ssim_loss)# + 0.1 * (loss_projection / len(camera_pairs[viewpoint_cam.uid]))
 
         #if iteration > 3000:
         #    residual_color = render(viewpoint_cam, gaussians, pipe, background, mlp_color, hybrid=hybrid)["render"]
@@ -270,10 +270,13 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
             if iteration < opt.iterations:
                 gaussians.optimizer.step()
                 gaussians.optimizer.zero_grad(set_to_none = True)
-                #if iteration in [1001, 1002, 3000]:
-                #    print(viewpoint_cam.world_view_transform)
-                #    print(viewpoint_cam.world_view_transform.grad)
+                #if iteration in [10000, 20000, 30000, 40000]:
+                #    print(viewpoint_cam.Rt)
+                #    print(viewpoint_cam.Rt.grad)
+                #    print(viewpoint_cam.get_world_view_transform)
                 #    #print(viewpoint_cam.camera_center)
+                #    if iteration == 40000:
+                #        import pdb;pdb.set_trace()
                 if opt_cam:
                     scene.optimizer.step()
                     scene.optimizer.zero_grad(set_to_none=True)

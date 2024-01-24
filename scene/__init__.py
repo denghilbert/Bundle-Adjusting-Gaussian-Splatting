@@ -18,44 +18,8 @@ from scene.gaussian_model import GaussianModel
 from scene.specular_model import SpecularModel
 from arguments import ModelParams
 from utils.camera_utils import cameraList_from_camInfos, camera_to_JSON
+from utils.camera import Lie
 import torch
-
-def skew_symmetric(w):
-    w0,w1,w2 = w.unbind(dim=-1)
-    O = torch.zeros_like(w0)
-    wx = torch.stack([torch.stack([O,-w2,w1],dim=-1),
-                      torch.stack([w2,O,-w0],dim=-1),
-                      torch.stack([-w1,w0,O],dim=-1)],dim=-2)
-    return wx
-
-
-def taylor_A(x,nth=10):
-    # taylor expansion of sin(x)/x
-    ans = torch.zeros_like(x)
-    denom = 1.
-    for i in range(nth+1):
-        if i>0: denom *= (2*i)*(2*i+1)
-        ans = ans+(-1)**i*x**(2*i)/denom
-    return ans
-def taylor_B(x,nth=10):
-    # taylor expansion of (1-cos(x))/x**2
-    ans = torch.zeros_like(x)
-    denom = 1.
-    for i in range(nth+1):
-        denom *= (2*i+1)*(2*i+2)
-        ans = ans+(-1)**i*x**(2*i)/denom
-    return ans
-
-
-def so3_to_SO3(w): # [...,3]
-    wx = skew_symmetric(w)
-    theta = w.norm(dim=-1)[...,None,None]
-    I = torch.eye(3,device=w.device,dtype=torch.float32)
-    A = taylor_A(theta)
-    B = taylor_B(theta)
-    R = I+A*wx+B*wx@wx
-    return R
-
 
 class Scene:
 
@@ -68,6 +32,7 @@ class Scene:
         self.model_path = args.model_path
         self.loaded_iter = None
         self.gaussians = gaussians
+        self.lie = Lie()
 
         if load_iteration:
             if load_iteration == -1:
@@ -120,11 +85,12 @@ class Scene:
             # so3_noise = torch.tensor([3.1415926 / 4, 0., 0.])[None, :].repeat(len(scene_info.train_cameras), 1)
             #t_noise = torch.tensor([0., 0., 1.])[None, :].repeat(len(scene_info.train_cameras), 1).numpy()
 
-            so3 = so3_to_SO3(so3_noise).cpu().detach().numpy()
+            so3 = self.lie.so3_to_SO3(so3_noise).cpu().detach().numpy()
             for index in range(len(scene_info.train_cameras)):
                 tmp_R = so3[index] @ scene_info.train_cameras[index].R
+                tmp_T = so3[index] @ scene_info.train_cameras[index].T + t_noise[index]
                 #tmp_T = so3[index] @ (scene_info.train_cameras[index].T + t_noise[index])
-                tmp_T = (scene_info.train_cameras[index].T + t_noise[index])
+                #tmp_T = (scene_info.train_cameras[index].T + t_noise[index])
                 scene_info.train_cameras[index] = scene_info.train_cameras[index]._replace(T=tmp_T, R=tmp_R)
                 #import pdb; pdb.set_trace()
                 #print(scene_info.train_cameras[index])
@@ -142,7 +108,7 @@ class Scene:
         # set camera parameters as learnbale parameters
         l = [{'params': camera.parameters(), 'lr': 0.01} for camera in self.train_cameras[resolution_scale]]
         self.optimizer = torch.optim.Adam(l, eps=1e-15)
-        self.scheduler = torch.optim.lr_scheduler.MultiStepLR(self.optimizer, milestones=[30000, 40000], gamma=0.1)
+        self.scheduler = torch.optim.lr_scheduler.MultiStepLR(self.optimizer, milestones=[30000, 50000], gamma=1.)
 
 
     def save(self, iteration):
