@@ -88,9 +88,9 @@ class Scene:
             so3 = self.lie.so3_to_SO3(so3_noise).cpu().detach().numpy()
             for index in range(len(scene_info.train_cameras)):
                 tmp_R = so3[index] @ scene_info.train_cameras[index].R
-                tmp_T = so3[index] @ scene_info.train_cameras[index].T + t_noise[index]
+                #tmp_T = so3[index] @ scene_info.train_cameras[index].T + t_noise[index]
                 #tmp_T = so3[index] @ (scene_info.train_cameras[index].T + t_noise[index])
-                #tmp_T = (scene_info.train_cameras[index].T + t_noise[index])
+                tmp_T = (scene_info.train_cameras[index].T + t_noise[index])
                 scene_info.train_cameras[index] = scene_info.train_cameras[index]._replace(T=tmp_T, R=tmp_R)
                 #import pdb; pdb.set_trace()
                 #print(scene_info.train_cameras[index])
@@ -106,7 +106,12 @@ class Scene:
 
         # naive implementation to deal with pose noise
         # set camera parameters as learnbale parameters
-        l = [{'params': camera.parameters(), 'lr': 0.01} for camera in self.train_cameras[resolution_scale]]
+        l = []
+        for camera in self.train_cameras[resolution_scale]:
+            #l.append({'params': camera.quaternion, 'lr': 0.001})
+            l.append({'params': camera.so3, 'lr': 0.01})
+            l.append({'params': camera.translation, 'lr': 0.01})
+        #l = [{'params': camera.parameters(), 'lr': 0.01} for camera in self.train_cameras[resolution_scale]]
         self.optimizer = torch.optim.Adam(l, eps=1e-15)
         self.scheduler = torch.optim.lr_scheduler.MultiStepLR(self.optimizer, milestones=[30000, 50000], gamma=1.)
 
