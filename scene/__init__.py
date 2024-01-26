@@ -106,14 +106,14 @@ class Scene:
 
         # naive implementation to deal with pose noise
         # set camera parameters as learnbale parameters
-        l = []
-        for camera in self.train_cameras[resolution_scale]:
-            #l.append({'params': camera.quaternion, 'lr': 0.001})
-            l.append({'params': camera.so3, 'lr': 0.01})
-            l.append({'params': camera.translation, 'lr': 0.01})
+        l_rotation = [{'params': camera.quaternion, 'lr': 0.01} for camera in self.train_cameras[resolution_scale]]
+        #l_rotation = [{'params': camera.so3, 'lr': 0.01} for camera in self.train_cameras[resolution_scale]]
+        l_translation = [{'params': camera.translation, 'lr': 0.01} for camera in self.train_cameras[resolution_scale]]
         #l = [{'params': camera.parameters(), 'lr': 0.01} for camera in self.train_cameras[resolution_scale]]
-        self.optimizer = torch.optim.Adam(l, eps=1e-15)
-        self.scheduler = torch.optim.lr_scheduler.MultiStepLR(self.optimizer, milestones=[30000, 50000], gamma=1.)
+        self.optimizer_rotation = torch.optim.Adam(l_rotation, eps=1e-15)
+        self.optimizer_translation = torch.optim.Adam(l_translation, eps=1e-15)
+        self.scheduler_rotation = torch.optim.lr_scheduler.MultiStepLR(self.optimizer_rotation, milestones=[7000, 50000], gamma=1.)
+        self.scheduler_translation = torch.optim.lr_scheduler.MultiStepLR(self.optimizer_translation, milestones=[30000, 50000], gamma=1.)
 
 
     def save(self, iteration):
