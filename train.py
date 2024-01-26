@@ -330,9 +330,19 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
 
                 # do not update camera pose when densify or prune gaussians
                 if opt_cam:
-                    scene.optimizer.step()
-                    scene.optimizer.zero_grad(set_to_none=True)
-                    scene.scheduler.step()
+                    if iteration > 10000 and Ll1 > 0.03:
+                        scene.optimizer_translation.param_groups[viewpoint_cam.uid]['lr'] = scene.optimizer_translation.param_groups[viewpoint_cam.uid]['lr'] * torch.exp(30 * Ll1).item()
+                        scene.optimizer_rotation.param_groups[viewpoint_cam.uid]['lr'] = scene.optimizer_rotation.param_groups[viewpoint_cam.uid]['lr'] * torch.exp(30 * Ll1).item()
+                    if iteration % opt.densification_interval != 0 and iteration > opt.densify_from_iter:
+                        scene.optimizer_rotation.step()
+                        scene.optimizer_translation.step()
+                        scene.optimizer_rotation.zero_grad(set_to_none=True)
+                        scene.optimizer_translation.zero_grad(set_to_none=True)
+                        scene.scheduler_rotation.step()
+                        scene.scheduler_translation.step()
+                    if iteration > 10000 and Ll1 > 0.03:
+                        scene.optimizer_translation.param_groups[viewpoint_cam.uid]['lr'] = scene.optimizer_translation.param_groups[viewpoint_cam.uid]['lr'] / torch.exp(30 * Ll1).item()
+                        scene.optimizer_rotation.param_groups[viewpoint_cam.uid]['lr'] = scene.optimizer_rotation.param_groups[viewpoint_cam.uid]['lr'] / torch.exp(30 * Ll1).item()
                 #print(viewpoint_cam.world_view_transform)
                 #print(viewpoint_cam.world_view_transform.grad)
                 #print(viewpoint_cam.camera_center)
