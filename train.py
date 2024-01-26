@@ -36,6 +36,15 @@ except ImportError:
 import wandb
 import visdom
 from easydict import EasyDict
+from selenium import webdriver
+from selenium.webdriver.chrome.service import Service
+from selenium.webdriver.common.by import By
+from selenium.webdriver.support.ui import WebDriverWait
+from selenium.webdriver.support import expected_conditions as EC
+from selenium.webdriver.chrome.options import Options
+from PIL import Image
+import time
+from io import BytesIO
 
 # set random seeds
 import numpy as np
@@ -80,20 +89,22 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
     projection_loss_count = 0
     if args.vis_pose:
         opt_vis = EasyDict({'group': 'exp_synthetic', 'name': 'l2g_lego', 'model': 'l2g_nerf', 'yaml': 'l2g_nerf_blender', 'seed': 0, 'gpu': 0, 'cpu': False, 'load': None, 'arch': {'layers_feat': [None, 256, 256, 256, 256, 256, 256, 256, 256], 'layers_rgb': [None, 128, 3], 'skip': [4], 'posenc': {'L_3D': 10, 'L_view': 4}, 'density_activ': 'softplus', 'tf_init': True, 'layers_warp': [None, 256, 256, 256, 256, 256, 256, 6], 'skip_warp': [4], 'embedding_dim': 128}, 'data': {'root': '/the/data/path/of/nerf_synthetic/', 'dataset': 'blender', 'image_size': [400, 400], 'num_workers': 4, 'preload': True, 'augment': {}, 'center_crop': None, 'val_on_test': False, 'train_sub': None, 'val_sub': 4, 'scene': 'lego', 'bgcolor': 1}, 'loss_weight': {'render': 0, 'render_fine': None, 'global_alignment': 2}, 'optim': {'lr': 0.0005, 'lr_end': 0.0001, 'algo': 'Adam', 'sched': {'type': 'ExponentialLR', 'gamma': None}, 'lr_pose': 0.001, 'lr_pose_end': 1e-08, 'sched_pose': {'type': 'ExponentialLR', 'gamma': None}, 'warmup_pose': None, 'test_photo': True, 'test_iter': 100}, 'batch_size': None, 'max_epoch': None, 'resume': False, 'output_root': 'output', 'tb': {'num_images': [4, 8]}, 'visdom': {'server': 'localhost', 'port': 8600, 'cam_depth': 0.5}, 'freq': {'scalar': 200, 'vis': 1000, 'val': 2000, 'ckpt': 5000}, 'nerf': {'view_dep': True, 'depth': {'param': 'metric', 'range': [2, 6]}, 'sample_intvs': 128, 'sample_stratified': True, 'fine_sampling': False, 'sample_intvs_fine': None, 'rand_rays': 1024, 'density_noise_reg': None, 'setbg_opaque': False}, 'camera': {'model': 'perspective', 'ndc': False, 'noise': True, 'noise_r': 0.07, 'noise_t': 0.5}, 'max_iter': 200000, 'trimesh': {'res': 128, 'range': [-1.2, 1.2], 'thres': 25.0, 'chunk_size': 16384}, 'barf_c2f': [0.1, 0.5], 'error_map_size': None, 'output_path': 'output/exp_synthetic/l2g_lego', 'device': 'cuda:0', 'H': 400, 'W': 400})
-        if opt_vis.visdom:
+        if opt_vis.visdom and args.vis_pose:
             # check if visdom server is runninng
             is_open = check_socket_open(opt_vis.visdom.server,opt_vis.visdom.port)
             retry = None
-            while not is_open:
-                retry = input("visdom port ({}) not open, retry? (y/n) ".format(opt_vis.visdom.port))
-                if retry not in ["y","n"]: continue
-                if retry=="y":
-                    is_open = check_socket_open(opt_vis.visdom.server,opt_vis.visdom.port)
-                else: break
+            #while not is_open:
+            #    retry = input("visdom port ({}) not open, retry? (y/n) ".format(opt_vis.visdom.port))
+            #    if retry not in ["y","n"]: continue
+            #    if retry=="y":
+            #        is_open = check_socket_open(opt_vis.visdom.server,opt_vis.visdom.port)
+            #    else: break
             vis = visdom.Visdom(server=opt_vis.visdom.server,port=opt_vis.visdom.port,env=opt_vis.group)
-        pose_GT = torch.stack([camera.get_w2c[:3, :4] for camera in scene.get_unnoisy_TrainCameras()])
-        pose_aligned = torch.stack([camera.get_w2c[:3, :4] for camera in viewpoint_stack_constant])
-        vis_cameras(opt_vis, vis, step=0, poses=[pose_aligned, pose_GT])
+            pose_GT = torch.stack([camera.get_w2c[:3, :4] for camera in scene.get_unnoisy_TrainCameras()])
+            pose_aligned = torch.stack([camera.get_w2c[:3, :4] for camera in viewpoint_stack_constant])
+            vis_cameras(opt_vis, vis, step=0, poses=[pose_aligned, pose_GT])
+            os.makedirs(os.path.join(args.model_path, 'plot'), exist_ok=True)
+            download_pose_vis(os.path.join(args.model_path, 'plot'), 0)
 
     ema_loss_for_log = 0.0
     best_psnr = 0.0
@@ -210,6 +221,25 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
                 scalars["loss/projection_loss"] = (loss_projection / len(camera_pairs[viewpoint_cam.uid]))
             if use_wandb:
                 wandb.log(scalars, step=iteration)
+        if iteration == 30100:
+            import sys
+            sys.exit()
+        if 20000 < iteration < 20100 and Ll1 > 0.03:
+            wandb_img = image.unsqueeze(0).detach()
+            wandb_img_gt = gt_image.unsqueeze(0).detach()
+            images_error = (wandb_img_gt - wandb_img).abs()
+            cat_imgs = torch.cat((gt_image, image), dim=2).detach()
+            images = {
+                f"failure/gt_rendered": wandb_image(cat_imgs),
+                f"failure/gt_img": wandb_image(gt_image),
+                f"failure/rendered_img": wandb_image(wandb_img),
+                f"failure/rgb_error": wandb_image(images_error),
+                f"failure/loss": Ll1,
+                f"failure/uid": viewpoint_cam.uid,
+            }
+            if use_wandb:
+                wandb.log(images, step=iteration)
+
         if iteration % 3000 == 0 or iteration == 1:
             wandb_img = image.unsqueeze(0).detach()
             wandb_img_gt = gt_image.unsqueeze(0).detach()
@@ -221,6 +251,26 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
             }
             if use_wandb:
                 wandb.log(images, step=iteration)
+
+        if opt_cam and viewpoint_cam.uid == 50:
+            rt_scalars = {
+                f"camera50_rotation/r_w": viewpoint_cam.quaternion[0].item(),
+                f"camera50_rotation/r_x": viewpoint_cam.quaternion[1].item(),
+                f"camera50_rotation/r_y": viewpoint_cam.quaternion[2].item(),
+                f"camera50_rotation/r_z": viewpoint_cam.quaternion[3].item(),
+                f"camera50_rotation/r_w_grad": viewpoint_cam.quaternion.grad[0].item(),
+                f"camera50_rotation/r_x_grad": viewpoint_cam.quaternion.grad[1].item(),
+                f"camera50_rotation/r_y_grad": viewpoint_cam.quaternion.grad[2].item(),
+                f"camera50_rotation/r_z_grad": viewpoint_cam.quaternion.grad[3].item(),
+                f"camera50_translation/t_x": viewpoint_cam.translation[0].item(),
+                f"camera50_translation/t_y": viewpoint_cam.translation[1].item(),
+                f"camera50_translation/t_z": viewpoint_cam.translation[2].item(),
+                f"camera50_translation/t_x_grad": viewpoint_cam.translation.grad[0].item(),
+                f"camera50_translation/t_y_grad": viewpoint_cam.translation.grad[1].item(),
+                f"camera50_translation/t_z_grad": viewpoint_cam.translation.grad[2].item(),
+            }
+            if use_wandb:
+                wandb.log(rt_scalars, step=iteration)
 
         iter_end.record()
 
@@ -239,8 +289,8 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
                 pose_GT = torch.stack([camera.get_w2c[:3, :4] for camera in scene.get_unnoisy_TrainCameras()])
                 pose_aligned = torch.stack([camera.get_w2c[:3, :4] for camera in viewpoint_stack_constant])
                 vis_cameras(opt_vis, vis, step=iteration, poses=[pose_aligned, pose_GT])
-            if iteration in testing_iterations:
-                print(f"The current learning rate is: {scene.optimizer.param_groups[0]['lr']}.")
+                if iteration == 20000 or iteration == 30000:
+                    download_pose_vis(os.path.join(args.model_path, 'plot'), iteration)
 
             # Log and save
             training_report(tb_writer, iteration, Ll1, loss, l1_loss, iter_start.elapsed_time(iter_end), testing_iterations, scene, render, (pipe, background, mlp_color))
@@ -277,6 +327,8 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
                 #    #print(viewpoint_cam.camera_center)
                 #    if iteration == 40000:
                 #        import pdb;pdb.set_trace()
+
+                # do not update camera pose when densify or prune gaussians
                 if opt_cam:
                     scene.optimizer.step()
                     scene.optimizer.zero_grad(set_to_none=True)
@@ -295,6 +347,30 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
             if (iteration in checkpoint_iterations):
                 print("\n[ITER {}] Saving Checkpoint".format(iteration))
                 torch.save((gaussians.capture(), iteration), scene.model_path + "/chkpnt" + str(iteration) + ".pth")
+
+def download_pose_vis(path, iteration):
+        # download image
+        chrome_binary_path = '/home/youming/Downloads/chrome-linux64/chrome'
+        chrome_options = Options()
+        chrome_options.binary_location = chrome_binary_path
+        webdriver_path = '/home/youming/Downloads/chromedriver-linux64/chromedriver'
+        service = Service(webdriver_path)
+        driver = webdriver.Chrome(service=service, options=chrome_options)
+        visdom_url = 'http://localhost:8600'
+        driver.get(visdom_url)
+        time.sleep(0.2)
+        element = driver.find_element(By.ID, 'scene')
+        png = driver.get_screenshot_as_png()
+        location = element.location
+        size = element.size
+        left = location['x']
+        top = location['y'] + 100
+        right = location['x'] + 2 * size['width']
+        bottom = location['y'] + 2 * size['height']
+        im = Image.open(BytesIO(png))
+        im = im.crop((left, top, right, bottom))
+        im.save(f'{path}/visdom_plot{iteration}.png')
+        driver.quit()
 
 def prepare_output_and_logger(args):
     if not args.model_path:
@@ -375,7 +451,7 @@ def init_wandb(cfg, wandb_id=None, project="", run_name=None, mode="online", res
                 wandb_id = f.read()
         else:
             wandb_id = wandb.util.generate_id()
-            with open(wandb_path, "w") as f:
+            with open(wandb_path, "w+") as f:
                 f.write(wandb_id)
     if use_group:
         group, name = cfg.model_path.split("/")[-2:]
