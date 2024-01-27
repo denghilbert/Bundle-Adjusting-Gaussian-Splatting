@@ -61,7 +61,7 @@ if torch.cuda.is_available():
 np.random.seed(seed_value)
 random.seed(seed_value)
 
-def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoint_iterations, checkpoint, debug_from, use_wandb=False, random_init=False, hybrid=False, opt_cam=False, r_t_noise=[0., 0.]):
+def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoint_iterations, checkpoint, debug_from, use_wandb=False, random_init=False, hybrid=False, opt_cam=False, r_t_noise=[0., 0.], r_t_lr=[0.001, 0.001]):
     first_iter = 0
     tb_writer = prepare_output_and_logger(dataset)
     gaussians = GaussianModel(dataset.sh_degree, dataset.asg_degree)
@@ -69,7 +69,7 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
         specular_mlp = SpecularModel()
         specular_mlp.train_setting(opt)
 
-    scene = Scene(dataset, gaussians, random_init=random_init, r_t_noise=r_t_noise)
+    scene = Scene(dataset, gaussians, random_init=random_init, r_t_noise=r_t_noise, r_t_lr=r_t_lr)
     gaussians.training_setup(opt)
     if checkpoint:
         (model_params, first_iter) = torch.load(checkpoint)
@@ -224,21 +224,21 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
         if iteration == 30100:
             import sys
             sys.exit()
-        if 10000 < iteration < 10100 and Ll1 > 0.03:
-            wandb_img = image.unsqueeze(0).detach()
-            wandb_img_gt = gt_image.unsqueeze(0).detach()
-            images_error = (wandb_img_gt - wandb_img).abs()
-            cat_imgs = torch.cat((gt_image, image), dim=2).detach()
-            images = {
-                f"failure/gt_rendered": wandb_image(cat_imgs),
-                f"failure/gt_img": wandb_image(gt_image),
-                f"failure/rendered_img": wandb_image(wandb_img),
-                f"failure/rgb_error": wandb_image(images_error),
-                f"failure/loss": Ll1,
-                f"failure/uid": viewpoint_cam.uid,
-            }
-            if use_wandb:
-                wandb.log(images, step=iteration)
+        #if 10000 < iteration < 10100 and Ll1 > 0.03:
+        #    wandb_img = image.unsqueeze(0).detach()
+        #    wandb_img_gt = gt_image.unsqueeze(0).detach()
+        #    images_error = (wandb_img_gt - wandb_img).abs()
+        #    cat_imgs = torch.cat((gt_image, image), dim=2).detach()
+        #    images = {
+        #        f"failure/gt_rendered": wandb_image(cat_imgs),
+        #        f"failure/gt_img": wandb_image(gt_image),
+        #        f"failure/rendered_img": wandb_image(wandb_img),
+        #        f"failure/rgb_error": wandb_image(images_error),
+        #        f"failure/loss": Ll1,
+        #        f"failure/uid": viewpoint_cam.uid,
+        #    }
+        #    if use_wandb:
+        #        wandb.log(images, step=iteration)
 
         if iteration % 3000 == 0 or iteration == 1:
             wandb_img = image.unsqueeze(0).detach()
@@ -511,6 +511,7 @@ if __name__ == "__main__":
     parser.add_argument("--hybrid", action="store_true", default=False)
     # if optimize camera poses
     parser.add_argument("--opt_cam", action="store_true", default=False)
+    parser.add_argument("--r_t_lr", nargs="+", type=float, default=[0.01, 0.01])
     # noise for rotation and translation
     parser.add_argument("--r_t_noise", nargs="+", type=float, default=[0., 0.])
     # rotation filter for light_glue
@@ -541,7 +542,7 @@ if __name__ == "__main__":
     # Start GUI server, configure and run training
     network_gui.init(args.ip, args.port)
     torch.autograd.set_detect_anomaly(args.detect_anomaly)
-    training(lp.extract(args), op.extract(args), pp.extract(args), args.test_iterations, args.save_iterations, args.checkpoint_iterations, args.start_checkpoint, args.debug_from, use_wandb=args.wandb, random_init=args.random_init_pc, hybrid=args.hybrid, opt_cam=args.opt_cam, r_t_noise=args.r_t_noise)
+    training(lp.extract(args), op.extract(args), pp.extract(args), args.test_iterations, args.save_iterations, args.checkpoint_iterations, args.start_checkpoint, args.debug_from, use_wandb=args.wandb, random_init=args.random_init_pc, hybrid=args.hybrid, opt_cam=args.opt_cam, r_t_lr=args.r_t_lr, r_t_noise=args.r_t_noise)
 
     # All done
     print("\nTraining complete.")
