@@ -224,21 +224,21 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
         if iteration == 30100:
             import sys
             sys.exit()
-        if 10000 < iteration < 10100 and Ll1 > 0.03:
-            wandb_img = image.unsqueeze(0).detach()
-            wandb_img_gt = gt_image.unsqueeze(0).detach()
-            images_error = (wandb_img_gt - wandb_img).abs()
-            cat_imgs = torch.cat((gt_image, image), dim=2).detach()
-            images = {
-                f"failure/gt_rendered": wandb_image(cat_imgs),
-                f"failure/gt_img": wandb_image(gt_image),
-                f"failure/rendered_img": wandb_image(wandb_img),
-                f"failure/rgb_error": wandb_image(images_error),
-                f"failure/loss": Ll1,
-                f"failure/uid": viewpoint_cam.uid,
-            }
-            if use_wandb:
-                wandb.log(images, step=iteration)
+        #if 10000 < iteration < 10100 and Ll1 > 0.03:
+        #    wandb_img = image.unsqueeze(0).detach()
+        #    wandb_img_gt = gt_image.unsqueeze(0).detach()
+        #    images_error = (wandb_img_gt - wandb_img).abs()
+        #    cat_imgs = torch.cat((gt_image, image), dim=2).detach()
+        #    images = {
+        #        f"failure/gt_rendered": wandb_image(cat_imgs),
+        #        f"failure/gt_img": wandb_image(gt_image),
+        #        f"failure/rendered_img": wandb_image(wandb_img),
+        #        f"failure/rgb_error": wandb_image(images_error),
+        #        f"failure/loss": Ll1,
+        #        f"failure/uid": viewpoint_cam.uid,
+        #    }
+        #    if use_wandb:
+        #        wandb.log(images, step=iteration)
 
         if iteration % 3000 == 0 or iteration == 1:
             wandb_img = image.unsqueeze(0).detach()
