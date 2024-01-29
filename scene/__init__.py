@@ -25,7 +25,7 @@ class Scene:
 
     gaussians : GaussianModel
 
-    def __init__(self, args : ModelParams, gaussians : GaussianModel, load_iteration=None, shuffle=True, resolution_scales=[1.0], random_init=False, r_t_noise=[0., 0.]):
+    def __init__(self, args : ModelParams, gaussians : GaussianModel, load_iteration=None, shuffle=True, resolution_scales=[1.0], random_init=False, r_t_noise=[0., 0.], r_t_lr=[0.001, 0.001]):
         """b
         :param path: Path to colmap scene main folder.
         """
@@ -106,9 +106,9 @@ class Scene:
 
         # naive implementation to deal with pose noise
         # set camera parameters as learnbale parameters
-        l_rotation = [{'params': camera.quaternion, 'lr': 0.001} for camera in self.train_cameras[resolution_scale]]
+        l_rotation = [{'params': camera.quaternion, 'lr': r_t_lr[0]} for camera in self.train_cameras[resolution_scale]]
         #l_rotation = [{'params': camera.so3, 'lr': 0.01} for camera in self.train_cameras[resolution_scale]]
-        l_translation = [{'params': camera.translation, 'lr': 0.001} for camera in self.train_cameras[resolution_scale]]
+        l_translation = [{'params': camera.translation, 'lr': r_t_lr[1]} for camera in self.train_cameras[resolution_scale]]
         #l = [{'params': camera.parameters(), 'lr': 0.01} for camera in self.train_cameras[resolution_scale]]
         self.optimizer_rotation = torch.optim.Adam(l_rotation, eps=1e-15)
         self.optimizer_translation = torch.optim.Adam(l_translation, eps=1e-15)
