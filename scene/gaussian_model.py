@@ -256,7 +256,7 @@ class GaussianModel:
 
     def construct_list_of_attributes(self):
         l = ['x', 'y', 'z', 'nx', 'ny', 'nz']
-        l.extend(['nx2', 'ny2', 'nz2'])
+        #l.extend(['nx2', 'ny2', 'nz2'])
         # All channels except the 3 DC
         for i in range(self._features_dc.shape[1]*self._features_dc.shape[2]):
             l.append('f_dc_{}'.format(i))
@@ -267,8 +267,8 @@ class GaussianModel:
             l.append('scale_{}'.format(i))
         for i in range(self._rotation.shape[1]):
             l.append('rot_{}'.format(i))
-        for i in range(self._features_asg.shape[1]):
-            l.append('f_asg_{}'.format(i))
+        #for i in range(self._features_asg.shape[1]):
+        #    l.append('f_asg_{}'.format(i))
         return l
 
     def save_ply(self, path):
@@ -288,7 +288,8 @@ class GaussianModel:
         dtype_full = [(attribute, 'f4') for attribute in self.construct_list_of_attributes()]
 
         elements = np.empty(xyz.shape[0], dtype=dtype_full)
-        attributes = np.concatenate((xyz, normals, normals2, f_dc, f_rest, opacities, scale, rotation, f_asg), axis=1)
+        #attributes = np.concatenate((xyz, normals, normals2, f_dc, f_rest, opacities, scale, rotation, f_asg), axis=1)
+        attributes = np.concatenate((xyz, normals, f_dc, f_rest, opacities, scale, rotation), axis=1)
         elements[:] = list(map(tuple, attributes))
         el = PlyElement.describe(elements, 'vertex')
         PlyData([el]).write(path)
@@ -332,10 +333,10 @@ class GaussianModel:
         for idx, attr_name in enumerate(rot_names):
             rots[:, idx] = np.asarray(plydata.elements[0][attr_name])
 
-        asg_names = [p.name for p in plydata.elements[0].properties if p.name.startswith("f_asg_")]
-        f_asgs = np.zeros((xyz.shape[0], len(asg_names)))
-        for idx, attr_name in enumerate(asg_names):
-            f_asgs[:, idx] = np.asarray(plydata.elements[0][attr_name])
+        #asg_names = [p.name for p in plydata.elements[0].properties if p.name.startswith("f_asg_")]
+        #f_asgs = np.zeros((xyz.shape[0], len(asg_names)))
+        #for idx, attr_name in enumerate(asg_names):
+        #    f_asgs[:, idx] = np.asarray(plydata.elements[0][attr_name])
 
         normal = np.stack((np.asarray(plydata.elements[0]["nx"]),
                            np.asarray(plydata.elements[0]["ny"]),
