@@ -341,9 +341,9 @@ class GaussianModel:
         normal = np.stack((np.asarray(plydata.elements[0]["nx"]),
                            np.asarray(plydata.elements[0]["ny"]),
                            np.asarray(plydata.elements[0]["nz"])), axis=1)
-        normal2 = np.stack((np.asarray(plydata.elements[0]["nx2"]),
-                            np.asarray(plydata.elements[0]["ny2"]),
-                            np.asarray(plydata.elements[0]["nz2"])), axis=1)
+        #normal2 = np.stack((np.asarray(plydata.elements[0]["nx2"]),
+        #                    np.asarray(plydata.elements[0]["ny2"]),
+        #                    np.asarray(plydata.elements[0]["nz2"])), axis=1)
 
         self._xyz = nn.Parameter(torch.tensor(xyz, dtype=torch.float, device="cuda").requires_grad_(True))
         self._features_dc = nn.Parameter(torch.tensor(features_dc, dtype=torch.float, device="cuda").transpose(1, 2).contiguous().requires_grad_(True))
@@ -352,9 +352,9 @@ class GaussianModel:
         self._scaling = nn.Parameter(torch.tensor(scales, dtype=torch.float, device="cuda").requires_grad_(True))
         self._rotation = nn.Parameter(torch.tensor(rots, dtype=torch.float, device="cuda").requires_grad_(True))
 
-        self._features_asg = nn.Parameter(torch.tensor(f_asgs, dtype=torch.float, device="cuda").requires_grad_(True))
+        #self._features_asg = nn.Parameter(torch.tensor(f_asgs, dtype=torch.float, device="cuda").requires_grad_(True))
         self._normal = nn.Parameter(torch.tensor(normal, dtype=torch.float, device="cuda").requires_grad_(True))
-        self._normal2 = nn.Parameter(torch.tensor(normal2, dtype=torch.float, device="cuda").requires_grad_(True))
+        #self._normal2 = nn.Parameter(torch.tensor(normal2, dtype=torch.float, device="cuda").requires_grad_(True))
 
         self.active_sh_degree = self.max_sh_degree
 

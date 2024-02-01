@@ -526,6 +526,7 @@ if __name__ == "__main__":
     print("Optimizing " + args.model_path)
 
     # Initialize wandb
+    os.makedirs(args.model_path, exist_ok=True)
     if args.wandb:
         wandb.login()
         wandb_run = init_wandb(args,
