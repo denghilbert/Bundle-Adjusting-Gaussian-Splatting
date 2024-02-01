@@ -50,6 +50,9 @@ class Scene:
         elif os.path.exists(os.path.join(args.source_path, "transforms_train.json")):
             print("Found transforms_train.json file, assuming Blender data set!")
             scene_info = sceneLoadTypeCallbacks["Blender"](args.source_path, args.white_background, args.eval)
+        elif os.path.exists(os.path.join(args.source_path, "transforms_train_diffusion.json")):
+            print("Found transforms_train_diffusion.json file!")
+            scene_info = sceneLoadTypeCallbacks["Diffusion"](args.source_path, args.white_background, args.eval, extension=".jpg")
         else:
             assert False, "Could not recognize scene type!"
 
