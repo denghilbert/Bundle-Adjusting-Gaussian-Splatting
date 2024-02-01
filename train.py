@@ -254,21 +254,37 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
 
         if opt_cam and viewpoint_cam.uid == 50:
             rt_scalars = {
-                f"camera50_rotation/r_w": viewpoint_cam.quaternion[0].item(),
-                f"camera50_rotation/r_x": viewpoint_cam.quaternion[1].item(),
-                f"camera50_rotation/r_y": viewpoint_cam.quaternion[2].item(),
-                f"camera50_rotation/r_z": viewpoint_cam.quaternion[3].item(),
-                f"camera50_rotation/r_w_grad": viewpoint_cam.quaternion.grad[0].item(),
-                f"camera50_rotation/r_x_grad": viewpoint_cam.quaternion.grad[1].item(),
-                f"camera50_rotation/r_y_grad": viewpoint_cam.quaternion.grad[2].item(),
-                f"camera50_rotation/r_z_grad": viewpoint_cam.quaternion.grad[3].item(),
-                f"camera50_translation/t_x": viewpoint_cam.translation[0].item(),
-                f"camera50_translation/t_y": viewpoint_cam.translation[1].item(),
-                f"camera50_translation/t_z": viewpoint_cam.translation[2].item(),
-                f"camera50_translation/t_x_grad": viewpoint_cam.translation.grad[0].item(),
-                f"camera50_translation/t_y_grad": viewpoint_cam.translation.grad[1].item(),
-                f"camera50_translation/t_z_grad": viewpoint_cam.translation.grad[2].item(),
+                f"camera50_rotation/r_w": viewpoint_cam.delta_quaternion[0].item(),
+                f"camera50_rotation/r_x": viewpoint_cam.delta_quaternion[1].item(),
+                f"camera50_rotation/r_y": viewpoint_cam.delta_quaternion[2].item(),
+                f"camera50_rotation/r_z": viewpoint_cam.delta_quaternion[3].item(),
+                f"camera50_rotation/r_w_grad": viewpoint_cam.delta_quaternion.grad[0].item(),
+                f"camera50_rotation/r_x_grad": viewpoint_cam.delta_quaternion.grad[1].item(),
+                f"camera50_rotation/r_y_grad": viewpoint_cam.delta_quaternion.grad[2].item(),
+                f"camera50_rotation/r_z_grad": viewpoint_cam.delta_quaternion.grad[3].item(),
+                f"camera50_translation/t_x": viewpoint_cam.delta_translation[0].item(),
+                f"camera50_translation/t_y": viewpoint_cam.delta_translation[1].item(),
+                f"camera50_translation/t_z": viewpoint_cam.delta_translation[2].item(),
+                f"camera50_translation/t_x_grad": viewpoint_cam.delta_translation.grad[0].item(),
+                f"camera50_translation/t_y_grad": viewpoint_cam.delta_translation.grad[1].item(),
+                f"camera50_translation/t_z_grad": viewpoint_cam.delta_translation.grad[2].item(),
             }
+            #rt_scalars = {
+            #    f"camera50_rotation/r_w": viewpoint_cam.quaternion[0].item(),
+            #    f"camera50_rotation/r_x": viewpoint_cam.quaternion[1].item(),
+            #    f"camera50_rotation/r_y": viewpoint_cam.quaternion[2].item(),
+            #    f"camera50_rotation/r_z": viewpoint_cam.quaternion[3].item(),
+            #    f"camera50_rotation/r_w_grad": viewpoint_cam.quaternion.grad[0].item(),
+            #    f"camera50_rotation/r_x_grad": viewpoint_cam.quaternion.grad[1].item(),
+            #    f"camera50_rotation/r_y_grad": viewpoint_cam.quaternion.grad[2].item(),
+            #    f"camera50_rotation/r_z_grad": viewpoint_cam.quaternion.grad[3].item(),
+            #    f"camera50_translation/t_x": viewpoint_cam.translation[0].item(),
+            #    f"camera50_translation/t_y": viewpoint_cam.translation[1].item(),
+            #    f"camera50_translation/t_z": viewpoint_cam.translation[2].item(),
+            #    f"camera50_translation/t_x_grad": viewpoint_cam.translation.grad[0].item(),
+            #    f"camera50_translation/t_y_grad": viewpoint_cam.translation.grad[1].item(),
+            #    f"camera50_translation/t_z_grad": viewpoint_cam.translation.grad[2].item(),
+            #}
             if use_wandb:
                 wandb.log(rt_scalars, step=iteration)
 

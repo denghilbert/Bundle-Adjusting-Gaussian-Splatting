@@ -61,14 +61,18 @@ class Camera(nn.Module):
 
         #self.world_view_transform = torch.tensor(getWorld2View2(R, T, trans, scale)).transpose(0, 1).cuda()
 
-        self.world_view_transform_0 = getWorld2View2_torch_tensor(torch.tensor(R).float().cuda(), torch.tensor(T).float().cuda(), torch.tensor(trans).float().cuda(), torch.tensor(scale).float().cuda()).transpose(0, 1).requires_grad_(True) # We can no use linalg.inv() on parameters (e.g., self.R == nn.Parameters)
+        #self.world_view_transform_0 = getWorld2View2_torch_tensor(torch.tensor(R).float().cuda(), torch.tensor(T).float().cuda(), torch.tensor(trans).float().cuda(), torch.tensor(scale).float().cuda()).transpose(0, 1).requires_grad_(True) # We can no use linalg.inv() on parameters (e.g., self.R == nn.Parameters)
         #self.Rt = nn.Parameter(getWorld2View2_torch_tensor(torch.tensor(R).float().cuda(), torch.tensor(T).float().cuda(), torch.tensor(trans).float().cuda(), torch.tensor(scale).float().cuda()).transpose(0, 1)[:, :3].requires_grad_(True))
 
         # represent translation and rotation with so3
-        self.translation = nn.Parameter(torch.tensor(T).float().view(-1, 1).cuda().requires_grad_(True))
+        self.init_translation = torch.tensor(T).float().view(-1, 1).cuda()
+        self.delta_translation = nn.Parameter(torch.zeros(3, 1).cuda().requires_grad_(True))
+        self.translation = self.init_translation + self.delta_translation
         #self.so3 = nn.Parameter(self.lie.SO3_to_so3(torch.tensor(R).float().t().cuda()).requires_grad_(True))
         #self.rotation = self.lie.so3_to_SO3(self.so3) # we have error right here, but it doesn't matter
-        self.quaternion = nn.Parameter(rotation_matrix_to_quaternion(torch.tensor(R).float().t().cuda()).requires_grad_(True))
+        self.init_quaternion = rotation_matrix_to_quaternion(torch.tensor(R).float().t().cuda())
+        self.delta_quaternion = nn.Parameter(torch.zeros(4).cuda().requires_grad_(True))
+        self.quaternion = self.init_quaternion + self.delta_quaternion
         self.rotation = quaternion_to_rotation_matrix(self.quaternion)
         # get Rt and last row, finally get extrinsic (w2c)
         self.last_row = torch.tensor([[0., 0., 0., 1.]]).cuda()
@@ -79,10 +83,14 @@ class Camera(nn.Module):
         self.camera_center = self.world_view_transform.inverse()[3, :3]
 
     def reset_extrinsic(self, R, T):
-        self.translation = nn.Parameter(torch.tensor(T).float().view(-1, 1).cuda().requires_grad_(True))
+        self.init_translation = torch.tensor(T).float().view(-1, 1).cuda()
+        self.delta_translation = nn.Parameter(torch.zeros(self.init_translation.shape).cuda().requires_grad_(True))
+        self.translation = self.init_translation + self.delta_translation
         #self.so3 = nn.Parameter(self.lie.SO3_to_so3(torch.tensor(R).float().t().cuda()).requires_grad_(True))
         #self.rotation = self.lie.so3_to_SO3(self.so3) # we have error right here, but it doesn't matter
-        self.quaternion = nn.Parameter(rotation_matrix_to_quaternion(torch.tensor(R).float().t().cuda()).requires_grad_(True))
+        self.init_quaternion = rotation_matrix_to_quaternion(torch.tensor(R).float().t().cuda())
+        self.delta_quaternion = nn.Parameter(torch.zeros(self.init_quaternion.shape).cuda().requires_grad_(True))
+        self.quaternion = self.init_quaternion + self.delta_quaternion
         self.rotation = quaternion_to_rotation_matrix(self.quaternion)
         self.Rt = torch.cat((self.rotation, self.translation), dim=1)
         self.world_view_transform = torch.cat((self.Rt, self.last_row), dim=0).t()
@@ -118,7 +126,9 @@ class Camera(nn.Module):
     @property
     def get_w2c(self):
         #self.rotation = self.lie.so3_to_SO3(self.so3) # we have error right here, but it doesn't matter
+        self.quaternion = self.init_quaternion + self.delta_quaternion
         self.rotation = quaternion_to_rotation_matrix(self.quaternion)
+        self.translation = self.init_translation + self.delta_translation
         self.Rt = torch.cat((self.rotation, self.translation), dim=1)
         self.world_view_transform = torch.cat((self.Rt, self.last_row), dim=0).t()
         return self.world_view_transform.t()
@@ -126,7 +136,9 @@ class Camera(nn.Module):
     @property
     def get_world_view_transform(self):
         #self.rotation = self.lie.so3_to_SO3(self.so3) # we have error right here, but it doesn't matter
+        self.quaternion = self.init_quaternion + self.delta_quaternion
         self.rotation = quaternion_to_rotation_matrix(self.quaternion)
+        self.translation = self.init_translation + self.delta_translation
         self.Rt = torch.cat((self.rotation, self.translation), dim=1)
         self.world_view_transform = torch.cat((self.Rt, self.last_row), dim=0).t()
         return self.world_view_transform
@@ -134,7 +146,9 @@ class Camera(nn.Module):
     @property
     def get_full_proj_transform(self):
         #self.rotation = self.lie.so3_to_SO3(self.so3) # we have error right here, but it doesn't matter
+        self.quaternion = self.init_quaternion + self.delta_quaternion
         self.rotation = quaternion_to_rotation_matrix(self.quaternion)
+        self.translation = self.init_translation + self.delta_translation
         self.Rt = torch.cat((self.rotation, self.translation), dim=1)
         self.world_view_transform = torch.cat((self.Rt, self.last_row), dim=0).t()
         self.full_proj_transform = (self.get_world_view_transform.unsqueeze(0).bmm(self.projection_matrix.unsqueeze(0))).squeeze(0)
@@ -143,7 +157,9 @@ class Camera(nn.Module):
     @property
     def get_camera_center(self):
         #self.rotation = self.lie.so3_to_SO3(self.so3) # we have error right here, but it doesn't matter
+        self.quaternion = self.init_quaternion + self.delta_quaternion
         self.rotation = quaternion_to_rotation_matrix(self.quaternion)
+        self.translation = self.init_translation + self.delta_translation
         self.Rt = torch.cat((self.rotation, self.translation), dim=1)
         self.world_view_transform = torch.cat((self.Rt, self.last_row), dim=0).t()
         self.camera_center = self.get_world_view_transform.inverse()[3, :3]
