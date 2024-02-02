@@ -112,7 +112,10 @@ class Scene:
         l_rotation = [{'params': camera.delta_quaternion, 'lr': r_t_lr[0]} for camera in self.train_cameras[resolution_scale]]
         #l_rotation = [{'params': camera.quaternion, 'lr': r_t_lr[0]} for camera in self.train_cameras[resolution_scale]]
         #l_rotation = [{'params': camera.so3, 'lr': 0.01} for camera in self.train_cameras[resolution_scale]]
+
         l_translation = [{'params': camera.delta_translation, 'lr': r_t_lr[1]} for camera in self.train_cameras[resolution_scale]]
+        #l_translation = [{'params': camera.delta_translation_xy, 'lr': r_t_lr[1]} for camera in self.train_cameras[resolution_scale]]
+        #l_translation = [{'params': camera.delta_translation_z, 'lr': r_t_lr[1]} for camera in self.train_cameras[resolution_scale]]
         #l_translation = [{'params': camera.translation, 'lr': r_t_lr[1]} for camera in self.train_cameras[resolution_scale]]
         #l = [{'params': camera.parameters(), 'lr': 0.01} for camera in self.train_cameras[resolution_scale]]
         self.optimizer_rotation = torch.optim.Adam(l_rotation, eps=1e-15)

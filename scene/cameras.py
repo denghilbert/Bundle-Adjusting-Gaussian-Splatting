@@ -66,6 +66,9 @@ class Camera(nn.Module):
 
         # represent translation and rotation with so3
         self.init_translation = torch.tensor(T).float().view(-1, 1).cuda()
+        #self.delta_translation_xy = nn.Parameter(torch.zeros(2, 1).cuda().requires_grad_(True))
+        #self.delta_translation_z = nn.Parameter(torch.zeros(1, 1).cuda().requires_grad_(True))
+        #self.delta_translation = torch.cat((self.delta_translation_xy, self.delta_translation_z))
         self.delta_translation = nn.Parameter(torch.zeros(3, 1).cuda().requires_grad_(True))
         self.translation = self.init_translation + self.delta_translation
         #self.so3 = nn.Parameter(self.lie.SO3_to_so3(torch.tensor(R).float().t().cuda()).requires_grad_(True))
@@ -82,8 +85,15 @@ class Camera(nn.Module):
         self.full_proj_transform = (self.world_view_transform.unsqueeze(0).bmm(self.projection_matrix.unsqueeze(0))).squeeze(0)
         self.camera_center = self.world_view_transform.inverse()[3, :3]
 
+    def reset_intrinsic(self, FoVx, FoVy):
+        self.projection_matrix = getProjectionMatrix(znear=self.znear, zfar=self.zfar, fovX=FoVx, fovY=FoVy).transpose(0,1).cuda()
+        self.full_proj_transform = (self.world_view_transform.unsqueeze(0).bmm(self.projection_matrix.unsqueeze(0))).squeeze(0)
+
     def reset_extrinsic(self, R, T):
         self.init_translation = torch.tensor(T).float().view(-1, 1).cuda()
+        #self.delta_translation_xy = nn.Parameter(torch.zeros(2, 1).cuda().requires_grad_(True))
+        #self.delta_translation_z = nn.Parameter(torch.zeros(1, 1).cuda().requires_grad_(True))
+        #self.delta_translation = torch.cat((self.delta_translation_xy, self.delta_translation_z))
         self.delta_translation = nn.Parameter(torch.zeros(self.init_translation.shape).cuda().requires_grad_(True))
         self.translation = self.init_translation + self.delta_translation
         #self.so3 = nn.Parameter(self.lie.SO3_to_so3(torch.tensor(R).float().t().cuda()).requires_grad_(True))
@@ -128,6 +138,7 @@ class Camera(nn.Module):
         #self.rotation = self.lie.so3_to_SO3(self.so3) # we have error right here, but it doesn't matter
         self.quaternion = self.init_quaternion + self.delta_quaternion
         self.rotation = quaternion_to_rotation_matrix(self.quaternion)
+        #self.delta_translation = torch.cat((self.delta_translation_xy, self.delta_translation_z))
         self.translation = self.init_translation + self.delta_translation
         self.Rt = torch.cat((self.rotation, self.translation), dim=1)
         self.world_view_transform = torch.cat((self.Rt, self.last_row), dim=0).t()
@@ -138,6 +149,7 @@ class Camera(nn.Module):
         #self.rotation = self.lie.so3_to_SO3(self.so3) # we have error right here, but it doesn't matter
         self.quaternion = self.init_quaternion + self.delta_quaternion
         self.rotation = quaternion_to_rotation_matrix(self.quaternion)
+        #self.delta_translation = torch.cat((self.delta_translation_xy, self.delta_translation_z))
         self.translation = self.init_translation + self.delta_translation
         self.Rt = torch.cat((self.rotation, self.translation), dim=1)
         self.world_view_transform = torch.cat((self.Rt, self.last_row), dim=0).t()
@@ -148,6 +160,7 @@ class Camera(nn.Module):
         #self.rotation = self.lie.so3_to_SO3(self.so3) # we have error right here, but it doesn't matter
         self.quaternion = self.init_quaternion + self.delta_quaternion
         self.rotation = quaternion_to_rotation_matrix(self.quaternion)
+        #self.delta_translation = torch.cat((self.delta_translation_xy, self.delta_translation_z))
         self.translation = self.init_translation + self.delta_translation
         self.Rt = torch.cat((self.rotation, self.translation), dim=1)
         self.world_view_transform = torch.cat((self.Rt, self.last_row), dim=0).t()
@@ -159,6 +172,7 @@ class Camera(nn.Module):
         #self.rotation = self.lie.so3_to_SO3(self.so3) # we have error right here, but it doesn't matter
         self.quaternion = self.init_quaternion + self.delta_quaternion
         self.rotation = quaternion_to_rotation_matrix(self.quaternion)
+        #self.delta_translation = torch.cat((self.delta_translation_xy, self.delta_translation_z))
         self.translation = self.init_translation + self.delta_translation
         self.Rt = torch.cat((self.rotation, self.translation), dim=1)
         self.world_view_transform = torch.cat((self.Rt, self.last_row), dim=0).t()
