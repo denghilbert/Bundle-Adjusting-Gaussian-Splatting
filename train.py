@@ -349,8 +349,20 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
                     if iteration > 100000:# and Ll1 > 0.03:
                         scene.optimizer_translation.param_groups[viewpoint_cam.uid]['lr'] = scene.optimizer_translation.param_groups[viewpoint_cam.uid]['lr'] * torch.exp(10 * Ll1).item()
                         scene.optimizer_rotation.param_groups[viewpoint_cam.uid]['lr'] = scene.optimizer_rotation.param_groups[viewpoint_cam.uid]['lr'] * torch.exp(20 * Ll1).item()
-                    if iteration % opt.densification_interval != 0 and iteration > opt.densify_from_iter:
+                    if iteration % opt.densification_interval != 0:# and iteration > opt.densify_from_iter:
                         scene.optimizer_rotation.step()
+                        #if iteration > 10000:
+                        #    viewpoint_cam.delta_quaternion.grad[0] = 20 * viewpoint_cam.delta_quaternion.grad[0]
+                        #    viewpoint_cam.delta_quaternion.grad[1] = 20 * viewpoint_cam.delta_quaternion.grad[1]
+                        #    viewpoint_cam.delta_quaternion.grad[2] = 20 * viewpoint_cam.delta_quaternion.grad[2]
+                        #    viewpoint_cam.delta_quaternion.grad[3] = 20 * viewpoint_cam.delta_quaternion.grad[3]
+                        #    viewpoint_cam.delta_translation.grad[2] = 10 * viewpoint_cam.delta_translation.grad[2]
+                        #    viewpoint_cam.delta_translation.grad[0] = 10 * viewpoint_cam.delta_translation.grad[0]
+                        #    viewpoint_cam.delta_translation.grad[1] = 10 * viewpoint_cam.delta_translation.grad[1]
+                        #if iteration > 20000:
+                        #    viewpoint_cam.delta_translation.grad[2] = 20 * viewpoint_cam.delta_translation.grad[2]
+                        #    viewpoint_cam.delta_translation.grad[0] = 20 * viewpoint_cam.delta_translation.grad[0]
+                        #    viewpoint_cam.delta_translation.grad[1] = 20 * viewpoint_cam.delta_translation.grad[1]
                         scene.optimizer_translation.step()
                         scene.optimizer_rotation.zero_grad(set_to_none=True)
                         scene.optimizer_translation.zero_grad(set_to_none=True)
