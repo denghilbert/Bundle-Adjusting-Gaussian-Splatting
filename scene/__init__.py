@@ -16,16 +16,18 @@ from utils.system_utils import searchForMaxIteration
 from scene.dataset_readers import sceneLoadTypeCallbacks
 from scene.gaussian_model import GaussianModel
 from scene.specular_model import SpecularModel
+from scene.cameras import quaternion_to_rotation_matrix, rotation_matrix_to_quaternion
 from arguments import ModelParams
 from utils.camera_utils import cameraList_from_camInfos, camera_to_JSON
 from utils.camera import Lie
 import torch
+from torch import nn
 
 class Scene:
 
     gaussians : GaussianModel
 
-    def __init__(self, args : ModelParams, gaussians : GaussianModel, load_iteration=None, shuffle=True, resolution_scales=[1.0], random_init=False, r_t_noise=[0., 0.], r_t_lr=[0.001, 0.001]):
+    def __init__(self, args : ModelParams, gaussians : GaussianModel, load_iteration=None, shuffle=True, resolution_scales=[1.0], random_init=False, r_t_noise=[0., 0.], r_t_lr=[0.001, 0.001], global_alignment_lr=0.001):
         """b
         :param path: Path to colmap scene main folder.
         """
@@ -44,6 +46,9 @@ class Scene:
         self.train_cameras = {}
         self.unnoisy_train_cameras = {}
         self.test_cameras = {}
+        self.global_translation = nn.Parameter(torch.tensor([1.]).cuda().requires_grad_(True))
+        self.global_quaternion = nn.Parameter(torch.tensor([1., 0, 0, 0]).cuda().requires_grad_(True))
+        self.global_rotation = quaternion_to_rotation_matrix(self.global_quaternion)
 
         if os.path.exists(os.path.join(args.source_path, "sparse")):
             scene_info = sceneLoadTypeCallbacks["Colmap"](args.source_path, args.images, args.eval)
@@ -123,6 +128,9 @@ class Scene:
         self.scheduler_rotation = torch.optim.lr_scheduler.MultiStepLR(self.optimizer_rotation, milestones=[7000, 50000], gamma=1)
         self.scheduler_translation = torch.optim.lr_scheduler.MultiStepLR(self.optimizer_translation, milestones=[7000, 50000], gamma=1)
 
+        l_global_alignment = [{'params': self.global_translation, 'lr': global_alignment_lr}, {'params': self.global_quaternion, 'lr': global_alignment_lr}]
+        self.optimizer_global_alignment = torch.optim.Adam(l_global_alignment, eps=1e-15)
+        self.scheduler_global_aligment = torch.optim.lr_scheduler.MultiStepLR(self.optimizer_rotation, milestones=[7000, 50000], gamma=1)
 
     def save(self, iteration):
         point_cloud_path = os.path.join(self.model_path, "point_cloud/iteration_{}".format(iteration))
@@ -136,3 +144,7 @@ class Scene:
 
     def getTestCameras(self, scale=1.0):
         return self.test_cameras[scale]
+
+    def getGlobalAlignment(self):
+        self.global_rotation = quaternion_to_rotation_matrix(self.global_quaternion)
+        return self.global_rotation, self.global_translation

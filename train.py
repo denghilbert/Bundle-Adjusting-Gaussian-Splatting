@@ -61,7 +61,7 @@ if torch.cuda.is_available():
 np.random.seed(seed_value)
 random.seed(seed_value)
 
-def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoint_iterations, checkpoint, debug_from, use_wandb=False, random_init=False, hybrid=False, opt_cam=False, r_t_noise=[0., 0.], r_t_lr=[0.001, 0.001]):
+def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoint_iterations, checkpoint, debug_from, use_wandb=False, random_init=False, hybrid=False, opt_cam=False, r_t_noise=[0., 0.], r_t_lr=[0.001, 0.001], global_alignment_lr=0.001):
     first_iter = 0
     tb_writer = prepare_output_and_logger(dataset)
     gaussians = GaussianModel(dataset.sh_degree, dataset.asg_degree)
@@ -69,7 +69,7 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
         specular_mlp = SpecularModel()
         specular_mlp.train_setting(opt)
 
-    scene = Scene(dataset, gaussians, random_init=random_init, r_t_noise=r_t_noise, r_t_lr=r_t_lr)
+    scene = Scene(dataset, gaussians, random_init=random_init, r_t_noise=r_t_noise, r_t_lr=r_t_lr, global_alignment_lr=global_alignment_lr)
     gaussians.training_setup(opt)
     if checkpoint:
         (model_params, first_iter) = torch.load(checkpoint)
@@ -175,7 +175,7 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
             projection_loss_count = 10000
 
         # render current view
-        render_pkg = render(viewpoint_cam, gaussians, pipe, background, mlp_color, iteration=iteration, hybrid=hybrid)
+        render_pkg = render(viewpoint_cam, gaussians, pipe, background, mlp_color, iteration=iteration, hybrid=hybrid, global_alignment=scene.getGlobalAlignment())
         image, viewspace_point_tensor, visibility_filter, radii = render_pkg["render"], render_pkg["viewspace_points"], render_pkg["visibility_filter"], render_pkg["radii"]
 
 
@@ -350,7 +350,6 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
                         scene.optimizer_translation.param_groups[viewpoint_cam.uid]['lr'] = scene.optimizer_translation.param_groups[viewpoint_cam.uid]['lr'] * torch.exp(10 * Ll1).item()
                         scene.optimizer_rotation.param_groups[viewpoint_cam.uid]['lr'] = scene.optimizer_rotation.param_groups[viewpoint_cam.uid]['lr'] * torch.exp(20 * Ll1).item()
                     if iteration % opt.densification_interval != 0:# and iteration > opt.densify_from_iter:
-                        scene.optimizer_rotation.step()
                         #if iteration > 10000:
                         #    viewpoint_cam.delta_quaternion.grad[0] = 20 * viewpoint_cam.delta_quaternion.grad[0]
                         #    viewpoint_cam.delta_quaternion.grad[1] = 20 * viewpoint_cam.delta_quaternion.grad[1]
@@ -363,11 +362,16 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
                         #    viewpoint_cam.delta_translation.grad[2] = 20 * viewpoint_cam.delta_translation.grad[2]
                         #    viewpoint_cam.delta_translation.grad[0] = 20 * viewpoint_cam.delta_translation.grad[0]
                         #    viewpoint_cam.delta_translation.grad[1] = 20 * viewpoint_cam.delta_translation.grad[1]
+                        scene.optimizer_rotation.step()
                         scene.optimizer_translation.step()
                         scene.optimizer_rotation.zero_grad(set_to_none=True)
                         scene.optimizer_translation.zero_grad(set_to_none=True)
                         scene.scheduler_rotation.step()
                         scene.scheduler_translation.step()
+
+                        scene.optimizer_global_alignment.step()
+                        scene.optimizer_global_alignment.zero_grad(set_to_none=True)
+                        scene.scheduler_global_aligment.step()
                     if iteration > 100000:# and Ll1 > 0.03:
                         scene.optimizer_translation.param_groups[viewpoint_cam.uid]['lr'] = scene.optimizer_translation.param_groups[viewpoint_cam.uid]['lr'] / torch.exp(10 * Ll1).item()
                         scene.optimizer_rotation.param_groups[viewpoint_cam.uid]['lr'] = scene.optimizer_rotation.param_groups[viewpoint_cam.uid]['lr'] / torch.exp(20 * Ll1).item()
@@ -449,7 +453,7 @@ def training_report(tb_writer, iteration, Ll1, loss, l1_loss, elapsed, testing_i
                 l1_test = 0.0
                 psnr_test = 0.0
                 for idx, viewpoint in enumerate(config['cameras']):
-                    image = torch.clamp(renderFunc(viewpoint, scene.gaussians, *renderArgs)["render"], 0.0, 1.0)
+                    image = torch.clamp(renderFunc(viewpoint, scene.gaussians, *renderArgs, global_alignment=scene.getGlobalAlignment())["render"], 0.0, 1.0)
                     gt_image = torch.clamp(viewpoint.original_image.to("cuda"), 0.0, 1.0)
                     if tb_writer and (idx < 5):
                         tb_writer.add_images(config['name'] + "_view_{}/render".format(viewpoint.image_name), image[None], global_step=iteration)
@@ -540,6 +544,8 @@ if __name__ == "__main__":
     # if optimize camera poses
     parser.add_argument("--opt_cam", action="store_true", default=False)
     parser.add_argument("--r_t_lr", nargs="+", type=float, default=[0.01, 0.01])
+    # learning rate for global alignment
+    parser.add_argument('--global_alignment_lr', type=float, default=0.01)
     # noise for rotation and translation
     parser.add_argument("--r_t_noise", nargs="+", type=float, default=[0., 0.])
     # rotation filter for light_glue
@@ -571,7 +577,7 @@ if __name__ == "__main__":
     # Start GUI server, configure and run training
     network_gui.init(args.ip, args.port)
     torch.autograd.set_detect_anomaly(args.detect_anomaly)
-    training(lp.extract(args), op.extract(args), pp.extract(args), args.test_iterations, args.save_iterations, args.checkpoint_iterations, args.start_checkpoint, args.debug_from, use_wandb=args.wandb, random_init=args.random_init_pc, hybrid=args.hybrid, opt_cam=args.opt_cam, r_t_lr=args.r_t_lr, r_t_noise=args.r_t_noise)
+    training(lp.extract(args), op.extract(args), pp.extract(args), args.test_iterations, args.save_iterations, args.checkpoint_iterations, args.start_checkpoint, args.debug_from, use_wandb=args.wandb, random_init=args.random_init_pc, hybrid=args.hybrid, opt_cam=args.opt_cam, r_t_lr=args.r_t_lr, r_t_noise=args.r_t_noise, global_alignment_lr=args.global_alignment_lr)
 
     # All done
     print("\nTraining complete.")

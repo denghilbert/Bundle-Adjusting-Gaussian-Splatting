@@ -142,41 +142,33 @@ class Camera(nn.Module):
         self.translation = self.init_translation + self.delta_translation
         self.Rt = torch.cat((self.rotation, self.translation), dim=1)
         self.world_view_transform = torch.cat((self.Rt, self.last_row), dim=0).t()
+
         return self.world_view_transform.t()
 
-    @property
-    def get_world_view_transform(self):
+    def get_world_view_transform(self, global_rotation, global_translation_scale):
         #self.rotation = self.lie.so3_to_SO3(self.so3) # we have error right here, but it doesn't matter
         self.quaternion = self.init_quaternion + self.delta_quaternion
-        self.rotation = quaternion_to_rotation_matrix(self.quaternion)
+        self.rotation = global_rotation @ quaternion_to_rotation_matrix(self.quaternion)
         #self.delta_translation = torch.cat((self.delta_translation_xy, self.delta_translation_z))
         self.translation = self.init_translation + self.delta_translation
         self.Rt = torch.cat((self.rotation, self.translation), dim=1)
         self.world_view_transform = torch.cat((self.Rt, self.last_row), dim=0).t()
+
+        # scaling far/close to the center
+        c2w = self.world_view_transform.inverse()
+        #c2w[3, :3] = global_translation_scale * c2w[3, :3]
+        mask = torch.ones_like(c2w)
+        mask[3, :3] = global_translation_scale
+        self.world_view_transform = (c2w * mask).inverse()
         return self.world_view_transform
 
-    @property
-    def get_full_proj_transform(self):
-        #self.rotation = self.lie.so3_to_SO3(self.so3) # we have error right here, but it doesn't matter
-        self.quaternion = self.init_quaternion + self.delta_quaternion
-        self.rotation = quaternion_to_rotation_matrix(self.quaternion)
-        #self.delta_translation = torch.cat((self.delta_translation_xy, self.delta_translation_z))
-        self.translation = self.init_translation + self.delta_translation
-        self.Rt = torch.cat((self.rotation, self.translation), dim=1)
-        self.world_view_transform = torch.cat((self.Rt, self.last_row), dim=0).t()
-        self.full_proj_transform = (self.get_world_view_transform.unsqueeze(0).bmm(self.projection_matrix.unsqueeze(0))).squeeze(0)
+    def get_full_proj_transform(self, global_rotation, global_translation_scale):
+        self.world_view_transform = self.get_world_view_transform(global_rotation, global_translation_scale)
+        self.full_proj_transform = (self.world_view_transform.unsqueeze(0).bmm(self.projection_matrix.unsqueeze(0))).squeeze(0)
         return self.full_proj_transform
 
-    @property
-    def get_camera_center(self):
-        #self.rotation = self.lie.so3_to_SO3(self.so3) # we have error right here, but it doesn't matter
-        self.quaternion = self.init_quaternion + self.delta_quaternion
-        self.rotation = quaternion_to_rotation_matrix(self.quaternion)
-        #self.delta_translation = torch.cat((self.delta_translation_xy, self.delta_translation_z))
-        self.translation = self.init_translation + self.delta_translation
-        self.Rt = torch.cat((self.rotation, self.translation), dim=1)
-        self.world_view_transform = torch.cat((self.Rt, self.last_row), dim=0).t()
-        self.camera_center = self.get_world_view_transform.inverse()[3, :3]
+    def get_camera_center(self, global_rotation, global_translation_scale):
+        self.camera_center = self.get_world_view_transform(global_rotation, global_translation_scale).inverse()[3, :3]
         return self.camera_center
 
 

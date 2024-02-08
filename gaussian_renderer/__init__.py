@@ -27,7 +27,7 @@ def quaternion_multiply(q1, q2):
 
     return torch.stack((w, x, y, z), dim=-1)
 
-def render(viewpoint_camera, pc : GaussianModel, pipe, bg_color : torch.Tensor, mlp_color, hybrid=True, scaling_modifier = 1.0, override_color = None, iteration = None):
+def render(viewpoint_camera, pc : GaussianModel, pipe, bg_color : torch.Tensor, mlp_color, hybrid=True, scaling_modifier = 1.0, override_color = None, iteration = None, global_alignment=None):
     """
     Render the scene.
 
@@ -52,10 +52,10 @@ def render(viewpoint_camera, pc : GaussianModel, pipe, bg_color : torch.Tensor, 
         tanfovy=tanfovy,
         bg=bg_color,
         scale_modifier=scaling_modifier,
-        viewmatrix=viewpoint_camera.get_world_view_transform,
-        projmatrix=viewpoint_camera.get_full_proj_transform,
+        viewmatrix=viewpoint_camera.get_world_view_transform(global_alignment[0], global_alignment[1]),
+        projmatrix=viewpoint_camera.get_full_proj_transform(global_alignment[0], global_alignment[1]),
         sh_degree=pc.active_sh_degree,
-        campos=viewpoint_camera.get_camera_center,
+        campos=viewpoint_camera.get_camera_center(global_alignment[0], global_alignment[1]),
         prefiltered=False,
         debug=pipe.debug,
         debug_iter=iteration
@@ -85,14 +85,14 @@ def render(viewpoint_camera, pc : GaussianModel, pipe, bg_color : torch.Tensor, 
     if override_color is None:
         if hybrid:
             shs_view = pc.get_features.transpose(1, 2).view(-1, 3, (pc.max_sh_degree+1)**2)
-            dir_pp = (pc.get_xyz - viewpoint_camera.get_camera_center.repeat(pc.get_features.shape[0], 1))
+            dir_pp = (pc.get_xyz - viewpoint_camera.get_camera_center(global_alignment[0], global_alignment[1]).repeat(pc.get_features.shape[0], 1))
             dir_pp_normalized = dir_pp/dir_pp.norm(dim=1, keepdim=True)
             sh2rgb = eval_sh(pc.active_sh_degree, shs_view, dir_pp_normalized)
             colors_precomp = torch.clamp_min(sh2rgb + 0.5, 0.0) + mlp_color
         else:
             if pipe.convert_SHs_python:
                 shs_view = pc.get_features.transpose(1, 2).view(-1, 3, (pc.max_sh_degree+1)**2)
-                dir_pp = (pc.get_xyz - viewpoint_camera.get_camera_center.repeat(pc.get_features.shape[0], 1))
+                dir_pp = (pc.get_xyz - viewpoint_camera.get_camera_center(global_alignment[0], global_alignment[1]).repeat(pc.get_features.shape[0], 1))
                 dir_pp_normalized = dir_pp/dir_pp.norm(dim=1, keepdim=True)
                 sh2rgb = eval_sh(pc.active_sh_degree, shs_view, dir_pp_normalized)
                 colors_precomp = torch.clamp_min(sh2rgb + 0.5, 0.0) + mlp_color
