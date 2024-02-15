@@ -226,24 +226,24 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
                 scalars["loss/projection_loss"] = (loss_projection / len(camera_pairs[viewpoint_cam.uid]))
             if use_wandb:
                 wandb.log(scalars, step=iteration)
-        if iteration == 30100:
+        if iteration == 10200:
             import sys
             sys.exit()
-        #if 10000 < iteration < 10100 and Ll1 > 0.03:
-        #    wandb_img = image.unsqueeze(0).detach()
-        #    wandb_img_gt = gt_image.unsqueeze(0).detach()
-        #    images_error = (wandb_img_gt - wandb_img).abs()
-        #    cat_imgs = torch.cat((gt_image, image), dim=2).detach()
-        #    images = {
-        #        f"failure/gt_rendered": wandb_image(cat_imgs),
-        #        f"failure/gt_img": wandb_image(gt_image),
-        #        f"failure/rendered_img": wandb_image(wandb_img),
-        #        f"failure/rgb_error": wandb_image(images_error),
-        #        f"failure/loss": Ll1,
-        #        f"failure/uid": viewpoint_cam.uid,
-        #    }
-        #    if use_wandb:
-        #        wandb.log(images, step=iteration)
+        if 10000 < iteration < 10200 and ssim_loss < 0.9:
+            wandb_img = image.unsqueeze(0).detach()
+            wandb_img_gt = gt_image.unsqueeze(0).detach()
+            images_error = (wandb_img_gt - wandb_img).abs()
+            cat_imgs = torch.cat((gt_image, image), dim=2).detach()
+            images = {
+                f"failure/gt_rendered": wandb_image(cat_imgs),
+                f"failure/gt_img": wandb_image(gt_image),
+                f"failure/rendered_img": wandb_image(wandb_img),
+                f"failure/rgb_error": wandb_image(images_error),
+                f"failure/loss": Ll1,
+                f"failure/uid": viewpoint_cam.uid,
+            }
+            if use_wandb:
+                wandb.log(images, step=iteration)
 
         if iteration % 3000 == 0 or iteration == 1:
             wandb_img = image.unsqueeze(0).detach()
@@ -257,41 +257,25 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
             if use_wandb:
                 wandb.log(images, step=iteration)
 
-        if opt_cam and viewpoint_cam.uid == 50:
-            rt_scalars = {
-                f"camera50_rotation/r_w": viewpoint_cam.delta_quaternion[0].item(),
-                f"camera50_rotation/r_x": viewpoint_cam.delta_quaternion[1].item(),
-                f"camera50_rotation/r_y": viewpoint_cam.delta_quaternion[2].item(),
-                f"camera50_rotation/r_z": viewpoint_cam.delta_quaternion[3].item(),
-                f"camera50_rotation/r_w_grad": viewpoint_cam.delta_quaternion.grad[0].item(),
-                f"camera50_rotation/r_x_grad": viewpoint_cam.delta_quaternion.grad[1].item(),
-                f"camera50_rotation/r_y_grad": viewpoint_cam.delta_quaternion.grad[2].item(),
-                f"camera50_rotation/r_z_grad": viewpoint_cam.delta_quaternion.grad[3].item(),
-                f"camera50_translation/t_x": viewpoint_cam.delta_translation[0].item(),
-                f"camera50_translation/t_y": viewpoint_cam.delta_translation[1].item(),
-                f"camera50_translation/t_z": viewpoint_cam.delta_translation[2].item(),
-                f"camera50_translation/t_x_grad": viewpoint_cam.delta_translation.grad[0].item(),
-                f"camera50_translation/t_y_grad": viewpoint_cam.delta_translation.grad[1].item(),
-                f"camera50_translation/t_z_grad": viewpoint_cam.delta_translation.grad[2].item(),
-            }
-            #rt_scalars = {
-            #    f"camera50_rotation/r_w": viewpoint_cam.quaternion[0].item(),
-            #    f"camera50_rotation/r_x": viewpoint_cam.quaternion[1].item(),
-            #    f"camera50_rotation/r_y": viewpoint_cam.quaternion[2].item(),
-            #    f"camera50_rotation/r_z": viewpoint_cam.quaternion[3].item(),
-            #    f"camera50_rotation/r_w_grad": viewpoint_cam.quaternion.grad[0].item(),
-            #    f"camera50_rotation/r_x_grad": viewpoint_cam.quaternion.grad[1].item(),
-            #    f"camera50_rotation/r_y_grad": viewpoint_cam.quaternion.grad[2].item(),
-            #    f"camera50_rotation/r_z_grad": viewpoint_cam.quaternion.grad[3].item(),
-            #    f"camera50_translation/t_x": viewpoint_cam.translation[0].item(),
-            #    f"camera50_translation/t_y": viewpoint_cam.translation[1].item(),
-            #    f"camera50_translation/t_z": viewpoint_cam.translation[2].item(),
-            #    f"camera50_translation/t_x_grad": viewpoint_cam.translation.grad[0].item(),
-            #    f"camera50_translation/t_y_grad": viewpoint_cam.translation.grad[1].item(),
-            #    f"camera50_translation/t_z_grad": viewpoint_cam.translation.grad[2].item(),
-            #}
-            if use_wandb:
-                wandb.log(rt_scalars, step=iteration)
+        #if opt_cam and viewpoint_cam.uid == 50:
+        #    rt_scalars = {
+        #        f"camera50_rotation/r_w": viewpoint_cam.delta_quaternion[0].item(),
+        #        f"camera50_rotation/r_x": viewpoint_cam.delta_quaternion[1].item(),
+        #        f"camera50_rotation/r_y": viewpoint_cam.delta_quaternion[2].item(),
+        #        f"camera50_rotation/r_z": viewpoint_cam.delta_quaternion[3].item(),
+        #        f"camera50_rotation/r_w_grad": viewpoint_cam.delta_quaternion.grad[0].item(),
+        #        f"camera50_rotation/r_x_grad": viewpoint_cam.delta_quaternion.grad[1].item(),
+        #        f"camera50_rotation/r_y_grad": viewpoint_cam.delta_quaternion.grad[2].item(),
+        #        f"camera50_rotation/r_z_grad": viewpoint_cam.delta_quaternion.grad[3].item(),
+        #        f"camera50_translation/t_x": viewpoint_cam.delta_translation[0].item(),
+        #        f"camera50_translation/t_y": viewpoint_cam.delta_translation[1].item(),
+        #        f"camera50_translation/t_z": viewpoint_cam.delta_translation[2].item(),
+        #        f"camera50_translation/t_x_grad": viewpoint_cam.delta_translation.grad[0].item(),
+        #        f"camera50_translation/t_y_grad": viewpoint_cam.delta_translation.grad[1].item(),
+        #        f"camera50_translation/t_z_grad": viewpoint_cam.delta_translation.grad[2].item(),
+        #    }
+        #    if use_wandb:
+        #        wandb.log(rt_scalars, step=iteration)
 
         iter_end.record()
 
