@@ -103,7 +103,7 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
             pose_GT, pose_aligned = scene.loadAlignCameras(if_vis_train=True)
             vis_cameras(opt_vis, vis, step=0, poses=[pose_aligned, pose_GT])
             os.makedirs(os.path.join(args.model_path, 'plot'), exist_ok=True)
-            download_pose_vis(os.path.join(args.model_path, 'plot'), 0)
+            #download_pose_vis(os.path.join(args.model_path, 'plot'), 0)
 
 
     #import pdb;pdb.set_trace()
@@ -117,6 +117,8 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
     progress_bar = tqdm(range(first_iter, opt.iterations), desc="Training progress")
     first_iter += 1
     smooth_term = get_linear_noise_func(lr_init=0.1, lr_final=1e-15, lr_delay_mult=0.01, max_steps=20000)
+
+    moving_camera_list = []
     for iteration in range(first_iter, opt.iterations + 1):
         if network_gui.conn == None:
             network_gui.try_connect()
@@ -215,7 +217,38 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
 
         loss.backward(retain_graph=True)
 
-        # wandb record loss and images
+        moving_camera_list = [35, 52, 45, 10, 32]
+        outliers = []
+        if iteration == 10100:
+            outlier_stack = scene.getTrainCameras().copy()
+            for camera in outlier_stack:
+                if camera.uid in moving_camera_list:
+                    outliers.append(camera)
+
+            for i in range(1000):
+                viewpoint_cam = outliers[i % 5]
+                render_pkg = render(viewpoint_cam, gaussians, pipe, background, mlp_color, iteration=iteration, hybrid=hybrid, global_alignment=scene.getGlobalAlignment())
+                image, viewspace_point_tensor, visibility_filter, radii = render_pkg["render"], render_pkg["viewspace_points"], render_pkg["visibility_filter"], render_pkg["radii"]
+                gt_image = viewpoint_cam.original_image.cuda()
+
+                Ll1 = l1_loss(image, gt_image)
+                ssim_loss = ssim(image, gt_image)
+                loss = (1.0 - opt.lambda_dssim) * Ll1 + opt.lambda_dssim * (1.0 - ssim_loss)# + 0.1 * (loss_projection / len(camera_pairs[viewpoint_cam.uid]))
+                loss.backward(retain_graph=True)
+
+                if opt_cam:
+                    scene.optimizer_rotation.step()
+                    scene.optimizer_translation.step()
+                    scene.optimizer_rotation.zero_grad(set_to_none=True)
+                    scene.optimizer_translation.zero_grad(set_to_none=True)
+                    scene.scheduler_rotation.step()
+                    scene.scheduler_translation.step()
+
+                if args.vis_pose and i % 20 == 0:
+                    pose_GT, pose_aligned = scene.loadAlignCameras(if_vis_train=True)
+                    vis_cameras(opt_vis, vis, step=iteration, poses=[pose_aligned, pose_GT])
+
+
         if iteration % 10 == 0:
             scalars = {
                 f"loss/l1_loss": Ll1,
@@ -226,10 +259,12 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
                 scalars["loss/projection_loss"] = (loss_projection / len(camera_pairs[viewpoint_cam.uid]))
             if use_wandb:
                 wandb.log(scalars, step=iteration)
-        if iteration == 10200:
+        if iteration == 30101:
+            print(moving_camera_list)
             import sys
             sys.exit()
-        if 10000 < iteration < 10200 and ssim_loss < 0.9:
+        if 10000 <= iteration < 10100 and Ll1 > 0.03:
+            moving_camera_list.append(viewpoint_cam.uid)
             wandb_img = image.unsqueeze(0).detach()
             wandb_img_gt = gt_image.unsqueeze(0).detach()
             images_error = (wandb_img_gt - wandb_img).abs()
@@ -293,8 +328,8 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
             if iteration % 200 == 0 and args.vis_pose:
                 pose_GT, pose_aligned = scene.loadAlignCameras(if_vis_train=True)
                 vis_cameras(opt_vis, vis, step=iteration, poses=[pose_aligned, pose_GT])
-                if iteration == 20000 or iteration == 30000:
-                    download_pose_vis(os.path.join(args.model_path, 'plot'), iteration)
+                #if iteration == 20000 or iteration == 30000:
+                #    download_pose_vis(os.path.join(args.model_path, 'plot'), iteration)
 
             # Log and save
             training_report(tb_writer, iteration, Ll1, loss, l1_loss, iter_start.elapsed_time(iter_end), testing_iterations, scene, render, (pipe, background, mlp_color))
