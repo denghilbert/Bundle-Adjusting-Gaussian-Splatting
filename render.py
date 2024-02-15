@@ -45,7 +45,8 @@ def render_set(model_path, name, iteration, views, gaussians, pipeline, backgrou
             #depth = depth / (depth.max() + 1e-5)
         else:
             mlp_color = 0
-            results = render(view, gaussians, pipeline, background, mlp_color)
+            global_alignment = [torch.tensor([[1., 0, 0], [0, 1., 0], [0, 0, 1.]], device='cuda'), torch.tensor([1.], device='cuda')]
+            results = render(view, gaussians, pipeline, background, mlp_color, global_alignment=global_alignment)
             rendering = results["render"]
 
         gt = view.original_image[0:3, :, :]
@@ -67,6 +68,7 @@ def render_sets(dataset : ModelParams, iteration : int, pipeline : PipelineParam
 
         render_func = render_set
 
+        scene.loadAlignCameras(if_vis_test=True)
         if not skip_train:
              render_set(dataset.model_path, "train", scene.loaded_iter, scene.getTrainCameras(), gaussians, pipeline, background, specular, hybrid)
 

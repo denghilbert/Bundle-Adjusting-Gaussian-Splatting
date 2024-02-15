@@ -49,17 +49,17 @@ from io import BytesIO
 # set random seeds
 import numpy as np
 import random
-seed_value = 42  # Replace this with your desired seed value
-
-torch.manual_seed(seed_value)
-if torch.cuda.is_available():
-    torch.cuda.manual_seed(seed_value)
-    torch.cuda.manual_seed_all(seed_value)  # if you are using multi-GPU.
-    torch.backends.cudnn.deterministic = True
-    torch.backends.cudnn.benchmark = False
-
-np.random.seed(seed_value)
-random.seed(seed_value)
+#seed_value = 100  # Replace this with your desired seed value
+#
+#torch.manual_seed(seed_value)
+#if torch.cuda.is_available():
+#    torch.cuda.manual_seed(seed_value)
+#    torch.cuda.manual_seed_all(seed_value)  # if you are using multi-GPU.
+#    torch.backends.cudnn.deterministic = True
+#    torch.backends.cudnn.benchmark = False
+#
+#np.random.seed(seed_value)
+#random.seed(seed_value)
 
 def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoint_iterations, checkpoint, debug_from, use_wandb=False, random_init=False, hybrid=False, opt_cam=False, r_t_noise=[0., 0.], r_t_lr=[0.001, 0.001], global_alignment_lr=0.001):
     first_iter = 0
@@ -100,11 +100,16 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
             #        is_open = check_socket_open(opt_vis.visdom.server,opt_vis.visdom.port)
             #    else: break
             vis = visdom.Visdom(server=opt_vis.visdom.server,port=opt_vis.visdom.port,env=opt_vis.group)
-            pose_GT = torch.stack([camera.get_w2c[:3, :4] for camera in scene.get_unnoisy_TrainCameras()])
-            pose_aligned = torch.stack([camera.get_w2c[:3, :4] for camera in viewpoint_stack_constant])
+            pose_GT, pose_aligned = scene.loadAlignCameras(if_vis_train=True)
             vis_cameras(opt_vis, vis, step=0, poses=[pose_aligned, pose_GT])
             os.makedirs(os.path.join(args.model_path, 'plot'), exist_ok=True)
             download_pose_vis(os.path.join(args.model_path, 'plot'), 0)
+
+
+    #import pdb;pdb.set_trace()
+    #pose_GT, pose_aligned = scene.loadAlignCameras(if_vis_train=True)
+    #vis_cameras(opt_vis, vis, step=222, poses=[pose_aligned, pose_GT])
+    #import pdb;pdb.set_trace()
 
     ema_loss_for_log = 0.0
     best_psnr = 0.0
@@ -302,8 +307,7 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
 
             #if iteration in testing_iterations:
             if iteration % 200 == 0 and args.vis_pose:
-                pose_GT = torch.stack([camera.get_w2c[:3, :4] for camera in scene.get_unnoisy_TrainCameras()])
-                pose_aligned = torch.stack([camera.get_w2c[:3, :4] for camera in viewpoint_stack_constant])
+                pose_GT, pose_aligned = scene.loadAlignCameras(if_vis_train=True)
                 vis_cameras(opt_vis, vis, step=iteration, poses=[pose_aligned, pose_GT])
                 if iteration == 20000 or iteration == 30000:
                     download_pose_vis(os.path.join(args.model_path, 'plot'), iteration)
@@ -347,7 +351,7 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
                 # do not update camera pose when densify or prune gaussians
                 if opt_cam:
                     if iteration > 100000:# and Ll1 > 0.03:
-                        scene.optimizer_translation.param_groups[viewpoint_cam.uid]['lr'] = scene.optimizer_translation.param_groups[viewpoint_cam.uid]['lr'] * torch.exp(10 * Ll1).item()
+                        scene.optimizer_translation.param_groups[viewpoint_cam.uid]['lr'] = scene.optimizer_translation.param_groups[viewpoint_cam.uid]['lr'] * torch.exp(20 * Ll1).item()
                         scene.optimizer_rotation.param_groups[viewpoint_cam.uid]['lr'] = scene.optimizer_rotation.param_groups[viewpoint_cam.uid]['lr'] * torch.exp(20 * Ll1).item()
                     if iteration % opt.densification_interval != 0:# and iteration > opt.densify_from_iter:
                         #if iteration > 10000:
@@ -369,26 +373,25 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
                         scene.scheduler_rotation.step()
                         scene.scheduler_translation.step()
 
-                        scene.optimizer_global_alignment.step()
-                        scene.optimizer_global_alignment.zero_grad(set_to_none=True)
-                        scene.scheduler_global_aligment.step()
+                        if iteration > 100000 and iteration % 100 == 0:
+                            scene.optimizer_global_alignment.step()
+                            scene.optimizer_global_alignment.zero_grad(set_to_none=True)
+                            scene.scheduler_global_aligment.step()
                     if iteration > 100000:# and Ll1 > 0.03:
-                        scene.optimizer_translation.param_groups[viewpoint_cam.uid]['lr'] = scene.optimizer_translation.param_groups[viewpoint_cam.uid]['lr'] / torch.exp(10 * Ll1).item()
+                        scene.optimizer_translation.param_groups[viewpoint_cam.uid]['lr'] = scene.optimizer_translation.param_groups[viewpoint_cam.uid]['lr'] / torch.exp(20 * Ll1).item()
                         scene.optimizer_rotation.param_groups[viewpoint_cam.uid]['lr'] = scene.optimizer_rotation.param_groups[viewpoint_cam.uid]['lr'] / torch.exp(20 * Ll1).item()
-                #print(viewpoint_cam.world_view_transform)
-                #print(viewpoint_cam.world_view_transform.grad)
-                #print(viewpoint_cam.camera_center)
-                #print(viewpoint_cam.get_camera_center)
-                #print(viewpoint_cam.camera_center)
+
+
                 if hybrid:
                     specular_mlp.optimizer.step()
                     specular_mlp.optimizer.zero_grad()
-                #import pdb;pdb.set_trace()
-                #print(0)
 
             if (iteration in checkpoint_iterations):
                 print("\n[ITER {}] Saving Checkpoint".format(iteration))
                 torch.save((gaussians.capture(), iteration), scene.model_path + "/chkpnt" + str(iteration) + ".pth")
+
+    torch.save(scene.train_cameras, './opt_cams.pt')
+    torch.save(scene.unnoisy_train_cameras, 'gt_cams.pt')
 
 def download_pose_vis(path, iteration):
         # download image

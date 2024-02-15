@@ -22,6 +22,29 @@ from utils.camera_utils import cameraList_from_camInfos, camera_to_JSON
 from utils.camera import Lie
 import torch
 from torch import nn
+from easydict import EasyDict as edict
+
+def procrustes_analysis(X0,X1): # [N,3]
+    # translation
+    x0_x1 = X0 - X1
+    X0 = X0[~(x0_x1 > 1).any(dim=1)]
+    X1 = X1[~(x0_x1 > 1).any(dim=1)]
+    t0 = X0.mean(dim=0,keepdim=True)
+    t1 = X1.mean(dim=0,keepdim=True)
+    X0c = X0-t0
+    X1c = X1-t1
+    # scale
+    s0 = (X0c**2).sum(dim=-1).mean().sqrt()
+    s1 = (X1c**2).sum(dim=-1).mean().sqrt()
+    X0cs = X0c/s0
+    X1cs = X1c/s1
+    # rotation (use double for SVD, float loses precision)
+    U,S,V = (X0cs.t()@X1cs).double().svd(some=True)
+    R = (U@V.t()).float()
+    if R.det()<0: R[2] *= -1
+    # align X1 to X0: X1to0 = (X1-t1)/s1@R.t()*s0+t0
+    sim3 = edict(t0=t0[0],t1=t1[0],s0=s0,s1=s1,R=R)
+    return sim3
 
 class Scene:
 
@@ -85,10 +108,16 @@ class Scene:
         for resolution_scale in resolution_scales:
             print("Loading Training Cameras")
 
+            generator = torch.Generator().manual_seed(55)
             self.unnoisy_train_cameras[resolution_scale] = cameraList_from_camInfos(scene_info.train_cameras, resolution_scale, args)
             # simply add noise
-            so3_noise = torch.randn(len(scene_info.train_cameras), 3) * r_t_noise[0]
-            t_noise = (torch.randn(len(scene_info.train_cameras), 3) * r_t_noise[1]).numpy()
+            so3_noise = torch.randn((len(scene_info.train_cameras), 3), generator=generator) * r_t_noise[0]
+            t_noise = (torch.randn((len(scene_info.train_cameras), 3), generator=generator) * r_t_noise[1]).numpy()
+
+            # add systematic rotation and translation noise to verify preAlignment function
+            #so3_noise = torch.ones(len(scene_info.train_cameras), 3) * r_t_noise[0]
+            #t_noise = (torch.ones(len(scene_info.train_cameras), 3) * r_t_noise[1]).numpy()
+
             # apply global transformation and rotation
             # so3_noise = torch.tensor([3.1415926 / 4, 0., 0.])[None, :].repeat(len(scene_info.train_cameras), 1)
             #t_noise = torch.tensor([0., 0., 1.])[None, :].repeat(len(scene_info.train_cameras), 1).numpy()
@@ -148,3 +177,47 @@ class Scene:
     def getGlobalAlignment(self):
         self.global_rotation = quaternion_to_rotation_matrix(self.global_quaternion)
         return self.global_rotation, self.global_translation
+
+    @torch.no_grad()
+    def loadAlignCameras(self, if_vis_train=False, if_vis_test=False):
+        ##############################################################################################################
+        if if_vis_test:
+            self.train_cameras = torch.load('./opt_cams.pt')
+            self.unnoisy_train_cameras = torch.load('gt_cams.pt')
+
+        center_pred = torch.stack([camera.get_camera_center() for camera in self.getTrainCameras()], dim=0) # [N,3]
+        center_GT = torch.stack([camera.get_camera_center() for camera in self.get_unnoisy_TrainCameras()], dim=0) # [N,3]
+        try:
+            sim3 = procrustes_analysis(center_GT,center_pred)
+        except:
+            print("warning: SVD did not converge...")
+            sim3 = edict(t0=0,t1=0,s0=1,s1=1,R=torch.eye(3,device=opt.device))
+        if if_vis_train:
+            center_pred2gt = (center_pred - sim3.t1) / sim3.s1@sim3.R.t()*sim3.s0 + sim3.t0
+            center_gt2pred = (center_GT - sim3.t0) / sim3.s0@sim3.R*sim3.s1 + sim3.t1
+            R_pred = torch.stack([camera.get_w2c[:3, :3].t() for camera in self.getTrainCameras()], dim=0)
+            R_gt = torch.stack([camera.get_w2c[:3, :3].t() for camera in self.get_unnoisy_TrainCameras()], dim=0)
+            t_pred = torch.stack([camera.get_w2c[:3, 3:] for camera in self.getTrainCameras()], dim=0)
+            t_gt = torch.stack([camera.get_w2c[:3, 3:] for camera in self.get_unnoisy_TrainCameras()], dim=0)
+
+            R_pred2gt = R_pred @ sim3.R.t()
+            R_gt2pred = R_gt @ sim3.R
+            # we can use this to find t
+            t_pred2gt = (-R_pred2gt.transpose(1, 2) @ center_pred2gt[..., None])
+            t_gt2pred = (-R_gt2pred.transpose(1, 2) @ center_gt2pred[..., None])
+            return torch.cat((R_gt.transpose(1, 2), t_gt), dim=-1), torch.cat((R_pred2gt.transpose(1, 2), t_pred2gt), dim=-1)
+            for R, t, camera in zip(R_pred2gt, t_pred2gt, self.train_cameras[1.]):
+                camera.reset_extrinsic(R.cpu().numpy(), t.cpu().numpy())
+        ##############################################################################################################
+
+        if if_vis_test:
+            center_GT = torch.stack([camera.get_camera_center() for camera in self.getTestCameras()], dim=0) # [N,3]
+            center_gt2pred = (center_GT - sim3.t0) / sim3.s0@sim3.R*sim3.s1 + sim3.t1
+            R_gt = torch.stack([camera.get_w2c[:3, :3].t() for camera in self.getTestCameras()], dim=0)
+            t_gt = torch.stack([camera.get_w2c[:3, 3:] for camera in self.getTestCameras()], dim=0)
+
+            R_gt2pred = R_gt @ sim3.R
+            t_gt2pred = (-R_gt2pred.transpose(1, 2) @ center_gt2pred[..., None])
+            for R, t, camera in zip(R_gt2pred, t_gt2pred, self.test_cameras[1.]):
+                camera.reset_extrinsic(R.cpu().numpy(), t.cpu().numpy())
+

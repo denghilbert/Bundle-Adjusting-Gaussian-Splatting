@@ -16,6 +16,7 @@ import numpy as np
 from utils.graphics_utils import getWorld2View2, getProjectionMatrix, getWorld2View2_torch_tensor, get_rays
 from utils.camera import Lie
 
+
 class Camera(nn.Module):
     def __init__(self, colmap_id, R, T, intrinsic_matrix, FoVx, FoVy, image, gt_alpha_mask,
                  image_name, uid,
@@ -90,22 +91,21 @@ class Camera(nn.Module):
         self.full_proj_transform = (self.world_view_transform.unsqueeze(0).bmm(self.projection_matrix.unsqueeze(0))).squeeze(0)
 
     def reset_extrinsic(self, R, T):
+        self.R = R
+        self.T = T
+
         self.init_translation = torch.tensor(T).float().view(-1, 1).cuda()
-        #self.delta_translation_xy = nn.Parameter(torch.zeros(2, 1).cuda().requires_grad_(True))
-        #self.delta_translation_z = nn.Parameter(torch.zeros(1, 1).cuda().requires_grad_(True))
-        #self.delta_translation = torch.cat((self.delta_translation_xy, self.delta_translation_z))
-        self.delta_translation = nn.Parameter(torch.zeros(self.init_translation.shape).cuda().requires_grad_(True))
+        self.delta_translation = nn.Parameter(torch.zeros(3, 1).cuda().requires_grad_(True))
         self.translation = self.init_translation + self.delta_translation
-        #self.so3 = nn.Parameter(self.lie.SO3_to_so3(torch.tensor(R).float().t().cuda()).requires_grad_(True))
-        #self.rotation = self.lie.so3_to_SO3(self.so3) # we have error right here, but it doesn't matter
         self.init_quaternion = rotation_matrix_to_quaternion(torch.tensor(R).float().t().cuda())
-        self.delta_quaternion = nn.Parameter(torch.zeros(self.init_quaternion.shape).cuda().requires_grad_(True))
+        self.delta_quaternion = nn.Parameter(torch.zeros(4).cuda().requires_grad_(True))
         self.quaternion = self.init_quaternion + self.delta_quaternion
         self.rotation = quaternion_to_rotation_matrix(self.quaternion)
+        self.last_row = torch.tensor([[0., 0., 0., 1.]]).cuda()
         self.Rt = torch.cat((self.rotation, self.translation), dim=1)
         self.world_view_transform = torch.cat((self.Rt, self.last_row), dim=0).t()
-        self.full_proj_transform = (
-            self.world_view_transform.unsqueeze(0).bmm(self.projection_matrix.unsqueeze(0))).squeeze(0)
+        self.projection_matrix = getProjectionMatrix(znear=self.znear, zfar=self.zfar, fovX=self.FoVx, fovY=self.FoVy).transpose(0,1).cuda()
+        self.full_proj_transform = (self.world_view_transform.unsqueeze(0).bmm(self.projection_matrix.unsqueeze(0))).squeeze(0)
         self.camera_center = self.world_view_transform.inverse()[3, :3]
 
     def load2device(self, data_device='cuda'):
@@ -121,8 +121,7 @@ class Camera(nn.Module):
 
     @property
     def get_rays(self, noise_d=None, noise_o=None):
-        rays_o, rays_d = get_rays(self.image_height, self.image_width, self.intrinsic_matrix,
-                                  self.world_view_transform.transpose(0, 1).inverse())
+        rays_o, rays_d = get_rays(self.image_height, self.image_width, self.intrinsic_matrix, self.world_view_transform.transpose(0, 1).inverse())
         #if noise_o:
         #    rays_o = rays_o + noise_o
         #if noise_d:
@@ -145,7 +144,7 @@ class Camera(nn.Module):
 
         return self.world_view_transform.t()
 
-    def get_world_view_transform(self, global_rotation, global_translation_scale):
+    def get_world_view_transform(self, global_rotation=torch.tensor([[1., 0, 0], [0, 1., 0], [0, 0, 1.]], device='cuda'), global_translation_scale=torch.tensor([1.], device='cuda')):
         #self.rotation = self.lie.so3_to_SO3(self.so3) # we have error right here, but it doesn't matter
         self.quaternion = self.init_quaternion + self.delta_quaternion
         self.rotation = global_rotation @ quaternion_to_rotation_matrix(self.quaternion)
@@ -162,12 +161,12 @@ class Camera(nn.Module):
         self.world_view_transform = (c2w * mask).inverse()
         return self.world_view_transform
 
-    def get_full_proj_transform(self, global_rotation, global_translation_scale):
+    def get_full_proj_transform(self, global_rotation=torch.tensor([[1., 0, 0], [0, 1., 0], [0, 0, 1.]], device='cuda'), global_translation_scale=torch.tensor([1.], device='cuda')):
         self.world_view_transform = self.get_world_view_transform(global_rotation, global_translation_scale)
         self.full_proj_transform = (self.world_view_transform.unsqueeze(0).bmm(self.projection_matrix.unsqueeze(0))).squeeze(0)
         return self.full_proj_transform
 
-    def get_camera_center(self, global_rotation, global_translation_scale):
+    def get_camera_center(self, global_rotation=torch.tensor([[1., 0, 0], [0, 1., 0], [0, 0, 1.]], device='cuda'), global_translation_scale=torch.tensor([1.], device='cuda')):
         self.camera_center = self.get_world_view_transform(global_rotation, global_translation_scale).inverse()[3, :3]
         return self.camera_center
 
