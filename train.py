@@ -74,6 +74,8 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
     if checkpoint:
         (model_params, first_iter) = torch.load(checkpoint)
         gaussians.restore(model_params, opt)
+        scene.train_cameras = torch.load('opt_cams.pt')
+        scene.unnoisy_train_cameras = torch.load('gt_cams.pt')
     bg_color = [1, 1, 1] if dataset.white_background else [0, 0, 0]
     background = torch.tensor(bg_color, dtype=torch.float32, device="cuda")
 
@@ -118,7 +120,6 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
     first_iter += 1
     smooth_term = get_linear_noise_func(lr_init=0.1, lr_final=1e-15, lr_delay_mult=0.01, max_steps=20000)
 
-    moving_camera_list = []
     for iteration in range(first_iter, opt.iterations + 1):
         if network_gui.conn == None:
             network_gui.try_connect()
@@ -217,36 +218,88 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
 
         loss.backward(retain_graph=True)
 
-        moving_camera_list = [35, 52, 45, 10, 32]
-        outliers = []
-        if iteration == 10100:
+        if iteration == 7001:
             outlier_stack = scene.getTrainCameras().copy()
-            for camera in outlier_stack:
-                if camera.uid in moving_camera_list:
-                    outliers.append(camera)
-
-            for i in range(1000):
-                viewpoint_cam = outliers[i % 5]
+            outliers = []
+            uid_list = []
+            for idx, viewpoint_cam in enumerate(outlier_stack):
                 render_pkg = render(viewpoint_cam, gaussians, pipe, background, mlp_color, iteration=iteration, hybrid=hybrid, global_alignment=scene.getGlobalAlignment())
-                image, viewspace_point_tensor, visibility_filter, radii = render_pkg["render"], render_pkg["viewspace_points"], render_pkg["visibility_filter"], render_pkg["radii"]
+                image, _, _, _ = render_pkg["render"], render_pkg["viewspace_points"], render_pkg["visibility_filter"], render_pkg["radii"]
                 gt_image = viewpoint_cam.original_image.cuda()
-
                 Ll1 = l1_loss(image, gt_image)
                 ssim_loss = ssim(image, gt_image)
-                loss = (1.0 - opt.lambda_dssim) * Ll1 + opt.lambda_dssim * (1.0 - ssim_loss)# + 0.1 * (loss_projection / len(camera_pairs[viewpoint_cam.uid]))
-                loss.backward(retain_graph=True)
+                if Ll1 > 0.02 and ssim_loss < 0.8:
+                #if ssim_loss < 0.9:
+                #if Ll1 > 0.02:
+                    outliers.append(viewpoint_cam)
+                    uid_list.append(viewpoint_cam.uid)
+                    wandb_img = image.unsqueeze(0).detach()
+                    wandb_img_gt = gt_image.unsqueeze(0).detach()
+                    images_error = (wandb_img_gt - wandb_img).abs()
+                    cat_imgs = torch.cat((gt_image, image), dim=2).detach()
+                    images = {
+                        f"failure/gt_rendered": wandb_image(cat_imgs),
+                        f"failure/gt_img": wandb_image(gt_image),
+                        f"failure/rendered_img": wandb_image(wandb_img),
+                        f"failure/rgb_error": wandb_image(images_error),
+                        f"failure/loss": Ll1,
+                        f"failure/uid": viewpoint_cam.uid,
+                    }
+                    if use_wandb:
+                        wandb.log(images, step=iteration + idx)
+            if len(outliers) > 0:
+                for i in range(2000):
+                    viewpoint_cam = outliers[i % len(outliers)]
+                    render_pkg = render(viewpoint_cam, gaussians, pipe, background, mlp_color, iteration=iteration, hybrid=hybrid, global_alignment=scene.getGlobalAlignment())
+                    image, _, _, _ = render_pkg["render"], render_pkg["viewspace_points"], render_pkg["visibility_filter"], render_pkg["radii"]
+                    gt_image = viewpoint_cam.original_image.cuda()
 
-                if opt_cam:
-                    scene.optimizer_rotation.step()
-                    scene.optimizer_translation.step()
-                    scene.optimizer_rotation.zero_grad(set_to_none=True)
-                    scene.optimizer_translation.zero_grad(set_to_none=True)
-                    scene.scheduler_rotation.step()
-                    scene.scheduler_translation.step()
+                    Ll1 = l1_loss(image, gt_image)
+                    ssim_loss = ssim(image, gt_image)
+                    loss = (1.0 - opt.lambda_dssim) * Ll1 + opt.lambda_dssim * (1.0 - ssim_loss)# + 0.1 * (loss_projection / len(camera_pairs[viewpoint_cam.uid]))
+                    loss.backward(retain_graph=True)
+                    #if i == len(outliers):
+                    #    import pdb;pdb.set_trace()
+                    #print("*"*10)
+                    #print(viewpoint_cam.uid)
+                    #print(Ll1)
+                    #print(ssim_loss)
+                    #print(loss)
+                    #print("*"*10)
 
-                if args.vis_pose and i % 20 == 0:
-                    pose_GT, pose_aligned = scene.loadAlignCameras(if_vis_train=True)
-                    vis_cameras(opt_vis, vis, step=iteration, poses=[pose_aligned, pose_GT])
+                    if opt_cam:
+                        if i <= 700:
+                            scene.optimizer_translation.param_groups[viewpoint_cam.uid]['lr'] = scene.optimizer_translation.param_groups[viewpoint_cam.uid]['lr'] * 10
+                            scene.optimizer_rotation.param_groups[viewpoint_cam.uid]['lr'] = scene.optimizer_rotation.param_groups[viewpoint_cam.uid]['lr'] * 10
+                        elif 700 < i < 1500:
+                            scene.optimizer_translation.param_groups[viewpoint_cam.uid]['lr'] = scene.optimizer_translation.param_groups[viewpoint_cam.uid]['lr'] * 5
+                            scene.optimizer_rotation.param_groups[viewpoint_cam.uid]['lr'] = scene.optimizer_rotation.param_groups[viewpoint_cam.uid]['lr'] * 5
+                        else:
+                            scene.optimizer_translation.param_groups[viewpoint_cam.uid]['lr'] = scene.optimizer_translation.param_groups[viewpoint_cam.uid]['lr'] * 2
+                            scene.optimizer_rotation.param_groups[viewpoint_cam.uid]['lr'] = scene.optimizer_rotation.param_groups[viewpoint_cam.uid]['lr'] * 2
+
+                        scene.optimizer_rotation.step()
+                        scene.optimizer_translation.step()
+                        #if i == 0:
+                        #    import pdb;pdb.set_trace()
+                        #    outliers[0].delta_quaternion.grad
+                        scene.optimizer_rotation.zero_grad(set_to_none=True)
+                        scene.optimizer_translation.zero_grad(set_to_none=True)
+                        scene.scheduler_rotation.step()
+                        scene.scheduler_translation.step()
+                        if i <= 700:
+                            scene.optimizer_translation.param_groups[viewpoint_cam.uid]['lr'] = scene.optimizer_translation.param_groups[viewpoint_cam.uid]['lr'] / 10
+                            scene.optimizer_rotation.param_groups[viewpoint_cam.uid]['lr'] = scene.optimizer_rotation.param_groups[viewpoint_cam.uid]['lr'] / 10
+                        elif 700 < i < 1500:
+                            scene.optimizer_translation.param_groups[viewpoint_cam.uid]['lr'] = scene.optimizer_translation.param_groups[viewpoint_cam.uid]['lr'] / 5
+                            scene.optimizer_rotation.param_groups[viewpoint_cam.uid]['lr'] = scene.optimizer_rotation.param_groups[viewpoint_cam.uid]['lr'] / 5
+                        else:
+                            scene.optimizer_translation.param_groups[viewpoint_cam.uid]['lr'] = scene.optimizer_translation.param_groups[viewpoint_cam.uid]['lr'] / 2
+                            scene.optimizer_rotation.param_groups[viewpoint_cam.uid]['lr'] = scene.optimizer_rotation.param_groups[viewpoint_cam.uid]['lr'] / 2
+
+                    if args.vis_pose and i % 10 == 0:
+                        pose_GT, pose_aligned = scene.loadAlignCameras(if_vis_train=True, camera_uid_list=uid_list)
+                        vis_cameras(opt_vis, vis, step=i, poses=[pose_aligned, pose_GT])
 
 
         if iteration % 10 == 0:
@@ -259,26 +312,6 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
                 scalars["loss/projection_loss"] = (loss_projection / len(camera_pairs[viewpoint_cam.uid]))
             if use_wandb:
                 wandb.log(scalars, step=iteration)
-        if iteration == 30101:
-            print(moving_camera_list)
-            import sys
-            sys.exit()
-        if 10000 <= iteration < 10100 and Ll1 > 0.03:
-            moving_camera_list.append(viewpoint_cam.uid)
-            wandb_img = image.unsqueeze(0).detach()
-            wandb_img_gt = gt_image.unsqueeze(0).detach()
-            images_error = (wandb_img_gt - wandb_img).abs()
-            cat_imgs = torch.cat((gt_image, image), dim=2).detach()
-            images = {
-                f"failure/gt_rendered": wandb_image(cat_imgs),
-                f"failure/gt_img": wandb_image(gt_image),
-                f"failure/rendered_img": wandb_image(wandb_img),
-                f"failure/rgb_error": wandb_image(images_error),
-                f"failure/loss": Ll1,
-                f"failure/uid": viewpoint_cam.uid,
-            }
-            if use_wandb:
-                wandb.log(images, step=iteration)
 
         if iteration % 3000 == 0 or iteration == 1:
             wandb_img = image.unsqueeze(0).detach()
@@ -359,19 +392,9 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
             if iteration < opt.iterations:
                 gaussians.optimizer.step()
                 gaussians.optimizer.zero_grad(set_to_none = True)
-                #if iteration in [10000, 20000, 30000, 40000]:
-                #    print(viewpoint_cam.Rt)
-                #    print(viewpoint_cam.Rt.grad)
-                #    print(viewpoint_cam.get_world_view_transform)
-                #    #print(viewpoint_cam.camera_center)
-                #    if iteration == 40000:
-                #        import pdb;pdb.set_trace()
 
                 # do not update camera pose when densify or prune gaussians
                 if opt_cam:
-                    if iteration > 100000:# and Ll1 > 0.03:
-                        scene.optimizer_translation.param_groups[viewpoint_cam.uid]['lr'] = scene.optimizer_translation.param_groups[viewpoint_cam.uid]['lr'] * torch.exp(20 * Ll1).item()
-                        scene.optimizer_rotation.param_groups[viewpoint_cam.uid]['lr'] = scene.optimizer_rotation.param_groups[viewpoint_cam.uid]['lr'] * torch.exp(20 * Ll1).item()
                     if iteration % opt.densification_interval != 0:# and iteration > opt.densify_from_iter:
                         #if iteration > 10000:
                         #    viewpoint_cam.delta_quaternion.grad[0] = 20 * viewpoint_cam.delta_quaternion.grad[0]
@@ -396,10 +419,6 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
                             scene.optimizer_global_alignment.step()
                             scene.optimizer_global_alignment.zero_grad(set_to_none=True)
                             scene.scheduler_global_aligment.step()
-                    if iteration > 100000:# and Ll1 > 0.03:
-                        scene.optimizer_translation.param_groups[viewpoint_cam.uid]['lr'] = scene.optimizer_translation.param_groups[viewpoint_cam.uid]['lr'] / torch.exp(20 * Ll1).item()
-                        scene.optimizer_rotation.param_groups[viewpoint_cam.uid]['lr'] = scene.optimizer_rotation.param_groups[viewpoint_cam.uid]['lr'] / torch.exp(20 * Ll1).item()
-
 
                 if hybrid:
                     specular_mlp.optimizer.step()
@@ -408,6 +427,8 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
             if (iteration in checkpoint_iterations):
                 print("\n[ITER {}] Saving Checkpoint".format(iteration))
                 torch.save((gaussians.capture(), iteration), scene.model_path + "/chkpnt" + str(iteration) + ".pth")
+                torch.save(scene.train_cameras, './opt_cams.pt')
+                torch.save(scene.unnoisy_train_cameras, 'gt_cams.pt')
 
     torch.save(scene.train_cameras, './opt_cams.pt')
     torch.save(scene.unnoisy_train_cameras, 'gt_cams.pt')

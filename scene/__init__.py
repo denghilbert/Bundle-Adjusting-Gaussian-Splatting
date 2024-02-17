@@ -179,7 +179,7 @@ class Scene:
         return self.global_rotation, self.global_translation
 
     @torch.no_grad()
-    def loadAlignCameras(self, if_vis_train=False, if_vis_test=False):
+    def loadAlignCameras(self, if_vis_train=False, if_vis_test=False, camera_uid_list=[]):
         ##############################################################################################################
         if if_vis_test:
             self.train_cameras = torch.load('./opt_cams.pt')
@@ -195,6 +195,7 @@ class Scene:
         if if_vis_train:
             center_pred2gt = (center_pred - sim3.t1) / sim3.s1@sim3.R.t()*sim3.s0 + sim3.t0
             center_gt2pred = (center_GT - sim3.t0) / sim3.s0@sim3.R*sim3.s1 + sim3.t1
+
             R_pred = torch.stack([camera.get_w2c[:3, :3].t() for camera in self.getTrainCameras()], dim=0)
             R_gt = torch.stack([camera.get_w2c[:3, :3].t() for camera in self.get_unnoisy_TrainCameras()], dim=0)
             t_pred = torch.stack([camera.get_w2c[:3, 3:] for camera in self.getTrainCameras()], dim=0)
@@ -205,6 +206,9 @@ class Scene:
             # we can use this to find t
             t_pred2gt = (-R_pred2gt.transpose(1, 2) @ center_pred2gt[..., None])
             t_gt2pred = (-R_gt2pred.transpose(1, 2) @ center_gt2pred[..., None])
+            if camera_uid_list != []:
+                mask = [True if camera.uid in camera_uid_list else False for camera in self.getTrainCameras()]
+                return torch.cat((R_gt.transpose(1, 2), t_gt), dim=-1)[mask], torch.cat((R_pred2gt.transpose(1, 2), t_pred2gt), dim=-1)[mask]
             return torch.cat((R_gt.transpose(1, 2), t_gt), dim=-1), torch.cat((R_pred2gt.transpose(1, 2), t_pred2gt), dim=-1)
             for R, t, camera in zip(R_pred2gt, t_pred2gt, self.train_cameras[1.]):
                 camera.reset_extrinsic(R.cpu().numpy(), t.cpu().numpy())
