@@ -151,25 +151,25 @@ class Scene:
         # naive implementation to deal with pose noise
         # set camera parameters as learnbale parameters
         l_rotation = [{'params': camera.delta_quaternion, 'lr': r_t_lr[0]} for camera in self.train_cameras[resolution_scale]]
-        l_rotation_test = [{'params': camera.delta_quaternion, 'lr': 0.001} for camera in self.test_cameras[resolution_scale]]
+        l_rotation_test = [{'params': camera.delta_quaternion, 'lr': 0.0005} for camera in self.test_cameras[resolution_scale]]
         #l_rotation = [{'params': camera.quaternion, 'lr': r_t_lr[0]} for camera in self.train_cameras[resolution_scale]]
         #l_rotation = [{'params': camera.so3, 'lr': 0.01} for camera in self.train_cameras[resolution_scale]]
 
         l_translation = [{'params': camera.delta_translation, 'lr': r_t_lr[1]} for camera in self.train_cameras[resolution_scale]]
-        l_translation_test = [{'params': camera.delta_translation, 'lr': 0.005} for camera in self.test_cameras[resolution_scale]]
+        l_translation_test = [{'params': camera.delta_translation, 'lr': 0.0025} for camera in self.test_cameras[resolution_scale]]
         #l_translation = [{'params': camera.delta_translation_xy, 'lr': r_t_lr[1]} for camera in self.train_cameras[resolution_scale]]
         #l_translation = [{'params': camera.delta_translation_z, 'lr': r_t_lr[1]} for camera in self.train_cameras[resolution_scale]]
         #l_translation = [{'params': camera.translation, 'lr': r_t_lr[1]} for camera in self.train_cameras[resolution_scale]]
         #l = [{'params': camera.parameters(), 'lr': 0.01} for camera in self.train_cameras[resolution_scale]]
         self.optimizer_rotation = torch.optim.Adam(l_rotation, eps=1e-15)
         self.optimizer_translation = torch.optim.Adam(l_translation, eps=1e-15)
-        self.scheduler_rotation = torch.optim.lr_scheduler.MultiStepLR(self.optimizer_rotation, milestones=[7000, 50000], gamma=1)
-        self.scheduler_translation = torch.optim.lr_scheduler.MultiStepLR(self.optimizer_translation, milestones=[7000, 50000], gamma=1)
+        self.scheduler_rotation = torch.optim.lr_scheduler.MultiStepLR(self.optimizer_rotation, milestones=[10000], gamma=0.1)
+        self.scheduler_translation = torch.optim.lr_scheduler.MultiStepLR(self.optimizer_translation, milestones=[10000], gamma=0.1)
 
         self.optimizer_rotation_test = torch.optim.Adam(l_rotation_test, eps=1e-15)
         self.optimizer_translation_test = torch.optim.Adam(l_translation_test, eps=1e-15)
-        self.scheduler_rotation_test = torch.optim.lr_scheduler.MultiStepLR(self.optimizer_rotation_test, milestones=[7000, 50000], gamma=1)
-        self.scheduler_translation_test = torch.optim.lr_scheduler.MultiStepLR(self.optimizer_translation_test, milestones=[7000, 50000], gamma=1)
+        self.scheduler_rotation_test = torch.optim.lr_scheduler.MultiStepLR(self.optimizer_rotation_test, milestones=[30000], gamma=0.5)
+        self.scheduler_translation_test = torch.optim.lr_scheduler.MultiStepLR(self.optimizer_translation_test, milestones=[30000], gamma=0.5)
 
         l_global_alignment = [{'params': self.global_translation, 'lr': global_alignment_lr}, {'params': self.global_quaternion, 'lr': global_alignment_lr}]
         self.optimizer_global_alignment = torch.optim.Adam(l_global_alignment, eps=1e-15)
@@ -242,11 +242,11 @@ class Scene:
         return torch.cat((R_gt.transpose(1, 2), t_gt), dim=-1), torch.cat((R_pred.transpose(1, 2), t_pred), dim=-1)
 
     @torch.no_grad()
-    def loadAlignCameras(self, if_vis_train=False, if_vis_test=False, camera_uid_list=[], iteration=0):
+    def loadAlignCameras(self, if_vis_train=False, if_vis_test=False, camera_uid_list=[], iteration=0, path=''):
         ##############################################################################################################
         if if_vis_test:
-            self.train_cameras = torch.load('./opt_cams.pt')
-            self.unnoisy_train_cameras = torch.load('gt_cams.pt')
+            self.train_cameras = torch.load(os.path.join(path, 'opt_cams.pt'))
+            self.unnoisy_train_cameras = torch.load(os.path.join(path, 'gt_cams.pt'))
 
         center_pred = torch.stack([camera.get_camera_center() for camera in self.getTrainCameras()], dim=0) # [N,3]
         center_GT = torch.stack([camera.get_camera_center() for camera in self.get_unnoisy_TrainCameras()], dim=0) # [N,3]

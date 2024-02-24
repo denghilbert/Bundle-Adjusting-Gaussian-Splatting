@@ -80,13 +80,13 @@ def render_sets(dataset : ModelParams, iteration : int, pipeline : PipelineParam
 
     render_func = render_set
 
-    scene.loadAlignCameras(if_vis_test=True)
+    scene.loadAlignCameras(if_vis_test=True, path=scene.model_path)
 
     viewpoint_stack = scene.getTestCameras().copy()
-    progress_bar = tqdm(range(0, 10000), desc="Training progress")
+    progress_bar = tqdm(range(0, 50000), desc="Training progress")
     if opt_test_cam:
-        for iteration in range(10000):
-            if iteration % 200 == 0:
+        for iteration in range(50000):
+            if iteration % 1000 == 0:
                 pose_gt, pose_aligned = scene.visTestCameras()
                 vis_cameras(opt_vis, vis, iteration, poses=[pose_aligned, pose_gt])
             if not viewpoint_stack:
@@ -107,7 +107,7 @@ def render_sets(dataset : ModelParams, iteration : int, pipeline : PipelineParam
                 if iteration % 10 == 0:
                     progress_bar.set_postfix({"Loss": f"{loss.item():.{7}f}"})
                     progress_bar.update(10)
-                if iteration == 10000:
+                if iteration == 50000:
                     progress_bar.close()
 
                 scene.optimizer_rotation_test.step()
@@ -125,6 +125,48 @@ def render_sets(dataset : ModelParams, iteration : int, pipeline : PipelineParam
     if not skip_test:
          render_set(dataset.model_path, "test", scene.loaded_iter, scene.getTestCameras(), gaussians, pipeline, background, specular, hybrid)
 
+def init_wandb(cfg, wandb_id=None, project="", run_name=None, mode="online", resume=False, use_group=False, set_group=None):
+    r"""Initialize Weights & Biases (wandb) logger.
+
+    Args:
+        cfg (obj): Global configuration.
+        wandb_id (str): A unique ID for this run, used for resuming.
+        project (str): The name of the project where you're sending the new run.
+            If the project is not specified, the run is put in an "Uncategorized" project.
+        run_name (str): name for each wandb run (useful for logging changes)
+        mode (str): online/offline/disabled
+    """
+    print('Initialize wandb')
+    if not wandb_id:
+        wandb_path = os.path.join(cfg.model_path, "wandb_id.txt")
+        if resume and os.path.exists(wandb_path):
+            with open(wandb_path, "r") as f:
+                wandb_id = f.read()
+        else:
+            wandb_id = wandb.util.generate_id()
+            with open(wandb_path, "w+") as f:
+                f.write(wandb_id)
+    if use_group:
+        group, name = cfg.model_path.split("/")[-2:]
+        group = set_group
+    else:
+        group, name = None, os.path.basename(cfg.model_path)
+        group = set_group
+
+    if run_name is not None:
+        name = run_name
+    wandb.init(id=wandb_id,
+               project=project,
+               config=vars(cfg),
+               group=group,
+               name=name,
+               dir=cfg.model_path,
+               resume=resume,
+               settings=wandb.Settings(start_method="fork"),
+               mode=mode)
+    wandb.config.update({'dataset': cfg.source_path})
+
+
 if __name__ == "__main__":
     # Set up command line argument parser
     parser = ArgumentParser(description="Testing script parameters")
@@ -137,10 +179,25 @@ if __name__ == "__main__":
     parser.add_argument("--quiet", action="store_true")
     parser.add_argument("--mode", default='render', choices=['render', 'view', 'all', 'pose', 'original'])
     parser.add_argument("--opt_test_cam", action="store_true", default=False)
+    # wandb setting
+    parser.add_argument("--wandb", action="store_true", default=False)
+    parser.add_argument("--wandb_project_name", type=str, default = None)
+    parser.add_argument("--wandb_group_name", type=str, default = None)
+    parser.add_argument("--wandb_mode", type=str, default = "online")
     args = get_combined_args(parser)
     print("Rendering " + args.model_path)
 
     # Initialize system state (RNG)
     safe_state(args.quiet)
+    # Initialize wandb
+    if args.wandb:
+        wandb.login()
+        wandb_run = init_wandb(args,
+                               project=args.wandb_project_name,
+                               mode=args.wandb_mode,
+                               resume=args.resume,
+                               use_group=True,
+                               set_group=args.wandb_group_name
+                               )
 
     render_sets(model.extract(args), args.iteration, pipeline.extract(args), args.skip_train, args.skip_test, args.mode, args.hybrid, args.opt_test_cam)

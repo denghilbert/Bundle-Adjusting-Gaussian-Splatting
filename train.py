@@ -49,17 +49,17 @@ from io import BytesIO
 # set random seeds
 import numpy as np
 import random
-#seed_value = 100  # Replace this with your desired seed value
-#
-#torch.manual_seed(seed_value)
-#if torch.cuda.is_available():
-#    torch.cuda.manual_seed(seed_value)
-#    torch.cuda.manual_seed_all(seed_value)  # if you are using multi-GPU.
-#    torch.backends.cudnn.deterministic = True
-#    torch.backends.cudnn.benchmark = False
-#
-#np.random.seed(seed_value)
-#random.seed(seed_value)
+seed_value = 100  # Replace this with your desired seed value
+
+torch.manual_seed(seed_value)
+if torch.cuda.is_available():
+    torch.cuda.manual_seed(seed_value)
+    torch.cuda.manual_seed_all(seed_value)  # if you are using multi-GPU.
+    torch.backends.cudnn.deterministic = True
+    torch.backends.cudnn.benchmark = False
+
+np.random.seed(seed_value)
+random.seed(seed_value)
 
 def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoint_iterations, checkpoint, debug_from, use_wandb=False, random_init=False, hybrid=False, opt_cam=False, r_t_noise=[0., 0.], r_t_lr=[0.001, 0.001], global_alignment_lr=0.001):
     first_iter = 0
@@ -74,8 +74,8 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
     if checkpoint:
         (model_params, first_iter) = torch.load(checkpoint)
         gaussians.restore(model_params, opt)
-        scene.train_cameras = torch.load('opt_cams.pt')
-        scene.unnoisy_train_cameras = torch.load('gt_cams.pt')
+        scene.train_cameras = torch.load(os.path.join(path, 'opt_cams.pt'))
+        scene.unnoisy_train_cameras = torch.load(os.path.join(path, 'gt_cams.pt'))
     bg_color = [1, 1, 1] if dataset.white_background else [0, 0, 0]
     background = torch.tensor(bg_color, dtype=torch.float32, device="cuda")
 
@@ -102,7 +102,7 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
             #        is_open = check_socket_open(opt_vis.visdom.server,opt_vis.visdom.port)
             #    else: break
             vis = visdom.Visdom(server=opt_vis.visdom.server,port=opt_vis.visdom.port,env=opt_vis.group)
-            pose_GT, pose_aligned = scene.loadAlignCameras(if_vis_train=True)
+            pose_GT, pose_aligned = scene.loadAlignCameras(if_vis_train=True, path=scene.model_path)
             vis_cameras(opt_vis, vis, step=0, poses=[pose_aligned, pose_GT])
             os.makedirs(os.path.join(args.model_path, 'plot'), exist_ok=True)
             #download_pose_vis(os.path.join(args.model_path, 'plot'), 0)
@@ -222,6 +222,7 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
             outlier_stack = scene.getTrainCameras().copy()
             outliers = []
             uid_list = []
+            best_ssim = []
             for idx, viewpoint_cam in enumerate(outlier_stack):
                 render_pkg = render(viewpoint_cam, gaussians, pipe, background, mlp_color, iteration=iteration, hybrid=hybrid, global_alignment=scene.getGlobalAlignment())
                 image, _, _, _ = render_pkg["render"], render_pkg["viewspace_points"], render_pkg["visibility_filter"], render_pkg["radii"]
@@ -233,6 +234,7 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
                 #if Ll1 > 0.02:
                     outliers.append(viewpoint_cam)
                     uid_list.append(viewpoint_cam.uid)
+                    best_ssim.append(ssim_loss)
                     wandb_img = image.unsqueeze(0).detach()
                     wandb_img_gt = gt_image.unsqueeze(0).detach()
                     images_error = (wandb_img_gt - wandb_img).abs()
@@ -297,8 +299,8 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
                             scene.optimizer_translation.param_groups[viewpoint_cam.uid]['lr'] = scene.optimizer_translation.param_groups[viewpoint_cam.uid]['lr'] / 2
                             scene.optimizer_rotation.param_groups[viewpoint_cam.uid]['lr'] = scene.optimizer_rotation.param_groups[viewpoint_cam.uid]['lr'] / 2
 
-                    if args.vis_pose and i % 10 == 0:
-                        pose_GT, pose_aligned = scene.loadAlignCameras(if_vis_train=True, camera_uid_list=uid_list)
+                    if args.vis_pose and i % 100 == 0:
+                        pose_GT, pose_aligned = scene.loadAlignCameras(if_vis_train=True, camera_uid_list=uid_list, path=scene.model_path)
                         vis_cameras(opt_vis, vis, step=i, poses=[pose_aligned, pose_GT])
 
 
@@ -358,8 +360,8 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
                 progress_bar.close()
 
             #if iteration in testing_iterations:
-            if iteration % 200 == 0 and args.vis_pose:
-                pose_GT, pose_aligned = scene.loadAlignCameras(if_vis_train=True)
+            if iteration % 500 == 0 and args.vis_pose:
+                pose_GT, pose_aligned = scene.loadAlignCameras(if_vis_train=True, iteration=iteration, path=scene.model_path)
                 vis_cameras(opt_vis, vis, step=iteration, poses=[pose_aligned, pose_GT])
                 #if iteration == 20000 or iteration == 30000:
                 #    download_pose_vis(os.path.join(args.model_path, 'plot'), iteration)
@@ -369,6 +371,8 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
             if (iteration in saving_iterations):
                 print("\n[ITER {}] Saving Gaussians".format(iteration))
                 scene.save(iteration)
+                torch.save(scene.train_cameras, os.path.join(scene.model_path, 'opt_cams.pt'))
+                torch.save(scene.unnoisy_train_cameras, os.path.join(scene.model_path, 'gt_cams.pt'))
                 if hybrid:
                     specular_mlp.save_weights(args.model_path, iteration)
 
@@ -427,11 +431,11 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
             if (iteration in checkpoint_iterations):
                 print("\n[ITER {}] Saving Checkpoint".format(iteration))
                 torch.save((gaussians.capture(), iteration), scene.model_path + "/chkpnt" + str(iteration) + ".pth")
-                torch.save(scene.train_cameras, './opt_cams.pt')
-                torch.save(scene.unnoisy_train_cameras, 'gt_cams.pt')
+                torch.save(scene.train_cameras, os.path.join(scene.model_path, 'opt_cams.pt'))
+                torch.save(scene.unnoisy_train_cameras, os.path.join(scene.model_path, 'gt_cams.pt'))
 
-    torch.save(scene.train_cameras, './opt_cams.pt')
-    torch.save(scene.unnoisy_train_cameras, 'gt_cams.pt')
+    torch.save(scene.train_cameras, os.path.join(scene.model_path, 'opt_cams.pt'))
+    torch.save(scene.unnoisy_train_cameras, os.path.join(scene.model_path, 'gt_cams.pt'))
 
 def download_pose_vis(path, iteration):
         # download image
