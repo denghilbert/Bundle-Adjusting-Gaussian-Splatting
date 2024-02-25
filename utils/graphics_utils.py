@@ -79,8 +79,12 @@ def getWorld2View2_torch_tensor(R, t, translate=torch.tensor([.0, .0, .0]).cuda(
     return Rt
 
 def getProjectionMatrix(znear, zfar, fovX, fovY):
-    tanHalfFovY = math.tan((fovY / 2))
-    tanHalfFovX = math.tan((fovX / 2))
+    if torch.is_tensor(fovX) and torch.is_tensor(fovY):
+        tanHalfFovY = torch.tan((fovY / 2))
+        tanHalfFovX = torch.tan((fovX / 2))
+    else:
+        tanHalfFovY = math.tan((fovY / 2))
+        tanHalfFovX = math.tan((fovX / 2))
 
     top = tanHalfFovY * znear
     bottom = -top

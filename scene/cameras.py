@@ -82,12 +82,18 @@ class Camera(nn.Module):
         self.last_row = torch.tensor([[0., 0., 0., 1.]]).cuda()
         self.Rt = torch.cat((self.rotation, self.translation), dim=1)
         self.world_view_transform = torch.cat((self.Rt, self.last_row), dim=0).t()
-        self.projection_matrix = getProjectionMatrix(znear=self.znear, zfar=self.zfar, fovX=self.FoVx, fovY=self.FoVy).transpose(0,1).cuda()
+        self.learnable_fovx = nn.Parameter(torch.tensor(self.FoVx).cuda().requires_grad_(True))
+        self.learnable_fovy = nn.Parameter(torch.tensor(self.FoVy).cuda().requires_grad_(True))
+        #self.projection_matrix = getProjectionMatrix(znear=self.znear, zfar=self.zfar, fovX=self.FoVx, fovY=self.FoVy).transpose(0,1).cuda()
+        self.projection_matrix = getProjectionMatrix(znear=self.znear, zfar=self.zfar, fovX=self.learnable_fovx, fovY=self.learnable_fovy).transpose(0,1).cuda()
         self.full_proj_transform = (self.world_view_transform.unsqueeze(0).bmm(self.projection_matrix.unsqueeze(0))).squeeze(0)
         self.camera_center = self.world_view_transform.inverse()[3, :3]
 
     def reset_intrinsic(self, FoVx, FoVy):
-        self.projection_matrix = getProjectionMatrix(znear=self.znear, zfar=self.zfar, fovX=FoVx, fovY=FoVy).transpose(0,1).cuda()
+        #self.projection_matrix = getProjectionMatrix(znear=self.znear, zfar=self.zfar, fovX=FoVx, fovY=FoVy).transpose(0,1).cuda()
+        self.learnable_fovx = nn.Parameter(torch.tensor(FoVx).cuda().requires_grad_(True))
+        self.learnable_fovy = nn.Parameter(torch.tensor(FoVy).cuda().requires_grad_(True))
+        self.projection_matrix = getProjectionMatrix(znear=self.znear, zfar=self.zfar, fovX=self.learnable_fovx, fovY=self.learnable_fovy).transpose(0,1).cuda()
         self.full_proj_transform = (self.world_view_transform.unsqueeze(0).bmm(self.projection_matrix.unsqueeze(0))).squeeze(0)
 
     def reset_extrinsic(self, R, T):
@@ -104,7 +110,8 @@ class Camera(nn.Module):
         self.last_row = torch.tensor([[0., 0., 0., 1.]]).cuda()
         self.Rt = torch.cat((self.rotation, self.translation), dim=1)
         self.world_view_transform = torch.cat((self.Rt, self.last_row), dim=0).t()
-        self.projection_matrix = getProjectionMatrix(znear=self.znear, zfar=self.zfar, fovX=self.FoVx, fovY=self.FoVy).transpose(0,1).cuda()
+        #self.projection_matrix = getProjectionMatrix(znear=self.znear, zfar=self.zfar, fovX=self.FoVx, fovY=self.FoVy).transpose(0,1).cuda()
+        self.projection_matrix = getProjectionMatrix(znear=self.znear, zfar=self.zfar, fovX=self.learnable_fovx, fovY=self.learnable_fovy).transpose(0,1).cuda()
         self.full_proj_transform = (self.world_view_transform.unsqueeze(0).bmm(self.projection_matrix.unsqueeze(0))).squeeze(0)
         self.camera_center = self.world_view_transform.inverse()[3, :3]
 
@@ -163,6 +170,7 @@ class Camera(nn.Module):
 
     def get_full_proj_transform(self, global_rotation=torch.tensor([[1., 0, 0], [0, 1., 0], [0, 0, 1.]], device='cuda'), global_translation_scale=torch.tensor([1.], device='cuda')):
         self.world_view_transform = self.get_world_view_transform(global_rotation, global_translation_scale)
+        self.projection_matrix = getProjectionMatrix(znear=self.znear, zfar=self.zfar, fovX=self.learnable_fovx, fovY=self.learnable_fovy).transpose(0,1).cuda()
         self.full_proj_transform = (self.world_view_transform.unsqueeze(0).bmm(self.projection_matrix.unsqueeze(0))).squeeze(0)
         return self.full_proj_transform
 

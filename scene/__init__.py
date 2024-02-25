@@ -161,6 +161,21 @@ class Scene:
         #l_translation = [{'params': camera.delta_translation_z, 'lr': r_t_lr[1]} for camera in self.train_cameras[resolution_scale]]
         #l_translation = [{'params': camera.translation, 'lr': r_t_lr[1]} for camera in self.train_cameras[resolution_scale]]
         #l = [{'params': camera.parameters(), 'lr': 0.01} for camera in self.train_cameras[resolution_scale]]
+
+
+        l_fovx = [{'params': camera.learnable_fovx, 'lr': 0.01} for camera in self.train_cameras[resolution_scale]]
+        l_fovy = [{'params': camera.learnable_fovy, 'lr': 0.01} for camera in self.train_cameras[resolution_scale]]
+        self.optimizer_fovx = torch.optim.Adam(l_fovx, eps=1e-15)
+        self.optimizer_fovy = torch.optim.Adam(l_fovy, eps=1e-15)
+        self.scheduler_fovx = torch.optim.lr_scheduler.MultiStepLR(self.optimizer_fovx, milestones=[10000], gamma=1.)
+        self.scheduler_fovy = torch.optim.lr_scheduler.MultiStepLR(self.optimizer_fovy, milestones=[10000], gamma=1.)
+        l_fovx_test = [{'params': camera.learnable_fovx, 'lr': 0.001} for camera in self.test_cameras[resolution_scale]]
+        l_fovy_test = [{'params': camera.learnable_fovy, 'lr': 0.001} for camera in self.test_cameras[resolution_scale]]
+        self.optimizer_fovx_test = torch.optim.Adam(l_fovx_test, eps=1e-15)
+        self.optimizer_fovy_test = torch.optim.Adam(l_fovy_test, eps=1e-15)
+        self.scheduler_fovx_test = torch.optim.lr_scheduler.MultiStepLR(self.optimizer_fovx_test, milestones=[10000], gamma=1.)
+        self.scheduler_fovy_test = torch.optim.lr_scheduler.MultiStepLR(self.optimizer_fovy_test, milestones=[10000], gamma=1.)
+
         self.optimizer_rotation = torch.optim.Adam(l_rotation, eps=1e-15)
         self.optimizer_translation = torch.optim.Adam(l_translation, eps=1e-15)
         self.scheduler_rotation = torch.optim.lr_scheduler.MultiStepLR(self.optimizer_rotation, milestones=[10000], gamma=0.1)

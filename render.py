@@ -67,7 +67,7 @@ def render_set(model_path, name, iteration, views, gaussians, pipeline, backgrou
         torchvision.utils.save_image(gt, os.path.join(gts_path, '{0:05d}'.format(idx) + ".png"))
         #torchvision.utils.save_image(depth, os.path.join(depth_path, '{0:05d}'.format(idx) + ".png"))
 
-def render_sets(dataset : ModelParams, iteration : int, pipeline : PipelineParams, skip_train : bool, skip_test : bool, mode: str, hybrid: bool, opt_test_cam: bool):
+def render_sets(dataset : ModelParams, iteration : int, pipeline : PipelineParams, skip_train : bool, skip_test : bool, mode: str, hybrid: bool, opt_test_cam: bool, opt_intrinsic: bool):
     gaussians = GaussianModel(dataset.sh_degree, dataset.asg_degree)
     scene = Scene(dataset, gaussians, load_iteration=iteration, shuffle=False)
     specular = None
@@ -117,6 +117,15 @@ def render_sets(dataset : ModelParams, iteration : int, pipeline : PipelineParam
                 scene.scheduler_rotation_test.step()
                 scene.scheduler_translation_test.step()
 
+                if opt_intrinsic:
+                    scene.optimizer_fovx.step()
+                    scene.optimizer_fovy.step()
+                    scene.optimizer_fovx.zero_grad(set_to_none=True)
+                    scene.optimizer_fovy.zero_grad(set_to_none=True)
+                    scene.scheduler_fovx.step()
+                    scene.scheduler_fovy.step()
+
+        torch.save(scene.unnoisy_train_cameras, os.path.join(scene.model_path, 'opt_test_cam.pt'))
 
 
     if not skip_train:
@@ -179,6 +188,8 @@ if __name__ == "__main__":
     parser.add_argument("--quiet", action="store_true")
     parser.add_argument("--mode", default='render', choices=['render', 'view', 'all', 'pose', 'original'])
     parser.add_argument("--opt_test_cam", action="store_true", default=False)
+    # if opt camera intrinsic
+    parser.add_argument("--opt_intrinsic", action="store_true", default=False)
     # wandb setting
     parser.add_argument("--wandb", action="store_true", default=False)
     parser.add_argument("--wandb_project_name", type=str, default = None)
@@ -200,4 +211,4 @@ if __name__ == "__main__":
                                set_group=args.wandb_group_name
                                )
 
-    render_sets(model.extract(args), args.iteration, pipeline.extract(args), args.skip_train, args.skip_test, args.mode, args.hybrid, args.opt_test_cam)
+    render_sets(model.extract(args), args.iteration, pipeline.extract(args), args.skip_train, args.skip_test, args.mode, args.hybrid, args.opt_test_cam, args.opt_intrinsic)

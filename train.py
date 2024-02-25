@@ -61,7 +61,7 @@ if torch.cuda.is_available():
 np.random.seed(seed_value)
 random.seed(seed_value)
 
-def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoint_iterations, checkpoint, debug_from, use_wandb=False, random_init=False, hybrid=False, opt_cam=False, r_t_noise=[0., 0.], r_t_lr=[0.001, 0.001], global_alignment_lr=0.001):
+def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoint_iterations, checkpoint, debug_from, use_wandb=False, random_init=False, hybrid=False, opt_cam=False, opt_intrinsic=False, r_t_noise=[0., 0.], r_t_lr=[0.001, 0.001], global_alignment_lr=0.001):
     first_iter = 0
     tb_writer = prepare_output_and_logger(dataset)
     gaussians = GaussianModel(dataset.sh_degree, dataset.asg_degree)
@@ -400,24 +400,19 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
                 # do not update camera pose when densify or prune gaussians
                 if opt_cam:
                     if iteration % opt.densification_interval != 0:# and iteration > opt.densify_from_iter:
-                        #if iteration > 10000:
-                        #    viewpoint_cam.delta_quaternion.grad[0] = 20 * viewpoint_cam.delta_quaternion.grad[0]
-                        #    viewpoint_cam.delta_quaternion.grad[1] = 20 * viewpoint_cam.delta_quaternion.grad[1]
-                        #    viewpoint_cam.delta_quaternion.grad[2] = 20 * viewpoint_cam.delta_quaternion.grad[2]
-                        #    viewpoint_cam.delta_quaternion.grad[3] = 20 * viewpoint_cam.delta_quaternion.grad[3]
-                        #    viewpoint_cam.delta_translation.grad[2] = 10 * viewpoint_cam.delta_translation.grad[2]
-                        #    viewpoint_cam.delta_translation.grad[0] = 10 * viewpoint_cam.delta_translation.grad[0]
-                        #    viewpoint_cam.delta_translation.grad[1] = 10 * viewpoint_cam.delta_translation.grad[1]
-                        #if iteration > 20000:
-                        #    viewpoint_cam.delta_translation.grad[2] = 20 * viewpoint_cam.delta_translation.grad[2]
-                        #    viewpoint_cam.delta_translation.grad[0] = 20 * viewpoint_cam.delta_translation.grad[0]
-                        #    viewpoint_cam.delta_translation.grad[1] = 20 * viewpoint_cam.delta_translation.grad[1]
                         scene.optimizer_rotation.step()
                         scene.optimizer_translation.step()
                         scene.optimizer_rotation.zero_grad(set_to_none=True)
                         scene.optimizer_translation.zero_grad(set_to_none=True)
                         scene.scheduler_rotation.step()
                         scene.scheduler_translation.step()
+                        if opt_intrinsic:
+                            scene.optimizer_fovx.step()
+                            scene.optimizer_fovy.step()
+                            scene.optimizer_fovx.zero_grad(set_to_none=True)
+                            scene.optimizer_fovy.zero_grad(set_to_none=True)
+                            scene.scheduler_fovx.step()
+                            scene.scheduler_fovy.step()
 
                         if iteration > 100000 and iteration % 100 == 0:
                             scene.optimizer_global_alignment.step()
@@ -590,6 +585,8 @@ if __name__ == "__main__":
     parser.add_argument("--hybrid", action="store_true", default=False)
     # if optimize camera poses
     parser.add_argument("--opt_cam", action="store_true", default=False)
+    # if opt camera intrinsic
+    parser.add_argument("--opt_intrinsic", action="store_true", default=False)
     parser.add_argument("--r_t_lr", nargs="+", type=float, default=[0.01, 0.01])
     # learning rate for global alignment
     parser.add_argument('--global_alignment_lr', type=float, default=0.01)
@@ -624,7 +621,7 @@ if __name__ == "__main__":
     # Start GUI server, configure and run training
     network_gui.init(args.ip, args.port)
     torch.autograd.set_detect_anomaly(args.detect_anomaly)
-    training(lp.extract(args), op.extract(args), pp.extract(args), args.test_iterations, args.save_iterations, args.checkpoint_iterations, args.start_checkpoint, args.debug_from, use_wandb=args.wandb, random_init=args.random_init_pc, hybrid=args.hybrid, opt_cam=args.opt_cam, r_t_lr=args.r_t_lr, r_t_noise=args.r_t_noise, global_alignment_lr=args.global_alignment_lr)
+    training(lp.extract(args), op.extract(args), pp.extract(args), args.test_iterations, args.save_iterations, args.checkpoint_iterations, args.start_checkpoint, args.debug_from, use_wandb=args.wandb, random_init=args.random_init_pc, hybrid=args.hybrid, opt_cam=args.opt_cam, opt_intrinsic=args.opt_intrinsic, r_t_lr=args.r_t_lr, r_t_noise=args.r_t_noise, global_alignment_lr=args.global_alignment_lr)
 
     # All done
     print("\nTraining complete.")
