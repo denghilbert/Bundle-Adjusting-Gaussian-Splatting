@@ -120,6 +120,19 @@ def readColmapCameras(cam_extrinsics, cam_intrinsics, images_folder):
                 [0., focal_length_x, height * 0.5],
                 [0., 0., 1.]
             ], dtype=np.float32)
+        elif intr.model == "FULL_OPENCV":
+            focal_length_x = intr.params[0]
+            focal_length_y = intr.params[1]
+            FovY = focal2fov(focal_length_y, height)
+            FovX = focal2fov(focal_length_x, width)
+            cx = intr.params[2]
+            cy = intr.params[3]
+            #import pdb;pdb.set_trace()
+            intrinsic_matrix = np.array([
+                [focal_length_x, 0., width * 0.5],
+                [0., focal_length_x, height * 0.5],
+                [0., 0., 1.]
+            ], dtype=np.float32)
         else:
             assert False, "Colmap camera model not handled: only undistorted datasets (PINHOLE or SIMPLE_PINHOLE cameras) supported!"
 
