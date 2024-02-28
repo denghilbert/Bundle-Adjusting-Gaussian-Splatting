@@ -70,6 +70,9 @@ def evaluate(model_paths, eval_set):
                 lpipss = []
 
                 for idx in tqdm(range(len(renders)), desc="Metric evaluation progress"):
+                    #if psnr(renders[idx], gts[idx]).item() < 25:
+                    #    print(psnr(renders[idx], gts[idx]).item())
+                    #else:
                     ssims.append(ssim(renders[idx], gts[idx]))
                     psnrs.append(psnr(renders[idx], gts[idx]))
                     lpipss.append(lpips(renders[idx], gts[idx], net_type='vgg'))

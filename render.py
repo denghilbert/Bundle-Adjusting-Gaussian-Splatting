@@ -85,6 +85,8 @@ def render_sets(dataset : ModelParams, iteration : int, pipeline : PipelineParam
     viewpoint_stack = scene.getTestCameras().copy()
     progress_bar = tqdm(range(0, 50000), desc="Training progress")
     if opt_test_cam:
+        if os.path.join(scene.model_path, 'opt_test_cam.pt'):
+            scene.test_cameras = torch.load(os.path.join(scene.model_path, 'opt_test_cam.pt'))
         for iteration in range(50000):
             if iteration % 1000 == 0:
                 pose_gt, pose_aligned = scene.visTestCameras()
@@ -125,7 +127,7 @@ def render_sets(dataset : ModelParams, iteration : int, pipeline : PipelineParam
                     scene.scheduler_fovx.step()
                     scene.scheduler_fovy.step()
 
-        torch.save(scene.unnoisy_train_cameras, os.path.join(scene.model_path, 'opt_test_cam.pt'))
+        torch.save(scene.test_cameras, os.path.join(scene.model_path, 'opt_test_cam.pt'))
 
 
     if not skip_train:
