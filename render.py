@@ -66,6 +66,7 @@ def render_set(model_path, name, iteration, views, gaussians, pipeline, backgrou
             results = render(view, gaussians, pipeline, background, mlp_color, global_alignment=global_alignment)
             rendering, depth_tensor = results["render"], results["depth"]
             depth_tensor_normalized = (depth_tensor - depth_tensor[mask].min()) / (depth_tensor[mask].max() - depth_tensor[mask].min())
+            depth_tensor_grey = depth_tensor_normalized.repeat(3, 1, 1)
             depth_array = depth_tensor_normalized.squeeze().cpu().detach().numpy()
             depth_colored = plt.get_cmap('viridis')(depth_array)[:, :, :3]  # Drop the alpha channel
             depth_colored_tensor = torch.from_numpy(depth_colored).permute(2, 0, 1).float()  # Rearrange dimensions to CxHxW
@@ -75,6 +76,8 @@ def render_set(model_path, name, iteration, views, gaussians, pipeline, backgrou
         torchvision.utils.save_image(rendering, os.path.join(render_path, '{0:05d}'.format(idx) + ".png"))
         torchvision.utils.save_image(gt, os.path.join(gts_path, '{0:05d}'.format(idx) + ".png"))
         torchvision.utils.save_image(depth_colored_tensor, os.path.join(depth_path, '{0:05d}'.format(idx) + ".png"))
+        torchvision.utils.save_image(depth_colored_tensor, os.path.join(depth_path, '{0:05d}'.format(idx) + ".png"))
+        torchvision.utils.save_image(depth_tensor_grey, os.path.join(depth_path, 'grey_{0:05d}'.format(idx) + ".png"))
 
 def render_sets(dataset : ModelParams, iteration : int, pipeline : PipelineParams, skip_train : bool, skip_test : bool, mode: str, hybrid: bool, opt_test_cam: bool, opt_intrinsic: bool):
     gaussians = GaussianModel(dataset.sh_degree, dataset.asg_degree)
