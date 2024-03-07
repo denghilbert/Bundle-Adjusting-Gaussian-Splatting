@@ -32,6 +32,9 @@ from utils.util_vis import vis_cameras
 from random import randint
 from utils.loss_utils import l1_loss, ssim, kl_divergence, l2_loss
 import matplotlib.pyplot as plt
+from utils.camera import Lie
+from scipy.spatial.transform import Rotation as R
+from scipy.spatial.transform import Slerp
 
 opt_vis = EasyDict({'group': 'exp_synthetic', 'name': 'l2g_lego', 'model': 'l2g_nerf', 'yaml': 'l2g_nerf_blender', 'seed': 0, 'gpu': 0, 'cpu': False, 'load': None, 'arch': {'layers_feat': [None, 256, 256, 256, 256, 256, 256, 256, 256], 'layers_rgb': [None, 128, 3], 'skip': [4], 'posenc': {'L_3D': 10, 'L_view': 4}, 'density_activ': 'softplus', 'tf_init': True, 'layers_warp': [None, 256, 256, 256, 256, 256, 256, 6], 'skip_warp': [4], 'embedding_dim': 128}, 'data': {'root': '/the/data/path/of/nerf_synthetic/', 'dataset': 'blender', 'image_size': [400, 400], 'num_workers': 4, 'preload': True, 'augment': {}, 'center_crop': None, 'val_on_test': False, 'train_sub': None, 'val_sub': 4, 'scene': 'lego', 'bgcolor': 1}, 'loss_weight': {'render': 0, 'render_fine': None, 'global_alignment': 2}, 'optim': {'lr': 0.0005, 'lr_end': 0.0001, 'algo': 'Adam', 'sched': {'type': 'ExponentialLR', 'gamma': None}, 'lr_pose': 0.001, 'lr_pose_end': 1e-08, 'sched_pose': {'type': 'ExponentialLR', 'gamma': None}, 'warmup_pose': None, 'test_photo': True, 'test_iter': 100}, 'batch_size': None, 'max_epoch': None, 'resume': False, 'output_root': 'output', 'tb': {'num_images': [4, 8]}, 'visdom': {'server': 'localhost', 'port': 8600, 'cam_depth': 0.5}, 'freq': {'scalar': 200, 'vis': 1000, 'val': 2000, 'ckpt': 5000}, 'nerf': {'view_dep': True, 'depth': {'param': 'metric', 'range': [2, 6]}, 'sample_intvs': 128, 'sample_stratified': True, 'fine_sampling': False, 'sample_intvs_fine': None, 'rand_rays': 1024, 'density_noise_reg': None, 'setbg_opaque': False}, 'camera': {'model': 'perspective', 'ndc': False, 'noise': True, 'noise_r': 0.07, 'noise_t': 0.5}, 'max_iter': 200000, 'trimesh': {'res': 128, 'range': [-1.2, 1.2], 'thres': 25.0, 'chunk_size': 16384}, 'barf_c2f': [0.1, 0.5], 'error_map_size': None, 'output_path': 'output/exp_synthetic/l2g_lego', 'device': 'cuda:0', 'H': 400, 'W': 400})
 is_open = check_socket_open(opt_vis.visdom.server,opt_vis.visdom.port)
@@ -43,10 +46,13 @@ def render_set(model_path, name, iteration, views, gaussians, pipeline, backgrou
     render_path = os.path.join(model_path, name, "ours_{}".format(iteration), "renders")
     gts_path = os.path.join(model_path, name, "ours_{}".format(iteration), "gt")
     depth_path = os.path.join(model_path, name, "ours_{}".format(iteration), "depth")
+    mask_path = os.path.join(model_path, name, "ours_{}".format(iteration), "mask")
 
     makedirs(render_path, exist_ok=True)
     makedirs(gts_path, exist_ok=True)
     makedirs(depth_path, exist_ok=True)
+    makedirs(mask_path, exist_ok=True)
+
 
     for idx, view in enumerate(tqdm(views, desc="Rendering progress")):
         gt = view.original_image[0:3, :, :]
@@ -64,7 +70,7 @@ def render_set(model_path, name, iteration, views, gaussians, pipeline, backgrou
             mlp_color = 0
             global_alignment = [torch.tensor([[1., 0, 0], [0, 1., 0], [0, 0, 1.]], device='cuda'), torch.tensor([1.], device='cuda')]
             results = render(view, gaussians, pipeline, background, mlp_color, global_alignment=global_alignment)
-            rendering, depth_tensor = results["render"], results["depth"]
+            rendering, depth_tensor, weight_mask = results["render"], results["depth"], results["weights"]
             depth_tensor_normalized = (depth_tensor - depth_tensor[mask].min()) / (depth_tensor[mask].max() - depth_tensor[mask].min())
             depth_tensor_grey = depth_tensor_normalized.repeat(3, 1, 1)
             depth_array = depth_tensor_normalized.squeeze().cpu().detach().numpy()
@@ -78,6 +84,7 @@ def render_set(model_path, name, iteration, views, gaussians, pipeline, backgrou
         torchvision.utils.save_image(depth_colored_tensor, os.path.join(depth_path, '{0:05d}'.format(idx) + ".png"))
         torchvision.utils.save_image(depth_colored_tensor, os.path.join(depth_path, '{0:05d}'.format(idx) + ".png"))
         torchvision.utils.save_image(depth_tensor_grey, os.path.join(depth_path, 'grey_{0:05d}'.format(idx) + ".png"))
+        torchvision.utils.save_image(weight_mask, os.path.join(mask_path, 'mask_{0:05d}'.format(idx) + ".png"))
 
 def render_sets(dataset : ModelParams, iteration : int, pipeline : PipelineParams, skip_train : bool, skip_test : bool, mode: str, hybrid: bool, opt_test_cam: bool, opt_intrinsic: bool):
     gaussians = GaussianModel(dataset.sh_degree, dataset.asg_degree)
@@ -92,14 +99,12 @@ def render_sets(dataset : ModelParams, iteration : int, pipeline : PipelineParam
 
     render_func = render_set
 
-    scene.loadAlignCameras(if_vis_test=True, path=scene.model_path)
+    #scene.loadAlignCameras(if_vis_test=True, path=scene.model_path)
 
     viewpoint_stack = scene.getTestCameras().copy()
 
-    if os.path.join(scene.model_path, 'opt_test_cam.pt'):
-        scene.test_cameras = torch.load(os.path.join(scene.model_path, 'opt_test_cam.pt'))
     if opt_test_cam:
-        if os.path.join(scene.model_path, 'opt_test_cam.pt'):
+        if os.path.exists(os.path.join(scene.model_path, 'opt_test_cam.pt')):
             scene.test_cameras = torch.load(os.path.join(scene.model_path, 'opt_test_cam.pt'))
         progress_bar = tqdm(range(0, 50000), desc="Training progress")
         for iteration in range(50000):
