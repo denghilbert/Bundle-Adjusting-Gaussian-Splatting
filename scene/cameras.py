@@ -151,6 +151,9 @@ class Camera(nn.Module):
 
         return self.world_view_transform.t()
 
+    def get_intrinsic(self):
+        return self.projection_matrix
+
     def get_world_view_transform(self, global_rotation=torch.tensor([[1., 0, 0], [0, 1., 0], [0, 0, 1.]], device='cuda'), global_translation_scale=torch.tensor([1.], device='cuda')):
         #self.rotation = self.lie.so3_to_SO3(self.so3) # we have error right here, but it doesn't matter
         self.quaternion = self.init_quaternion + self.delta_quaternion
