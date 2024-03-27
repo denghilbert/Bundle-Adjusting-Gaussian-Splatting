@@ -183,7 +183,14 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
             projection_loss_count = 10000
 
         # render current view
-        render_pkg = render(viewpoint_cam, gaussians, pipe, background, mlp_color, iteration=iteration, hybrid=hybrid, global_alignment=scene.getGlobalAlignment())
+        gaussians_xyz = gaussians.get_xyz
+        gaussians_xyz_homo = torch.cat((gaussians_xyz, torch.ones(gaussians_xyz.size(0), 1).cuda()), dim=1)
+        # glm use the transpose of w2c
+        w2c = viewpoint_cam.get_world_view_transform().t()
+        p_w2c = (w2c @ gaussians_xyz_homo.T).T.cuda()
+        displacement_p_w2c = torch.zeros(gaussians_xyz.shape[0], 2)
+        #import pdb;pdb.set_trace()
+        render_pkg = render(viewpoint_cam, gaussians, pipe, background, mlp_color, p_w2c, iteration=iteration, hybrid=hybrid, global_alignment=scene.getGlobalAlignment())
         image, viewspace_point_tensor, visibility_filter, radii = render_pkg["render"], render_pkg["viewspace_points"], render_pkg["visibility_filter"], render_pkg["radii"]
 
 
@@ -218,12 +225,18 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
 
         loss.backward(retain_graph=True)
 
-        if iteration == 7001:
+        if iteration == 7001 and False:
             outlier_stack = scene.getTrainCameras().copy()
             outliers = []
             uid_list = []
             best_ssim = []
             for idx, viewpoint_cam in enumerate(outlier_stack):
+                gaussians_xyz = gaussians.get_xyz
+                gaussians_xyz_homo = torch.cat((gaussians_xyz, torch.ones(gaussians_xyz.size(0), 1).cuda()), dim=1)
+                # glm use the transpose of w2c
+                w2c = viewpoint_cam.get_world_view_transform().t()
+                p_w2c = (w2c @ gaussians_xyz_homo.T).T.cuda()
+                displacement_p_w2c = torch.zeros(gaussians_xyz.shape[0], 2)
                 render_pkg = render(viewpoint_cam, gaussians, pipe, background, mlp_color, iteration=iteration, hybrid=hybrid, global_alignment=scene.getGlobalAlignment())
                 image, _, _, _ = render_pkg["render"], render_pkg["viewspace_points"], render_pkg["visibility_filter"], render_pkg["radii"]
                 gt_image = viewpoint_cam.original_image.cuda()
@@ -252,6 +265,12 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
             if len(outliers) > 0:
                 for i in range(2000):
                     viewpoint_cam = outliers[i % len(outliers)]
+                    gaussians_xyz = gaussians.get_xyz
+                    gaussians_xyz_homo = torch.cat((gaussians_xyz, torch.ones(gaussians_xyz.size(0), 1).cuda()), dim=1)
+                    # glm use the transpose of w2c
+                    w2c = viewpoint_cam.get_world_view_transform().t()
+                    p_w2c = (w2c @ gaussians_xyz_homo.T).T.cuda()
+                    displacement_p_w2c = torch.zeros(gaussians_xyz.shape[0], 2)
                     render_pkg = render(viewpoint_cam, gaussians, pipe, background, mlp_color, iteration=iteration, hybrid=hybrid, global_alignment=scene.getGlobalAlignment())
                     image, _, _, _ = render_pkg["render"], render_pkg["viewspace_points"], render_pkg["visibility_filter"], render_pkg["radii"]
                     gt_image = viewpoint_cam.original_image.cuda()
@@ -326,26 +345,6 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
             }
             if use_wandb:
                 wandb.log(images, step=iteration)
-
-        #if opt_cam and viewpoint_cam.uid == 50:
-        #    rt_scalars = {
-        #        f"camera50_rotation/r_w": viewpoint_cam.delta_quaternion[0].item(),
-        #        f"camera50_rotation/r_x": viewpoint_cam.delta_quaternion[1].item(),
-        #        f"camera50_rotation/r_y": viewpoint_cam.delta_quaternion[2].item(),
-        #        f"camera50_rotation/r_z": viewpoint_cam.delta_quaternion[3].item(),
-        #        f"camera50_rotation/r_w_grad": viewpoint_cam.delta_quaternion.grad[0].item(),
-        #        f"camera50_rotation/r_x_grad": viewpoint_cam.delta_quaternion.grad[1].item(),
-        #        f"camera50_rotation/r_y_grad": viewpoint_cam.delta_quaternion.grad[2].item(),
-        #        f"camera50_rotation/r_z_grad": viewpoint_cam.delta_quaternion.grad[3].item(),
-        #        f"camera50_translation/t_x": viewpoint_cam.delta_translation[0].item(),
-        #        f"camera50_translation/t_y": viewpoint_cam.delta_translation[1].item(),
-        #        f"camera50_translation/t_z": viewpoint_cam.delta_translation[2].item(),
-        #        f"camera50_translation/t_x_grad": viewpoint_cam.delta_translation.grad[0].item(),
-        #        f"camera50_translation/t_y_grad": viewpoint_cam.delta_translation.grad[1].item(),
-        #        f"camera50_translation/t_z_grad": viewpoint_cam.delta_translation.grad[2].item(),
-        #    }
-        #    if use_wandb:
-        #        wandb.log(rt_scalars, step=iteration)
 
         iter_end.record()
 
@@ -495,7 +494,12 @@ def training_report(tb_writer, iteration, Ll1, loss, l1_loss, elapsed, testing_i
                 l1_test = 0.0
                 psnr_test = 0.0
                 for idx, viewpoint in enumerate(config['cameras']):
-                    image = torch.clamp(renderFunc(viewpoint, scene.gaussians, *renderArgs, global_alignment=scene.getGlobalAlignment())["render"], 0.0, 1.0)
+                    gaussians_xyz = scene.gaussians.get_xyz
+                    gaussians_xyz_homo = torch.cat((gaussians_xyz, torch.ones(gaussians_xyz.size(0), 1).cuda()), dim=1)
+                    # glm use the transpose of w2c
+                    w2c = viewpoint.get_world_view_transform().t()
+                    p_w2c = (w2c @ gaussians_xyz_homo.T).T.cuda()
+                    image = torch.clamp(renderFunc(viewpoint, scene.gaussians, *renderArgs, p_w2c, global_alignment=scene.getGlobalAlignment())["render"], 0.0, 1.0)
                     gt_image = torch.clamp(viewpoint.original_image.to("cuda"), 0.0, 1.0)
                     if tb_writer and (idx < 5):
                         tb_writer.add_images(config['name'] + "_view_{}/render".format(viewpoint.image_name), image[None], global_step=iteration)
