@@ -231,12 +231,6 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
             uid_list = []
             best_ssim = []
             for idx, viewpoint_cam in enumerate(outlier_stack):
-                gaussians_xyz = gaussians.get_xyz
-                gaussians_xyz_homo = torch.cat((gaussians_xyz, torch.ones(gaussians_xyz.size(0), 1).cuda()), dim=1)
-                # glm use the transpose of w2c
-                w2c = viewpoint_cam.get_world_view_transform().t()
-                p_w2c = (w2c @ gaussians_xyz_homo.T).T.cuda()
-                displacement_p_w2c = torch.zeros(gaussians_xyz.shape[0], 2)
                 render_pkg = render(viewpoint_cam, gaussians, pipe, background, mlp_color, iteration=iteration, hybrid=hybrid, global_alignment=scene.getGlobalAlignment())
                 image, _, _, _ = render_pkg["render"], render_pkg["viewspace_points"], render_pkg["visibility_filter"], render_pkg["radii"]
                 gt_image = viewpoint_cam.original_image.cuda()
@@ -265,12 +259,6 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
             if len(outliers) > 0:
                 for i in range(2000):
                     viewpoint_cam = outliers[i % len(outliers)]
-                    gaussians_xyz = gaussians.get_xyz
-                    gaussians_xyz_homo = torch.cat((gaussians_xyz, torch.ones(gaussians_xyz.size(0), 1).cuda()), dim=1)
-                    # glm use the transpose of w2c
-                    w2c = viewpoint_cam.get_world_view_transform().t()
-                    p_w2c = (w2c @ gaussians_xyz_homo.T).T.cuda()
-                    displacement_p_w2c = torch.zeros(gaussians_xyz.shape[0], 2)
                     render_pkg = render(viewpoint_cam, gaussians, pipe, background, mlp_color, iteration=iteration, hybrid=hybrid, global_alignment=scene.getGlobalAlignment())
                     image, _, _, _ = render_pkg["render"], render_pkg["viewspace_points"], render_pkg["visibility_filter"], render_pkg["radii"]
                     gt_image = viewpoint_cam.original_image.cuda()
