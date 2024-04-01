@@ -17,6 +17,7 @@ from scene.dataset_readers import sceneLoadTypeCallbacks
 from scene.gaussian_model import GaussianModel
 from scene.specular_model import SpecularModel
 from scene.cameras import quaternion_to_rotation_matrix, rotation_matrix_to_quaternion
+from scene.iresnet import iResNet
 from arguments import ModelParams
 from utils.camera_utils import cameraList_from_camInfos, camera_to_JSON
 from utils.camera import Lie
@@ -50,13 +51,14 @@ class Scene:
 
     gaussians : GaussianModel
 
-    def __init__(self, args : ModelParams, gaussians : GaussianModel, load_iteration=None, shuffle=True, resolution_scales=[1.0], random_init=False, r_t_noise=[0., 0.], r_t_lr=[0.001, 0.001], global_alignment_lr=0.001):
+    def __init__(self, args : ModelParams, gaussians : GaussianModel, lens_net : iResNet, load_iteration=None, shuffle=True, resolution_scales=[1.0], random_init=False, r_t_noise=[0., 0.], r_t_lr=[0.001, 0.001], global_alignment_lr=0.001):
         """b
         :param path: Path to colmap scene main folder.
         """
         self.model_path = args.model_path
         self.loaded_iter = None
         self.gaussians = gaussians
+        self.lens_net = lens_net
         self.lie = Lie()
 
         if load_iteration:
@@ -189,6 +191,10 @@ class Scene:
         l_global_alignment = [{'params': self.global_translation, 'lr': global_alignment_lr}, {'params': self.global_quaternion, 'lr': global_alignment_lr}]
         self.optimizer_global_alignment = torch.optim.Adam(l_global_alignment, eps=1e-15)
         self.scheduler_global_aligment = torch.optim.lr_scheduler.MultiStepLR(self.optimizer_rotation, milestones=[7000, 50000], gamma=1)
+
+        l_lens_net = [{'params': self.lens_net.parameters(), 'lr': 1e-4}]
+        self.optimizer_lens_net = torch.optim.Adam(l_lens_net, eps=1e-15)
+        self.scheduler_lens_net = torch.optim.lr_scheduler.MultiStepLR(self.optimizer_lens_net, milestones=[7000, 50000], gamma=1)
 
         #self.test_cameras[resolution_scale] = self.train_cameras[resolution_scale][90:]
         #self.train_cameras[resolution_scale] = self.train_cameras[resolution_scale][:90]

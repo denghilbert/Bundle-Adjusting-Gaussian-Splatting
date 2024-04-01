@@ -16,7 +16,7 @@ import random
 from utils.loss_utils import l1_loss, ssim, kl_divergence, l2_loss
 from gaussian_renderer import render, network_gui
 import sys
-from scene import Scene, GaussianModel, SpecularModel
+from scene import Scene, GaussianModel, SpecularModel, iResNet
 from utils.general_utils import safe_state, get_linear_noise_func, linear_to_srgb
 from projection_test import image_pair_candidates, light_glue_simple, projection_loss, dist_point_point, dist_point_line, correspondence_projection
 import uuid
@@ -61,15 +61,16 @@ if torch.cuda.is_available():
 np.random.seed(seed_value)
 random.seed(seed_value)
 
-def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoint_iterations, checkpoint, debug_from, use_wandb=False, random_init=False, hybrid=False, opt_cam=False, opt_intrinsic=False, r_t_noise=[0., 0.], r_t_lr=[0.001, 0.001], global_alignment_lr=0.001):
+def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoint_iterations, checkpoint, debug_from, use_wandb=False, random_init=False, hybrid=False, opt_cam=False, opt_distortion=False, opt_intrinsic=False, r_t_noise=[0., 0.], r_t_lr=[0.001, 0.001], global_alignment_lr=0.001):
     first_iter = 0
     tb_writer = prepare_output_and_logger(dataset)
     gaussians = GaussianModel(dataset.sh_degree, dataset.asg_degree)
     if hybrid:
         specular_mlp = SpecularModel()
         specular_mlp.train_setting(opt)
+    lens_net = iResNet()
 
-    scene = Scene(dataset, gaussians, random_init=random_init, r_t_noise=r_t_noise, r_t_lr=r_t_lr, global_alignment_lr=global_alignment_lr)
+    scene = Scene(dataset, gaussians, lens_net, random_init=random_init, r_t_noise=r_t_noise, r_t_lr=r_t_lr, global_alignment_lr=global_alignment_lr)
     gaussians.training_setup(opt)
     if checkpoint:
         (model_params, first_iter) = torch.load(checkpoint)
@@ -183,14 +184,19 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
             projection_loss_count = 10000
 
         # render current view
-        gaussians_xyz = gaussians.get_xyz
+        gaussians_xyz = gaussians.get_xyz.detach()
         gaussians_xyz_homo = torch.cat((gaussians_xyz, torch.ones(gaussians_xyz.size(0), 1).cuda()), dim=1)
+        #gaussians_xyz_homo.retain_grad()
         # glm use the transpose of w2c
-        w2c = viewpoint_cam.get_world_view_transform().t()
+        w2c = viewpoint_cam.get_world_view_transform().t().detach()
         p_w2c = (w2c @ gaussians_xyz_homo.T).T.cuda()
-        displacement_p_w2c = torch.zeros(gaussians_xyz.shape[0], 2)
-        #import pdb;pdb.set_trace()
-        render_pkg = render(viewpoint_cam, gaussians, pipe, background, mlp_color, p_w2c, iteration=iteration, hybrid=hybrid, global_alignment=scene.getGlobalAlignment())
+        if opt_distortion:
+            undistorted_p_w2c = lens_net.forward(p_w2c[:, :3])
+            undistorted_p_w2c_homo = torch.cat((undistorted_p_w2c, torch.ones(undistorted_p_w2c.size(0), 1).cuda()), dim=1)
+        else:
+            undistorted_p_w2c_homo = p_w2c
+        render_pkg = render(viewpoint_cam, gaussians, pipe, background, mlp_color, undistorted_p_w2c_homo, iteration=iteration, hybrid=hybrid, global_alignment=scene.getGlobalAlignment())
+        #render_pkg = render(viewpoint_cam, gaussians, pipe, background, mlp_color, p_w2c, iteration=iteration, hybrid=hybrid, global_alignment=scene.getGlobalAlignment())
         image, viewspace_point_tensor, visibility_filter, radii = render_pkg["render"], render_pkg["viewspace_points"], render_pkg["visibility_filter"], render_pkg["radii"]
 
 
@@ -354,7 +360,7 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
                 #    download_pose_vis(os.path.join(args.model_path, 'plot'), iteration)
 
             # Log and save
-            training_report(tb_writer, iteration, Ll1, loss, l1_loss, iter_start.elapsed_time(iter_end), testing_iterations, scene, render, (pipe, background, mlp_color))
+            training_report(tb_writer, iteration, Ll1, loss, l1_loss, iter_start.elapsed_time(iter_end), testing_iterations, scene, render, (pipe, background, mlp_color), lens_net, opt_distortion)
             if (iteration in saving_iterations):
                 print("\n[ITER {}] Saving Gaussians".format(iteration))
                 scene.save(iteration)
@@ -383,6 +389,11 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
             if iteration < opt.iterations:
                 gaussians.optimizer.step()
                 gaussians.optimizer.zero_grad(set_to_none = True)
+
+                if opt_distortion:
+                    scene.optimizer_lens_net.step()
+                    scene.optimizer_lens_net.zero_grad(set_to_none=True)
+                    scene.scheduler_lens_net.step()
 
                 # do not update camera pose when densify or prune gaussians
                 if opt_cam:
@@ -465,7 +476,7 @@ def prepare_output_and_logger(args):
         print("Tensorboard not available: not logging progress")
     return tb_writer
 
-def training_report(tb_writer, iteration, Ll1, loss, l1_loss, elapsed, testing_iterations, scene : Scene, renderFunc, renderArgs):
+def training_report(tb_writer, iteration, Ll1, loss, l1_loss, elapsed, testing_iterations, scene : Scene, renderFunc, renderArgs, lens_net, opt_distortion):
     if tb_writer:
         tb_writer.add_scalar('train_loss_patches/l1_loss', Ll1.item(), iteration)
         tb_writer.add_scalar('train_loss_patches/total_loss', loss.item(), iteration)
@@ -482,12 +493,18 @@ def training_report(tb_writer, iteration, Ll1, loss, l1_loss, elapsed, testing_i
                 l1_test = 0.0
                 psnr_test = 0.0
                 for idx, viewpoint in enumerate(config['cameras']):
-                    gaussians_xyz = scene.gaussians.get_xyz
+                    gaussians_xyz = scene.gaussians.get_xyz.detach()
                     gaussians_xyz_homo = torch.cat((gaussians_xyz, torch.ones(gaussians_xyz.size(0), 1).cuda()), dim=1)
                     # glm use the transpose of w2c
-                    w2c = viewpoint.get_world_view_transform().t()
+                    w2c = viewpoint.get_world_view_transform().t().detach()
                     p_w2c = (w2c @ gaussians_xyz_homo.T).T.cuda()
-                    image = torch.clamp(renderFunc(viewpoint, scene.gaussians, *renderArgs, p_w2c, global_alignment=scene.getGlobalAlignment())["render"], 0.0, 1.0)
+                    if opt_distortion:
+                        undistorted_p_w2c = lens_net.forward(p_w2c[:, :3])
+                        undistorted_p_w2c_homo = torch.cat((undistorted_p_w2c, torch.ones(undistorted_p_w2c.size(0), 1).cuda()), dim=1)
+                    else:
+                        undistorted_p_w2c_homo = p_w2c
+                    image = torch.clamp(renderFunc(viewpoint, scene.gaussians, *renderArgs, undistorted_p_w2c_homo, global_alignment=scene.getGlobalAlignment())["render"], 0.0, 1.0)
+                    #image = torch.clamp(renderFunc(viewpoint, scene.gaussians, *renderArgs, p_w2c, global_alignment=scene.getGlobalAlignment())["render"], 0.0, 1.0)
                     gt_image = torch.clamp(viewpoint.original_image.to("cuda"), 0.0, 1.0)
                     if tb_writer and (idx < 5):
                         tb_writer.add_images(config['name'] + "_view_{}/render".format(viewpoint.image_name), image[None], global_step=iteration)
@@ -590,6 +607,8 @@ if __name__ == "__main__":
     parser.add_argument("--projection_loss", action="store_true", default=False)
     # if visualize camera pose
     parser.add_argument("--vis_pose", action="store_true", default=False)
+    # optimize distortion
+    parser.add_argument("--opt_distortion", action="store_true", default=False)
 
     args = parser.parse_args(sys.argv[1:])
     args.save_iterations.append(args.iterations)
@@ -613,7 +632,7 @@ if __name__ == "__main__":
     # Start GUI server, configure and run training
     network_gui.init(args.ip, args.port)
     torch.autograd.set_detect_anomaly(args.detect_anomaly)
-    training(lp.extract(args), op.extract(args), pp.extract(args), args.test_iterations, args.save_iterations, args.checkpoint_iterations, args.start_checkpoint, args.debug_from, use_wandb=args.wandb, random_init=args.random_init_pc, hybrid=args.hybrid, opt_cam=args.opt_cam, opt_intrinsic=args.opt_intrinsic, r_t_lr=args.r_t_lr, r_t_noise=args.r_t_noise, global_alignment_lr=args.global_alignment_lr)
+    training(lp.extract(args), op.extract(args), pp.extract(args), args.test_iterations, args.save_iterations, args.checkpoint_iterations, args.start_checkpoint, args.debug_from, use_wandb=args.wandb, random_init=args.random_init_pc, hybrid=args.hybrid, opt_cam=args.opt_cam, opt_distortion=args.opt_distortion, opt_intrinsic=args.opt_intrinsic, r_t_lr=args.r_t_lr, r_t_noise=args.r_t_noise, global_alignment_lr=args.global_alignment_lr)
 
     # All done
     print("\nTraining complete.")
