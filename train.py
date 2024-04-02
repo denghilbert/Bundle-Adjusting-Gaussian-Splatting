@@ -189,8 +189,8 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
         #gaussians_xyz_homo.retain_grad()
         # glm use the transpose of w2c
         w2c = viewpoint_cam.get_world_view_transform().t().detach()
-        p_w2c = (w2c @ gaussians_xyz_homo.T).T.cuda()
-        if opt_distortion:
+        p_w2c = (w2c @ gaussians_xyz_homo.T).T.cuda().detach()
+        if opt_distortion and iteration > 3000:
             undistorted_p_w2c = lens_net.forward(p_w2c[:, :3])
             undistorted_p_w2c_homo = torch.cat((undistorted_p_w2c, torch.ones(undistorted_p_w2c.size(0), 1).cuda()), dim=1)
         else:
@@ -198,7 +198,6 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
         render_pkg = render(viewpoint_cam, gaussians, pipe, background, mlp_color, undistorted_p_w2c_homo, iteration=iteration, hybrid=hybrid, global_alignment=scene.getGlobalAlignment())
         #render_pkg = render(viewpoint_cam, gaussians, pipe, background, mlp_color, p_w2c, iteration=iteration, hybrid=hybrid, global_alignment=scene.getGlobalAlignment())
         image, viewspace_point_tensor, visibility_filter, radii = render_pkg["render"], render_pkg["viewspace_points"], render_pkg["visibility_filter"], render_pkg["radii"]
-
 
         loss_projection = 0.
         if camera_matching_points != {} and projection_loss_count > 0:
@@ -360,7 +359,7 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
                 #    download_pose_vis(os.path.join(args.model_path, 'plot'), iteration)
 
             # Log and save
-            training_report(tb_writer, iteration, Ll1, loss, l1_loss, iter_start.elapsed_time(iter_end), testing_iterations, scene, render, (pipe, background, mlp_color), lens_net, opt_distortion)
+            training_report(tb_writer, iteration, Ll1, loss, l1_loss, iter_start.elapsed_time(iter_end), testing_iterations, scene, render, (pipe, background, mlp_color), lens_net, opt_distortion and iteration > 3000)
             if (iteration in saving_iterations):
                 print("\n[ITER {}] Saving Gaussians".format(iteration))
                 scene.save(iteration)
@@ -390,7 +389,8 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
                 gaussians.optimizer.step()
                 gaussians.optimizer.zero_grad(set_to_none = True)
 
-                if opt_distortion:
+                if opt_distortion and iteration > 3000:
+                    #scene.optimizer_lens_net.param_groups[0]['lr']
                     scene.optimizer_lens_net.step()
                     scene.optimizer_lens_net.zero_grad(set_to_none=True)
                     scene.scheduler_lens_net.step()
@@ -497,7 +497,7 @@ def training_report(tb_writer, iteration, Ll1, loss, l1_loss, elapsed, testing_i
                     gaussians_xyz_homo = torch.cat((gaussians_xyz, torch.ones(gaussians_xyz.size(0), 1).cuda()), dim=1)
                     # glm use the transpose of w2c
                     w2c = viewpoint.get_world_view_transform().t().detach()
-                    p_w2c = (w2c @ gaussians_xyz_homo.T).T.cuda()
+                    p_w2c = (w2c @ gaussians_xyz_homo.T).T.cuda().detach()
                     if opt_distortion:
                         undistorted_p_w2c = lens_net.forward(p_w2c[:, :3])
                         undistorted_p_w2c_homo = torch.cat((undistorted_p_w2c, torch.ones(undistorted_p_w2c.size(0), 1).cuda()), dim=1)
