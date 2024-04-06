@@ -27,7 +27,7 @@ def quaternion_multiply(q1, q2):
 
     return torch.stack((w, x, y, z), dim=-1)
 
-def render(viewpoint_camera, pc : GaussianModel, pipe, bg_color : torch.Tensor, mlp_color, displacement_p_w2c, hybrid=True, scaling_modifier = 1.0, override_color = None, iteration = None, global_alignment=None):
+def render(viewpoint_camera, pc : GaussianModel, pipe, bg_color : torch.Tensor, mlp_color, displacement_p_w2c, distortion_params, hybrid=True, scaling_modifier = 1.0, override_color = None, iteration = None, global_alignment=None):
     """
     Render the scene.
 
@@ -114,6 +114,7 @@ def render(viewpoint_camera, pc : GaussianModel, pipe, bg_color : torch.Tensor, 
         rotations = rotations,
         cov3D_precomp = cov3D_precomp,
         displacement_p_w2c = displacement_p_w2c,
+        distortion_params = distortion_params,
     )
 
     # Those Gaussians that were frustum culled or had a radius of 0 were not visible.

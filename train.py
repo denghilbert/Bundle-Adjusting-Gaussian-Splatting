@@ -121,6 +121,7 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
     first_iter += 1
     smooth_term = get_linear_noise_func(lr_init=0.1, lr_final=1e-15, lr_delay_mult=0.01, max_steps=20000)
 
+
     for iteration in range(first_iter, opt.iterations + 1):
         if network_gui.conn == None:
             network_gui.try_connect()
@@ -190,12 +191,19 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
         # glm use the transpose of w2c
         w2c = viewpoint_cam.get_world_view_transform().t().detach()
         p_w2c = (w2c @ gaussians_xyz_homo.T).T.cuda().detach()
+        intrinsic = viewpoint_cam.get_intrinsic().t().detach()
+        proj_mat = viewpoint_cam.get_full_proj_transform().t().detach()
+        p_proj = (proj_mat @ gaussians_xyz_homo.T).T.cuda().detach()
+        p_2d = p_proj[:, :2] / p_proj[:, -1:]
         if opt_distortion and iteration > 3000:
             undistorted_p_w2c = lens_net.forward(p_w2c[:, :3])
             undistorted_p_w2c_homo = torch.cat((undistorted_p_w2c, torch.ones(undistorted_p_w2c.size(0), 1).cuda()), dim=1)
         else:
             undistorted_p_w2c_homo = p_w2c
-        render_pkg = render(viewpoint_cam, gaussians, pipe, background, mlp_color, undistorted_p_w2c_homo, iteration=iteration, hybrid=hybrid, global_alignment=scene.getGlobalAlignment())
+        distortion_params = torch.zeros(8, requires_grad=True).cuda()
+        distortion_params.retain_grad()
+        import pdb;pdb.set_trace()
+        render_pkg = render(viewpoint_cam, gaussians, pipe, background, mlp_color, undistorted_p_w2c_homo, distortion_params, iteration=iteration, hybrid=hybrid, global_alignment=scene.getGlobalAlignment())
         #render_pkg = render(viewpoint_cam, gaussians, pipe, background, mlp_color, p_w2c, iteration=iteration, hybrid=hybrid, global_alignment=scene.getGlobalAlignment())
         image, viewspace_point_tensor, visibility_filter, radii = render_pkg["render"], render_pkg["viewspace_points"], render_pkg["visibility_filter"], render_pkg["radii"]
 
@@ -387,6 +395,7 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
             # Optimizer step
             if iteration < opt.iterations:
                 gaussians.optimizer.step()
+                import pdb;pdb.set_trace()
                 gaussians.optimizer.zero_grad(set_to_none = True)
 
                 if opt_distortion and iteration > 3000:
@@ -503,7 +512,8 @@ def training_report(tb_writer, iteration, Ll1, loss, l1_loss, elapsed, testing_i
                         undistorted_p_w2c_homo = torch.cat((undistorted_p_w2c, torch.ones(undistorted_p_w2c.size(0), 1).cuda()), dim=1)
                     else:
                         undistorted_p_w2c_homo = p_w2c
-                    image = torch.clamp(renderFunc(viewpoint, scene.gaussians, *renderArgs, undistorted_p_w2c_homo, global_alignment=scene.getGlobalAlignment())["render"], 0.0, 1.0)
+                    distortion_params = torch.zeros(8).cuda()
+                    image = torch.clamp(renderFunc(viewpoint, scene.gaussians, *renderArgs, undistorted_p_w2c_homo, distortion_params, global_alignment=scene.getGlobalAlignment())["render"], 0.0, 1.0)
                     #image = torch.clamp(renderFunc(viewpoint, scene.gaussians, *renderArgs, p_w2c, global_alignment=scene.getGlobalAlignment())["render"], 0.0, 1.0)
                     gt_image = torch.clamp(viewpoint.original_image.to("cuda"), 0.0, 1.0)
                     if tb_writer and (idx < 5):
