@@ -10,6 +10,7 @@
 #
 
 import torch
+from torch import nn
 from scene import Scene, SpecularModel
 import os
 from tqdm import tqdm
@@ -21,6 +22,7 @@ from utils.pose_utils import pose_spherical, render_wander_path
 from argparse import ArgumentParser
 from arguments import ModelParams, PipelineParams, get_combined_args
 from gaussian_renderer import GaussianModel
+from scene import iResNet
 import imageio
 import numpy as np
 import cv2
@@ -54,6 +56,10 @@ def render_set(model_path, name, iteration, views, gaussians, pipeline, backgrou
     makedirs(mask_path, exist_ok=True)
 
 
+    if os.path.exists(os.path.join(model_path, 'distortion_params.pt')):
+        distortion_params = torch.load(os.path.join(model_path, 'distortion_params.pt'))
+    else:
+        distortion_params = torch.nn.Parameter(torch.zeros(8).cuda())
     for idx, view in enumerate(tqdm(views, desc="Rendering progress")):
         gt = view.original_image[0:3, :, :]
         mask = gt[:1, :, :].bool()
@@ -69,7 +75,31 @@ def render_set(model_path, name, iteration, views, gaussians, pipeline, backgrou
         else:
             mlp_color = 0
             global_alignment = [torch.tensor([[1., 0, 0], [0, 1., 0], [0, 0, 1.]], device='cuda'), torch.tensor([1.], device='cuda')]
-            results = render(view, gaussians, pipeline, background, mlp_color, global_alignment=global_alignment)
+
+            # render current view
+            gaussians_xyz = gaussians.get_xyz.detach()
+            gaussians_xyz_homo = torch.cat((gaussians_xyz, torch.ones(gaussians_xyz.size(0), 1).cuda()), dim=1)
+            #gaussians_xyz_homo.retain_grad()
+            # glm use the transpose of w2c
+            w2c = view.get_world_view_transform().t().detach()
+            p_w2c = (w2c @ gaussians_xyz_homo.T).T.cuda().detach()
+            intrinsic = view.get_intrinsic().t().detach()
+            proj_mat = view.get_full_proj_transform().t().detach()
+            p_proj = (proj_mat @ gaussians_xyz_homo.T).T.cuda().detach()
+            p_2d = p_proj[:, :2] / p_proj[:, -1:]
+            #if opt_distortion and iteration > 3000:
+            if False:
+                undistorted_p_w2c = lens_net.forward(p_w2c[:, :3])
+                undistorted_p_w2c_homo = torch.cat((undistorted_p_w2c, torch.ones(undistorted_p_w2c.size(0), 1).cuda()), dim=1)
+            else:
+                undistorted_p_w2c_homo = p_w2c
+
+            u_distortion = nn.Parameter(torch.zeros(300, 300).cuda().requires_grad_(True))
+            v_distortion = nn.Parameter(torch.zeros(300, 300).cuda().requires_grad_(True))
+            u_radial = nn.Parameter(torch.ones(300, 300).cuda().requires_grad_(True))
+            v_radial = nn.Parameter(torch.ones(300, 300).cuda().requires_grad_(True))
+            distortion_params = torch.nn.Parameter(torch.zeros(8).cuda())
+            results = render(view, gaussians, pipeline, background, mlp_color, undistorted_p_w2c_homo, distortion_params, u_distortion, v_distortion, u_radial, v_radial, global_alignment=global_alignment)
             rendering, depth_tensor, weight_mask = results["render"], results["depth"], results["weights"]
             depth_tensor_normalized = (depth_tensor - depth_tensor[mask].min()) / (depth_tensor[mask].max() - depth_tensor[mask].min())
             depth_tensor_grey = depth_tensor_normalized.repeat(3, 1, 1)
@@ -88,7 +118,8 @@ def render_set(model_path, name, iteration, views, gaussians, pipeline, backgrou
 
 def render_sets(dataset : ModelParams, iteration : int, pipeline : PipelineParams, skip_train : bool, skip_test : bool, mode: str, hybrid: bool, opt_test_cam: bool, opt_intrinsic: bool):
     gaussians = GaussianModel(dataset.sh_degree, dataset.asg_degree)
-    scene = Scene(dataset, gaussians, load_iteration=iteration, shuffle=False)
+    lens_net = iResNet()
+    scene = Scene(dataset, gaussians, lens_net, load_iteration=iteration, shuffle=False)
     specular = None
     if hybrid:
         specular = SpecularModel()

@@ -45,6 +45,7 @@ from selenium.webdriver.chrome.options import Options
 from PIL import Image
 import time
 from io import BytesIO
+from torch import nn
 
 # set random seeds
 import numpy as np
@@ -121,7 +122,35 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
     first_iter += 1
     smooth_term = get_linear_noise_func(lr_init=0.1, lr_final=1e-15, lr_delay_mult=0.01, max_steps=20000)
 
+    height, width = 512, 512
+    mask = torch.zeros((height, width), dtype=torch.bool)
+    center_x, center_y = 256, 256
+    radius = 256  # Example radius
+    for y in range(height):
+        for x in range(width):
+            if (x - center_x)**2 + (y - center_y)**2 <= radius**2:
+                mask[y, x] = True
+    mask = mask.unsqueeze(0)  # For channel-first, adds a new dimension at the beginning
+    mask = mask.repeat(3, 1, 1).cuda()  # Repeat the mask across the channel dimension
 
+    distortion_params = nn.Parameter(torch.zeros(8).cuda().requires_grad_(True))
+    optimizer_distortion = torch.optim.Adam([{'params': distortion_params, 'lr': 0.001}])
+
+    #u_init = nn.Parameter(torch.zeros(200, 200).cuda().requires_grad_(True))
+    # check index for bilinear interpolation
+    #u_init[:, 0] = 1
+    #u_init[86, 80] = 1
+    #u_init[86, 81] = 2
+    #u_init[87, 80] = 3
+    #u_init[87, 81] = 4
+    u_distortion = nn.Parameter(torch.zeros(300, 300).cuda().requires_grad_(True))
+    v_distortion = nn.Parameter(torch.zeros(300, 300).cuda().requires_grad_(True))
+    u_radial = nn.Parameter(torch.ones(300, 300).cuda().requires_grad_(True))
+    v_radial = nn.Parameter(torch.ones(300, 300).cuda().requires_grad_(True))
+    optimizer_u_distortion = torch.optim.Adam([{'params': u_distortion, 'lr': 0.0001}])
+    optimizer_v_distortion = torch.optim.Adam([{'params': v_distortion, 'lr': 0.0001}])
+    optimizer_u_radial = torch.optim.Adam([{'params': u_radial, 'lr': 0.0001}])
+    optimizer_v_radial = torch.optim.Adam([{'params': v_radial, 'lr': 0.0001}])
     for iteration in range(first_iter, opt.iterations + 1):
         if network_gui.conn == None:
             network_gui.try_connect()
@@ -195,16 +224,14 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
         proj_mat = viewpoint_cam.get_full_proj_transform().t().detach()
         p_proj = (proj_mat @ gaussians_xyz_homo.T).T.cuda().detach()
         p_2d = p_proj[:, :2] / p_proj[:, -1:]
-        if opt_distortion and iteration > 3000:
+        if opt_distortion and False:
             undistorted_p_w2c = lens_net.forward(p_w2c[:, :3])
             undistorted_p_w2c_homo = torch.cat((undistorted_p_w2c, torch.ones(undistorted_p_w2c.size(0), 1).cuda()), dim=1)
         else:
             undistorted_p_w2c_homo = p_w2c
-        distortion_params = torch.zeros(8, requires_grad=True).cuda()
-        distortion_params.retain_grad()
-        import pdb;pdb.set_trace()
-        render_pkg = render(viewpoint_cam, gaussians, pipe, background, mlp_color, undistorted_p_w2c_homo, distortion_params, iteration=iteration, hybrid=hybrid, global_alignment=scene.getGlobalAlignment())
-        #render_pkg = render(viewpoint_cam, gaussians, pipe, background, mlp_color, p_w2c, iteration=iteration, hybrid=hybrid, global_alignment=scene.getGlobalAlignment())
+        render_pkg = render(viewpoint_cam, gaussians, pipe, background, mlp_color, undistorted_p_w2c_homo, distortion_params, u_distortion, v_distortion, u_radial, v_radial, iteration=iteration, hybrid=hybrid, global_alignment=scene.getGlobalAlignment())
+        #render_pkg["means2D"]
+        #import pdb;pdb.set_trace()
         image, viewspace_point_tensor, visibility_filter, radii = render_pkg["render"], render_pkg["viewspace_points"], render_pkg["visibility_filter"], render_pkg["radii"]
 
         loss_projection = 0.
@@ -227,6 +254,8 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
 
         # Loss
         gt_image = viewpoint_cam.original_image.cuda()
+        #Ll1 = l1_loss(image * mask, gt_image * mask)
+        #ssim_loss = ssim(image * mask, gt_image * mask)
         Ll1 = l1_loss(image, gt_image)
         ssim_loss = ssim(image, gt_image)
         loss = (1.0 - opt.lambda_dssim) * Ll1 + opt.lambda_dssim * (1.0 - ssim_loss)# + 0.1 * (loss_projection / len(camera_pairs[viewpoint_cam.uid]))
@@ -367,12 +396,17 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
                 #    download_pose_vis(os.path.join(args.model_path, 'plot'), iteration)
 
             # Log and save
-            training_report(tb_writer, iteration, Ll1, loss, l1_loss, iter_start.elapsed_time(iter_end), testing_iterations, scene, render, (pipe, background, mlp_color), lens_net, opt_distortion and iteration > 3000)
+            training_report(tb_writer, iteration, Ll1, loss, l1_loss, iter_start.elapsed_time(iter_end), testing_iterations, scene, render, (pipe, background, mlp_color), lens_net, opt_distortion, distortion_params, u_distortion, v_distortion, u_radial, v_radial)
             if (iteration in saving_iterations):
                 print("\n[ITER {}] Saving Gaussians".format(iteration))
                 scene.save(iteration)
                 torch.save(scene.train_cameras, os.path.join(scene.model_path, 'opt_cams.pt'))
                 torch.save(scene.unnoisy_train_cameras, os.path.join(scene.model_path, 'gt_cams.pt'))
+                torch.save(distortion_params, os.path.join(scene.model_path, 'distortion_params.pt'))
+                torch.save(u_distortion, os.path.join(scene.model_path, f'u_distortion{iteration}.pt'))
+                torch.save(v_distortion, os.path.join(scene.model_path, f'v_distortion{iteration}.pt'))
+                torch.save(u_radial, os.path.join(scene.model_path, f'u_radial{iteration}.pt'))
+                torch.save(v_radial, os.path.join(scene.model_path, f'v_radial{iteration}.pt'))
                 if hybrid:
                     specular_mlp.save_weights(args.model_path, iteration)
 
@@ -395,14 +429,27 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
             # Optimizer step
             if iteration < opt.iterations:
                 gaussians.optimizer.step()
-                import pdb;pdb.set_trace()
                 gaussians.optimizer.zero_grad(set_to_none = True)
 
-                if opt_distortion and iteration > 3000:
+                #if opt_distortion and iteration > 3000:
+                if opt_distortion:
+                    #optimizer_distortion.step()
+                    #optimizer_distortion.zero_grad(set_to_none=True)
+
+                    optimizer_u_distortion.step()
+                    optimizer_v_distortion.step()
+                    optimizer_u_distortion.zero_grad(set_to_none=True)
+                    optimizer_v_distortion.zero_grad(set_to_none=True)
+
+                    optimizer_u_radial.step()
+                    optimizer_v_radial.step()
+                    optimizer_u_radial.zero_grad(set_to_none=True)
+                    optimizer_v_radial.zero_grad(set_to_none=True)
+
                     #scene.optimizer_lens_net.param_groups[0]['lr']
-                    scene.optimizer_lens_net.step()
-                    scene.optimizer_lens_net.zero_grad(set_to_none=True)
-                    scene.scheduler_lens_net.step()
+                    #scene.optimizer_lens_net.step()
+                    #scene.optimizer_lens_net.zero_grad(set_to_none=True)
+                    #scene.scheduler_lens_net.step()
 
                 # do not update camera pose when densify or prune gaussians
                 if opt_cam:
@@ -485,7 +532,7 @@ def prepare_output_and_logger(args):
         print("Tensorboard not available: not logging progress")
     return tb_writer
 
-def training_report(tb_writer, iteration, Ll1, loss, l1_loss, elapsed, testing_iterations, scene : Scene, renderFunc, renderArgs, lens_net, opt_distortion):
+def training_report(tb_writer, iteration, Ll1, loss, l1_loss, elapsed, testing_iterations, scene : Scene, renderFunc, renderArgs, lens_net, opt_distortion, distortion_params, u_distortion, v_distortion, u_radial, v_radial):
     if tb_writer:
         tb_writer.add_scalar('train_loss_patches/l1_loss', Ll1.item(), iteration)
         tb_writer.add_scalar('train_loss_patches/total_loss', loss.item(), iteration)
@@ -507,13 +554,12 @@ def training_report(tb_writer, iteration, Ll1, loss, l1_loss, elapsed, testing_i
                     # glm use the transpose of w2c
                     w2c = viewpoint.get_world_view_transform().t().detach()
                     p_w2c = (w2c @ gaussians_xyz_homo.T).T.cuda().detach()
-                    if opt_distortion:
+                    if opt_distortion and False:
                         undistorted_p_w2c = lens_net.forward(p_w2c[:, :3])
                         undistorted_p_w2c_homo = torch.cat((undistorted_p_w2c, torch.ones(undistorted_p_w2c.size(0), 1).cuda()), dim=1)
                     else:
                         undistorted_p_w2c_homo = p_w2c
-                    distortion_params = torch.zeros(8).cuda()
-                    image = torch.clamp(renderFunc(viewpoint, scene.gaussians, *renderArgs, undistorted_p_w2c_homo, distortion_params, global_alignment=scene.getGlobalAlignment())["render"], 0.0, 1.0)
+                    image = torch.clamp(renderFunc(viewpoint, scene.gaussians, *renderArgs, undistorted_p_w2c_homo, distortion_params, u_distortion, v_distortion, u_radial, v_radial, global_alignment=scene.getGlobalAlignment())["render"], 0.0, 1.0)
                     #image = torch.clamp(renderFunc(viewpoint, scene.gaussians, *renderArgs, p_w2c, global_alignment=scene.getGlobalAlignment())["render"], 0.0, 1.0)
                     gt_image = torch.clamp(viewpoint.original_image.to("cuda"), 0.0, 1.0)
                     if tb_writer and (idx < 5):

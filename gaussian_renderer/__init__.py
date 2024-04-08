@@ -27,7 +27,7 @@ def quaternion_multiply(q1, q2):
 
     return torch.stack((w, x, y, z), dim=-1)
 
-def render(viewpoint_camera, pc : GaussianModel, pipe, bg_color : torch.Tensor, mlp_color, displacement_p_w2c, distortion_params, hybrid=True, scaling_modifier = 1.0, override_color = None, iteration = None, global_alignment=None):
+def render(viewpoint_camera, pc : GaussianModel, pipe, bg_color : torch.Tensor, mlp_color, displacement_p_w2c, distortion_params, u_distortion, v_distortion, u_radial, v_radial, hybrid=True, scaling_modifier = 1.0, override_color = None, iteration = None, global_alignment=None):
     """
     Render the scene.
 
@@ -104,7 +104,7 @@ def render(viewpoint_camera, pc : GaussianModel, pipe, bg_color : torch.Tensor, 
         colors_precomp = override_color
 
     # Rasterize visible Gaussians to image, obtain their radii (on screen).
-    rendered_image, radii, depth, weights = rasterizer(
+    rendered_image, radii, depth, weights, mean2D = rasterizer(
         means3D = means3D,
         means2D = means2D,
         shs = shs,
@@ -115,6 +115,10 @@ def render(viewpoint_camera, pc : GaussianModel, pipe, bg_color : torch.Tensor, 
         cov3D_precomp = cov3D_precomp,
         displacement_p_w2c = displacement_p_w2c,
         distortion_params = distortion_params,
+        u_distortion = u_distortion,
+        v_distortion = v_distortion,
+        u_radial = u_radial,
+        v_radial = v_radial
     )
 
     # Those Gaussians that were frustum culled or had a radius of 0 were not visible.
@@ -125,4 +129,5 @@ def render(viewpoint_camera, pc : GaussianModel, pipe, bg_color : torch.Tensor, 
             "radii": radii,
             "depth": depth,
             "weights": weights,
+            "means2D": mean2D,
             }
