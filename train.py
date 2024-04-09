@@ -143,10 +143,10 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
     #u_init[86, 81] = 2
     #u_init[87, 80] = 3
     #u_init[87, 81] = 4
-    u_distortion = nn.Parameter(torch.zeros(300, 300).cuda().requires_grad_(True))
-    v_distortion = nn.Parameter(torch.zeros(300, 300).cuda().requires_grad_(True))
-    u_radial = nn.Parameter(torch.ones(300, 300).cuda().requires_grad_(True))
-    v_radial = nn.Parameter(torch.ones(300, 300).cuda().requires_grad_(True))
+    u_distortion = nn.Parameter(torch.zeros(400, 400).cuda().requires_grad_(True))
+    v_distortion = nn.Parameter(torch.zeros(400, 400).cuda().requires_grad_(True))
+    u_radial = nn.Parameter(torch.ones(400, 400).cuda().requires_grad_(True))
+    v_radial = nn.Parameter(torch.ones(400, 400).cuda().requires_grad_(True))
     optimizer_u_distortion = torch.optim.Adam([{'params': u_distortion, 'lr': 0.0001}])
     optimizer_v_distortion = torch.optim.Adam([{'params': v_distortion, 'lr': 0.0001}])
     optimizer_u_radial = torch.optim.Adam([{'params': u_radial, 'lr': 0.0001}])
@@ -407,6 +407,7 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
                 torch.save(v_distortion, os.path.join(scene.model_path, f'v_distortion{iteration}.pt'))
                 torch.save(u_radial, os.path.join(scene.model_path, f'u_radial{iteration}.pt'))
                 torch.save(v_radial, os.path.join(scene.model_path, f'v_radial{iteration}.pt'))
+                torch.save(scene.train_cameras, os.path.join(scene.model_path, f'cams_train{iteration}.pt'))
                 if hybrid:
                     specular_mlp.save_weights(args.model_path, iteration)
 
@@ -445,6 +446,11 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
                     optimizer_v_radial.step()
                     optimizer_u_radial.zero_grad(set_to_none=True)
                     optimizer_v_radial.zero_grad(set_to_none=True)
+
+                    scene.optimizer_fovx.step()
+                    scene.optimizer_fovy.step()
+                    scene.optimizer_fovx.zero_grad(set_to_none=True)
+                    scene.optimizer_fovy.zero_grad(set_to_none=True)
 
                     #scene.optimizer_lens_net.param_groups[0]['lr']
                     #scene.optimizer_lens_net.step()
