@@ -58,8 +58,17 @@ def render_set(model_path, name, iteration, views, gaussians, pipeline, backgrou
 
     if os.path.exists(os.path.join(model_path, 'distortion_params.pt')):
         distortion_params = torch.load(os.path.join(model_path, 'distortion_params.pt'))
+        u_distortion = torch.load(os.path.join(model_path, f'u_distortion{iteration}.pt'))
+        v_distortion = torch.load(os.path.join(model_path, f'v_distortion{iteration}.pt'))
+        u_radial = torch.load(os.path.join(model_path, f'u_radial{iteration}.pt'))
+        v_radial = torch.load(os.path.join(model_path, f'v_radial{iteration}.pt'))
+        v_radial = torch.load(os.path.join(model_path, f'v_radial{iteration}.pt'))
     else:
         distortion_params = torch.nn.Parameter(torch.zeros(8).cuda())
+        u_distortion = nn.Parameter(torch.zeros(399, 399).cuda().requires_grad_(True))
+        v_distortion = nn.Parameter(torch.zeros(399, 399).cuda().requires_grad_(True))
+        u_radial = nn.Parameter(torch.ones(399, 399).cuda().requires_grad_(True))
+        v_radial = nn.Parameter(torch.ones(399, 399).cuda().requires_grad_(True))
     for idx, view in enumerate(tqdm(views, desc="Rendering progress")):
         gt = view.original_image[0:3, :, :]
         mask = gt[:1, :, :].bool()
@@ -94,10 +103,6 @@ def render_set(model_path, name, iteration, views, gaussians, pipeline, backgrou
             else:
                 undistorted_p_w2c_homo = p_w2c
 
-            u_distortion = nn.Parameter(torch.zeros(300, 300).cuda().requires_grad_(True))
-            v_distortion = nn.Parameter(torch.zeros(300, 300).cuda().requires_grad_(True))
-            u_radial = nn.Parameter(torch.ones(300, 300).cuda().requires_grad_(True))
-            v_radial = nn.Parameter(torch.ones(300, 300).cuda().requires_grad_(True))
             distortion_params = torch.nn.Parameter(torch.zeros(8).cuda())
             results = render(view, gaussians, pipeline, background, mlp_color, undistorted_p_w2c_homo, distortion_params, u_distortion, v_distortion, u_radial, v_radial, global_alignment=global_alignment)
             rendering, depth_tensor, weight_mask = results["render"], results["depth"], results["weights"]
@@ -120,6 +125,7 @@ def render_sets(dataset : ModelParams, iteration : int, pipeline : PipelineParam
     gaussians = GaussianModel(dataset.sh_degree, dataset.asg_degree)
     lens_net = iResNet()
     scene = Scene(dataset, gaussians, lens_net, load_iteration=iteration, shuffle=False)
+    scene.train_cameras = torch.load(os.path.join(scene.model_path, f'cams_train{iteration}.pt'))
     specular = None
     if hybrid:
         specular = SpecularModel()
