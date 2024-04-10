@@ -101,7 +101,7 @@ def readColmapCameras(cam_extrinsics, cam_intrinsics, images_folder):
                 [0., focal_length_x, height * 0.5],
                 [0., 0., 1.]
             ], dtype=np.float32)
-        elif intr.model=="PINHOLE":
+        elif intr.model=="PINHOLE" or intr.model=="OPENCV_FISHEYE":
             focal_length_x = intr.params[0]
             focal_length_y = intr.params[1]
             FovY = focal2fov(focal_length_y, height)
