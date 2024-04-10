@@ -62,6 +62,8 @@ def render_set(model_path, name, iteration, views, gaussians, pipeline, backgrou
         v_distortion = torch.load(os.path.join(model_path, f'v_distortion{iteration}.pt'))
         u_radial = torch.load(os.path.join(model_path, f'u_radial{iteration}.pt'))
         v_radial = torch.load(os.path.join(model_path, f'v_radial{iteration}.pt'))
+        affine_coeff = torch.load(os.path.join(model_path, f'affine_coeff{iteration}.pt'))
+        poly_coeff = torch.load(os.path.join(model_path, f'poly_coeff{iteration}.pt'))
         import pdb;pdb.set_trace()
     else:
         distortion_params = torch.nn.Parameter(torch.zeros(8).cuda())
@@ -103,7 +105,7 @@ def render_set(model_path, name, iteration, views, gaussians, pipeline, backgrou
             else:
                 undistorted_p_w2c_homo = p_w2c
 
-            results = render(view, gaussians, pipeline, background, mlp_color, undistorted_p_w2c_homo, distortion_params, u_distortion, v_distortion, u_radial, v_radial, global_alignment=global_alignment)
+            results = render(view, gaussians, pipeline, background, mlp_color, undistorted_p_w2c_homo, distortion_params, u_distortion, v_distortion, u_radial, v_radial, affine_coeff, poly_coeff, global_alignment=global_alignment)
             rendering, depth_tensor, weight_mask = results["render"], results["depth"], results["weights"]
             depth_tensor_normalized = (depth_tensor - depth_tensor[mask].min()) / (depth_tensor[mask].max() - depth_tensor[mask].min())
             depth_tensor_grey = depth_tensor_normalized.repeat(3, 1, 1)
