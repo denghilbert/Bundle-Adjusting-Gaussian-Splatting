@@ -157,7 +157,7 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
     # |0 0 1  |
     # init as e=d=0, c=1, c_x=c_y=0, order [1, e, d, c, c_x, c_y]
     affine_coeff = nn.Parameter(torch.tensor([1., 0., 0., 1., 0., 0.]).cuda().requires_grad_(True))
-    poly_coeff = nn.Parameter(torch.tensor([1., 0., 0.]).cuda().requires_grad_(True))
+    poly_coeff = nn.Parameter(torch.tensor([0.01578328428387751, -0.027082591106441487, -0.002714465463926838, -0.00013107686083776261]).cuda().requires_grad_(True))
     optimizer_affine = torch.optim.Adam([{'params': affine_coeff, 'lr': 0.0001}])
     optimizer_poly = torch.optim.Adam([{'params': poly_coeff, 'lr': 0.0001}])
 
@@ -446,29 +446,33 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
 
                 #if opt_distortion and iteration > 3000:
                 if opt_distortion:
+                    # 8 params
                     #optimizer_distortion.step()
                     #optimizer_distortion.zero_grad(set_to_none=True)
 
+                    # feature grid
                     optimizer_u_distortion.step()
                     optimizer_v_distortion.step()
                     optimizer_u_distortion.zero_grad(set_to_none=True)
                     optimizer_v_distortion.zero_grad(set_to_none=True)
-
                     optimizer_u_radial.step()
                     optimizer_v_radial.step()
                     optimizer_u_radial.zero_grad(set_to_none=True)
                     optimizer_v_radial.zero_grad(set_to_none=True)
 
-                    optimizer_affine.step()
-                    optimizer_poly.step()
-                    optimizer_affine.zero_grad(set_to_none=True)
-                    optimizer_poly.zero_grad(set_to_none=True)
+                    # omindirectional
+                    #optimizer_affine.step()
+                    #optimizer_affine.zero_grad(set_to_none=True)
+                    #optimizer_poly.step()
+                    #optimizer_poly.zero_grad(set_to_none=True)
 
+                    # optimize fov
                     scene.optimizer_fovx.step()
                     scene.optimizer_fovy.step()
                     scene.optimizer_fovx.zero_grad(set_to_none=True)
                     scene.optimizer_fovy.zero_grad(set_to_none=True)
 
+                    # neuralens
                     #scene.optimizer_lens_net.param_groups[0]['lr']
                     #scene.optimizer_lens_net.step()
                     #scene.optimizer_lens_net.zero_grad(set_to_none=True)
