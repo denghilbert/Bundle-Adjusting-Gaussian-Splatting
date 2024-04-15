@@ -44,7 +44,7 @@ vis = visdom.Visdom(server=opt_vis.visdom.server,port=opt_vis.visdom.port,env=op
 
 
 
-def render_set(model_path, name, iteration, views, gaussians, pipeline, background, specular=None, hybrid=False):
+def render_set(model_path, name, iteration, views, gaussians, pipeline, background, specular=None, hybrid=False, distortion_params=None, u_distortion=None, v_distortion=None, u_radial=None, v_radial=None, affine_coeff=None, poly_coeff=None):
     render_path = os.path.join(model_path, name, "ours_{}".format(iteration), "renders")
     gts_path = os.path.join(model_path, name, "ours_{}".format(iteration), "gt")
     depth_path = os.path.join(model_path, name, "ours_{}".format(iteration), "depth")
@@ -56,7 +56,7 @@ def render_set(model_path, name, iteration, views, gaussians, pipeline, backgrou
     makedirs(mask_path, exist_ok=True)
 
 
-    if os.path.exists(os.path.join(model_path, 'distortion_params.pt')):
+    if os.path.exists(os.path.join(model_path, 'distortion_params.pt')) and 'train' in render_path:
         distortion_params = torch.load(os.path.join(model_path, 'distortion_params.pt'))
         u_distortion = torch.load(os.path.join(model_path, f'u_distortion{iteration}.pt'))
         v_distortion = torch.load(os.path.join(model_path, f'v_distortion{iteration}.pt'))
@@ -64,13 +64,17 @@ def render_set(model_path, name, iteration, views, gaussians, pipeline, backgrou
         v_radial = torch.load(os.path.join(model_path, f'v_radial{iteration}.pt'))
         affine_coeff = torch.load(os.path.join(model_path, f'affine_coeff{iteration}.pt'))
         poly_coeff = torch.load(os.path.join(model_path, f'poly_coeff{iteration}.pt'))
-        import pdb;pdb.set_trace()
+        #import pdb;pdb.set_trace()
+    elif 'test' in render_path:
+        pass
     else:
         distortion_params = torch.nn.Parameter(torch.zeros(8).cuda())
         u_distortion = nn.Parameter(torch.zeros(400, 400).cuda().requires_grad_(True))
         v_distortion = nn.Parameter(torch.zeros(400, 400).cuda().requires_grad_(True))
         u_radial = nn.Parameter(torch.ones(400, 400).cuda().requires_grad_(True))
         v_radial = nn.Parameter(torch.ones(400, 400).cuda().requires_grad_(True))
+        affine_coeff = nn.Parameter(torch.tensor([1., 0., 0., 1., 0., 0.]).cuda().requires_grad_(True))
+        poly_coeff = nn.Parameter(torch.tensor([0.017343506884212139, -0.020094679982101907, -0.019892937295193619, 0.0085534590404976324]).cuda().requires_grad_(True))
     for idx, view in enumerate(tqdm(views, desc="Rendering progress")):
         gt = view.original_image[0:3, :, :]
         mask = gt[:1, :, :].bool()
@@ -122,22 +126,24 @@ def render_set(model_path, name, iteration, views, gaussians, pipeline, backgrou
         torchvision.utils.save_image(depth_tensor_grey, os.path.join(depth_path, 'grey_{0:05d}'.format(idx) + ".png"))
         torchvision.utils.save_image(weight_mask, os.path.join(mask_path, 'mask_{0:05d}'.format(idx) + ".png"))
 
-def render_sets(dataset : ModelParams, iteration : int, pipeline : PipelineParams, skip_train : bool, skip_test : bool, mode: str, hybrid: bool, opt_test_cam: bool, opt_intrinsic: bool):
+def render_sets(dataset : ModelParams, iteration : int, pipeline : PipelineParams, skip_train : bool, skip_test : bool, mode: str, hybrid: bool, opt_test_cam: bool, opt_intrinsic: bool, opt_extrinsic: bool):
     gaussians = GaussianModel(dataset.sh_degree, dataset.asg_degree)
     lens_net = iResNet()
     scene = Scene(dataset, gaussians, lens_net, load_iteration=iteration, shuffle=False)
-    #print(scene.train_cameras[1][0].uid)
-    #print(scene.train_cameras[1][0].learnable_fovx)
-    #print(scene.train_cameras[1][0].learnable_fovy)
-    #print(scene.train_cameras[1][0].get_w2c)
-    #print(scene.train_cameras[1][0].get_intrinsic())
-    import pdb;pdb.set_trace()
+
+    distortion_params = torch.nn.Parameter(torch.zeros(8).cuda())
+    u_distortion = nn.Parameter(torch.zeros(400, 400).cuda().requires_grad_(True))
+    v_distortion = nn.Parameter(torch.zeros(400, 400).cuda().requires_grad_(True))
+    u_radial = nn.Parameter(torch.ones(400, 400).cuda().requires_grad_(True))
+    v_radial = nn.Parameter(torch.ones(400, 400).cuda().requires_grad_(True))
+    optimizer_u_distortion = torch.optim.Adam([{'params': u_distortion, 'lr': 0.0001}])
+    optimizer_v_distortion = torch.optim.Adam([{'params': v_distortion, 'lr': 0.0001}])
+    optimizer_u_radial = torch.optim.Adam([{'params': u_radial, 'lr': 0.0001}])
+    optimizer_v_radial = torch.optim.Adam([{'params': v_radial, 'lr': 0.0001}])
+    affine_coeff = nn.Parameter(torch.tensor([1., 0., 0., 1., 0., 0.]).cuda().requires_grad_(True))
+    poly_coeff = nn.Parameter(torch.tensor([0.017343506884212139, -0.020094679982101907, -0.019892937295193619, 0.0085534590404976324]).cuda().requires_grad_(True))
+
     scene.train_cameras = torch.load(os.path.join(scene.model_path, f'cams_train{iteration}.pt'))
-    #print(scene.train_cameras[1][0].uid)
-    #print(scene.train_cameras[1][0].learnable_fovx)
-    #print(scene.train_cameras[1][0].learnable_fovy)
-    #print(scene.train_cameras[1][0].get_w2c)
-    #print(scene.train_cameras[1][0].get_intrinsic())
     #import pdb;pdb.set_trace()
     specular = None
     if hybrid:
@@ -156,8 +162,8 @@ def render_sets(dataset : ModelParams, iteration : int, pipeline : PipelineParam
     if opt_test_cam:
         if os.path.exists(os.path.join(scene.model_path, 'opt_test_cam.pt')):
             scene.test_cameras = torch.load(os.path.join(scene.model_path, 'opt_test_cam.pt'))
-        progress_bar = tqdm(range(0, 50000), desc="Training progress")
-        for iteration in range(50000):
+        progress_bar = tqdm(range(0, 2000), desc="Training progress")
+        for iteration in range(2000):
             if iteration % 1000 == 0:
                 pose_gt, pose_aligned = scene.visTestCameras()
                 vis_cameras(opt_vis, vis, iteration, poses=[pose_aligned, pose_gt])
@@ -166,7 +172,24 @@ def render_sets(dataset : ModelParams, iteration : int, pipeline : PipelineParam
             viewpoint_cam = viewpoint_stack.pop(randint(0, len(viewpoint_stack)-1))
 
             mlp_color = 0
-            render_pkg = render(viewpoint_cam, gaussians, pipeline, background, mlp_color, iteration=iteration, hybrid=hybrid, global_alignment=scene.getGlobalAlignment())
+            global_alignment = [torch.tensor([[1., 0, 0], [0, 1., 0], [0, 0, 1.]], device='cuda'), torch.tensor([1.], device='cuda')]
+            gaussians_xyz = gaussians.get_xyz.detach()
+            gaussians_xyz_homo = torch.cat((gaussians_xyz, torch.ones(gaussians_xyz.size(0), 1).cuda()), dim=1)
+            #gaussians_xyz_homo.retain_grad()
+            # glm use the transpose of w2c
+            w2c = viewpoint_cam.get_world_view_transform().t().detach()
+            p_w2c = (w2c @ gaussians_xyz_homo.T).T.cuda().detach()
+            intrinsic = viewpoint_cam.get_intrinsic().t().detach()
+            proj_mat = viewpoint_cam.get_full_proj_transform().t().detach()
+            p_proj = (proj_mat @ gaussians_xyz_homo.T).T.cuda().detach()
+            p_2d = p_proj[:, :2] / p_proj[:, -1:]
+            #if opt_distortion and iteration > 3000:
+            if False:
+                undistorted_p_w2c = lens_net.forward(p_w2c[:, :3])
+                undistorted_p_w2c_homo = torch.cat((undistorted_p_w2c, torch.ones(undistorted_p_w2c.size(0), 1).cuda()), dim=1)
+            else:
+                undistorted_p_w2c_homo = p_w2c
+            render_pkg = render(viewpoint_cam, gaussians, pipeline, background, mlp_color, undistorted_p_w2c_homo, distortion_params, u_distortion, v_distortion, u_radial, v_radial, affine_coeff, poly_coeff, global_alignment=global_alignment)
             image, viewspace_point_tensor, visibility_filter, radii = render_pkg["render"], render_pkg["viewspace_points"], render_pkg["visibility_filter"], render_pkg["radii"]
             gt_image = viewpoint_cam.original_image.cuda()
             Ll1 = l1_loss(image, gt_image)
@@ -182,20 +205,28 @@ def render_sets(dataset : ModelParams, iteration : int, pipeline : PipelineParam
                 if iteration == 50000:
                     progress_bar.close()
 
-                scene.optimizer_rotation_test.step()
-                scene.optimizer_translation_test.step()
-                scene.optimizer_rotation_test.zero_grad(set_to_none=True)
-                scene.optimizer_translation_test.zero_grad(set_to_none=True)
-                scene.scheduler_rotation_test.step()
-                scene.scheduler_translation_test.step()
+                if opt_extrinsic:
+                    scene.optimizer_rotation_test.step()
+                    scene.optimizer_translation_test.step()
+                    scene.optimizer_rotation_test.zero_grad(set_to_none=True)
+                    scene.optimizer_translation_test.zero_grad(set_to_none=True)
+                    scene.scheduler_rotation_test.step()
+                    scene.scheduler_translation_test.step()
 
                 if opt_intrinsic:
+                    optimizer_u_distortion.step()
+                    optimizer_v_distortion.step()
+                    optimizer_u_distortion.zero_grad(set_to_none=True)
+                    optimizer_v_distortion.zero_grad(set_to_none=True)
+                    optimizer_u_radial.step()
+                    optimizer_v_radial.step()
+                    optimizer_u_radial.zero_grad(set_to_none=True)
+                    optimizer_v_radial.zero_grad(set_to_none=True)
+
                     scene.optimizer_fovx.step()
                     scene.optimizer_fovy.step()
                     scene.optimizer_fovx.zero_grad(set_to_none=True)
                     scene.optimizer_fovy.zero_grad(set_to_none=True)
-                    scene.scheduler_fovx.step()
-                    scene.scheduler_fovy.step()
 
         torch.save(scene.test_cameras, os.path.join(scene.model_path, 'opt_test_cam.pt'))
 
@@ -205,7 +236,7 @@ def render_sets(dataset : ModelParams, iteration : int, pipeline : PipelineParam
          render_set(dataset.model_path, "train", scene.loaded_iter, scene.getTrainCameras(), gaussians, pipeline, background, specular, hybrid)
 
     if not skip_test:
-         render_set(dataset.model_path, "test", scene.loaded_iter, scene.getTestCameras(), gaussians, pipeline, background, specular, hybrid)
+         render_set(dataset.model_path, "test", scene.loaded_iter, scene.getTestCameras(), gaussians, pipeline, background, specular, hybrid, distortion_params, u_distortion, v_distortion, u_radial, v_radial, affine_coeff, poly_coeff)
 
 def init_wandb(cfg, wandb_id=None, project="", run_name=None, mode="online", resume=False, use_group=False, set_group=None):
     r"""Initialize Weights & Biases (wandb) logger.
@@ -263,6 +294,7 @@ if __name__ == "__main__":
     parser.add_argument("--opt_test_cam", action="store_true", default=False)
     # if opt camera intrinsic
     parser.add_argument("--opt_intrinsic", action="store_true", default=False)
+    parser.add_argument("--opt_extrinsic", action="store_true", default=False)
     # wandb setting
     parser.add_argument("--wandb", action="store_true", default=False)
     parser.add_argument("--wandb_project_name", type=str, default = None)
@@ -284,4 +316,4 @@ if __name__ == "__main__":
                                set_group=args.wandb_group_name
                                )
 
-    render_sets(model.extract(args), args.iteration, pipeline.extract(args), args.skip_train, args.skip_test, args.mode, args.hybrid, args.opt_test_cam, args.opt_intrinsic)
+    render_sets(model.extract(args), args.iteration, pipeline.extract(args), args.skip_train, args.skip_test, args.mode, args.hybrid, args.opt_test_cam, args.opt_intrinsic, args.opt_extrinsic)
