@@ -150,6 +150,7 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
     v_distortion = nn.Parameter(torch.zeros(400, 400).cuda().requires_grad_(True))
     u_radial = nn.Parameter(torch.ones(400, 400).cuda().requires_grad_(True))
     v_radial = nn.Parameter(torch.ones(400, 400).cuda().requires_grad_(True))
+    radial = nn.Parameter(torch.ones(1000).cuda().requires_grad_(True))
     optimizer_u_distortion = torch.optim.Adam([{'params': u_distortion, 'lr': 0.0001}])
     optimizer_v_distortion = torch.optim.Adam([{'params': v_distortion, 'lr': 0.0001}])
     optimizer_u_radial = torch.optim.Adam([{'params': u_radial, 'lr': 0.0001}])
@@ -242,7 +243,7 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
             undistorted_p_w2c_homo = torch.cat((undistorted_p_w2c, torch.ones(undistorted_p_w2c.size(0), 1).cuda()), dim=1)
         else:
             undistorted_p_w2c_homo = p_w2c
-        render_pkg = render(viewpoint_cam, gaussians, pipe, background, mlp_color, undistorted_p_w2c_homo, distortion_params, u_distortion, v_distortion, u_radial, v_radial, affine_coeff, poly_coeff, iteration=iteration, hybrid=hybrid, global_alignment=scene.getGlobalAlignment())
+        render_pkg = render(viewpoint_cam, gaussians, pipe, background, mlp_color, undistorted_p_w2c_homo, distortion_params, u_distortion, v_distortion, u_radial, v_radial, affine_coeff, poly_coeff, radial, iteration=iteration, hybrid=hybrid, global_alignment=scene.getGlobalAlignment())
         #p1 = render_pkg["means2D"]
         #import pdb;pdb.set_trace()
         image, viewspace_point_tensor, visibility_filter, radii = render_pkg["render"], render_pkg["viewspace_points"], render_pkg["visibility_filter"], render_pkg["radii"]
@@ -409,7 +410,7 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
                 #    download_pose_vis(os.path.join(args.model_path, 'plot'), iteration)
 
             # Log and save
-            training_report(tb_writer, iteration, Ll1, loss, l1_loss, iter_start.elapsed_time(iter_end), testing_iterations, scene, render, (pipe, background, mlp_color), lens_net, opt_distortion, distortion_params, u_distortion, v_distortion, u_radial, v_radial, affine_coeff, poly_coeff)
+            training_report(tb_writer, iteration, Ll1, loss, l1_loss, iter_start.elapsed_time(iter_end), testing_iterations, scene, render, (pipe, background, mlp_color), lens_net, opt_distortion, distortion_params, u_distortion, v_distortion, u_radial, v_radial, affine_coeff, poly_coeff, radial)
             if (iteration in saving_iterations):
                 print("\n[ITER {}] Saving Gaussians".format(iteration))
                 scene.save(iteration)
@@ -562,7 +563,7 @@ def prepare_output_and_logger(args):
         print("Tensorboard not available: not logging progress")
     return tb_writer
 
-def training_report(tb_writer, iteration, Ll1, loss, l1_loss, elapsed, testing_iterations, scene : Scene, renderFunc, renderArgs, lens_net, opt_distortion, distortion_params, u_distortion, v_distortion, u_radial, v_radial, affine_coeff, poly_coeff):
+def training_report(tb_writer, iteration, Ll1, loss, l1_loss, elapsed, testing_iterations, scene : Scene, renderFunc, renderArgs, lens_net, opt_distortion, distortion_params, u_distortion, v_distortion, u_radial, v_radial, affine_coeff, poly_coeff, radial):
     if tb_writer:
         tb_writer.add_scalar('train_loss_patches/l1_loss', Ll1.item(), iteration)
         tb_writer.add_scalar('train_loss_patches/total_loss', loss.item(), iteration)
@@ -589,7 +590,7 @@ def training_report(tb_writer, iteration, Ll1, loss, l1_loss, elapsed, testing_i
                         undistorted_p_w2c_homo = torch.cat((undistorted_p_w2c, torch.ones(undistorted_p_w2c.size(0), 1).cuda()), dim=1)
                     else:
                         undistorted_p_w2c_homo = p_w2c
-                    image = torch.clamp(renderFunc(viewpoint, scene.gaussians, *renderArgs, undistorted_p_w2c_homo, distortion_params, u_distortion, v_distortion, u_radial, v_radial, affine_coeff, poly_coeff, global_alignment=scene.getGlobalAlignment())["render"], 0.0, 1.0)
+                    image = torch.clamp(renderFunc(viewpoint, scene.gaussians, *renderArgs, undistorted_p_w2c_homo, distortion_params, u_distortion, v_distortion, u_radial, v_radial, affine_coeff, poly_coeff, radial, global_alignment=scene.getGlobalAlignment())["render"], 0.0, 1.0)
                     #image = torch.clamp(renderFunc(viewpoint, scene.gaussians, *renderArgs, p_w2c, global_alignment=scene.getGlobalAlignment())["render"], 0.0, 1.0)
                     gt_image = torch.clamp(viewpoint.original_image.to("cuda"), 0.0, 1.0)
                     if tb_writer and (idx < 5):
