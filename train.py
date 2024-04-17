@@ -70,8 +70,11 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
         specular_mlp = SpecularModel()
         specular_mlp.train_setting(opt)
     lens_net = iResNet()
+    l_lens_net = [{'params': lens_net.parameters(), 'lr': 1e-4}]
+    optimizer_lens_net = torch.optim.Adam(l_lens_net, eps=1e-15)
+    scheduler_lens_net = torch.optim.lr_scheduler.MultiStepLR(optimizer_lens_net, milestones=[7000, 50000], gamma=1)
 
-    scene = Scene(dataset, gaussians, lens_net, random_init=random_init, r_t_noise=r_t_noise, r_t_lr=r_t_lr, global_alignment_lr=global_alignment_lr)
+    scene = Scene(dataset, gaussians, random_init=random_init, r_t_noise=r_t_noise, r_t_lr=r_t_lr, global_alignment_lr=global_alignment_lr)
     gaussians.training_setup(opt)
     if checkpoint:
         (model_params, first_iter) = torch.load(checkpoint)
@@ -157,7 +160,7 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
     # |0 0 1  |
     # init as e=d=0, c=1, c_x=c_y=0, order [1, e, d, c, c_x, c_y]
     affine_coeff = nn.Parameter(torch.tensor([1., 0., 0., 1., 0., 0.]).cuda().requires_grad_(True))
-    poly_coeff = nn.Parameter(torch.tensor([0.01578328428387751, -0.027082591106441487, -0.002714465463926838, -0.00013107686083776261]).cuda().requires_grad_(True))
+    poly_coeff = nn.Parameter(torch.tensor([0., 0., 0., 0.]).cuda().requires_grad_(True))
     optimizer_affine = torch.optim.Adam([{'params': affine_coeff, 'lr': 0.0001}])
     optimizer_poly = torch.optim.Adam([{'params': poly_coeff, 'lr': 0.0001}])
 
