@@ -64,9 +64,17 @@ def render_set(model_path, name, iteration, views, gaussians, pipeline, backgrou
         v_radial = torch.load(os.path.join(model_path, f'v_radial{iteration}.pt'))
         affine_coeff = torch.load(os.path.join(model_path, f'affine_coeff{iteration}.pt'))
         poly_coeff = torch.load(os.path.join(model_path, f'poly_coeff{iteration}.pt'))
+        radial = torch.load(os.path.join(model_path, f'radial{iteration}.pt'))
         #import pdb;pdb.set_trace()
     elif 'test' in render_path:
-        pass
+        distortion_params = torch.load(os.path.join(model_path, 'distortion_params.pt'))
+        u_distortion = torch.load(os.path.join(model_path, f'u_distortion{iteration}.pt'))
+        v_distortion = torch.load(os.path.join(model_path, f'v_distortion{iteration}.pt'))
+        u_radial = torch.load(os.path.join(model_path, f'u_radial{iteration}.pt'))
+        v_radial = torch.load(os.path.join(model_path, f'v_radial{iteration}.pt'))
+        affine_coeff = torch.load(os.path.join(model_path, f'affine_coeff{iteration}.pt'))
+        poly_coeff = torch.load(os.path.join(model_path, f'poly_coeff{iteration}.pt'))
+        radial = torch.load(os.path.join(model_path, f'radial{iteration}.pt'))
     else:
         distortion_params = torch.nn.Parameter(torch.zeros(8).cuda())
         u_distortion = nn.Parameter(torch.zeros(400, 400).cuda().requires_grad_(True))
@@ -109,7 +117,7 @@ def render_set(model_path, name, iteration, views, gaussians, pipeline, backgrou
             else:
                 undistorted_p_w2c_homo = p_w2c
 
-            results = render(view, gaussians, pipeline, background, mlp_color, undistorted_p_w2c_homo, distortion_params, u_distortion, v_distortion, u_radial, v_radial, affine_coeff, poly_coeff, global_alignment=global_alignment)
+            results = render(view, gaussians, pipeline, background, mlp_color, undistorted_p_w2c_homo, distortion_params, u_distortion, v_distortion, u_radial, v_radial, affine_coeff, poly_coeff, radial, global_alignment=global_alignment)
             rendering, depth_tensor, weight_mask = results["render"], results["depth"], results["weights"]
             depth_tensor_normalized = (depth_tensor - depth_tensor[mask].min()) / (depth_tensor[mask].max() - depth_tensor[mask].min())
             depth_tensor_grey = depth_tensor_normalized.repeat(3, 1, 1)
@@ -129,7 +137,7 @@ def render_set(model_path, name, iteration, views, gaussians, pipeline, backgrou
 def render_sets(dataset : ModelParams, iteration : int, pipeline : PipelineParams, skip_train : bool, skip_test : bool, mode: str, hybrid: bool, opt_test_cam: bool, opt_intrinsic: bool, opt_extrinsic: bool):
     gaussians = GaussianModel(dataset.sh_degree, dataset.asg_degree)
     lens_net = iResNet()
-    scene = Scene(dataset, gaussians, lens_net, load_iteration=iteration, shuffle=False)
+    scene = Scene(dataset, gaussians, load_iteration=iteration, shuffle=False)
 
     distortion_params = torch.nn.Parameter(torch.zeros(8).cuda())
     u_distortion = nn.Parameter(torch.zeros(400, 400).cuda().requires_grad_(True))
@@ -162,8 +170,8 @@ def render_sets(dataset : ModelParams, iteration : int, pipeline : PipelineParam
     if opt_test_cam:
         if os.path.exists(os.path.join(scene.model_path, 'opt_test_cam.pt')):
             scene.test_cameras = torch.load(os.path.join(scene.model_path, 'opt_test_cam.pt'))
-        progress_bar = tqdm(range(0, 2000), desc="Training progress")
-        for iteration in range(2000):
+        progress_bar = tqdm(range(0, 15000), desc="Training progress")
+        for iteration in range(15000):
             if iteration % 1000 == 0:
                 pose_gt, pose_aligned = scene.visTestCameras()
                 vis_cameras(opt_vis, vis, iteration, poses=[pose_aligned, pose_gt])

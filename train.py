@@ -423,6 +423,7 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
                 torch.save(v_radial, os.path.join(scene.model_path, f'v_radial{iteration}.pt'))
                 torch.save(affine_coeff, os.path.join(scene.model_path, f'affine_coeff{iteration}.pt'))
                 torch.save(poly_coeff, os.path.join(scene.model_path, f'poly_coeff{iteration}.pt'))
+                torch.save(radial, os.path.join(scene.model_path, f'radial{iteration}.pt'))
                 torch.save(scene.train_cameras, os.path.join(scene.model_path, f'cams_train{iteration}.pt'))
                 if hybrid:
                     specular_mlp.save_weights(args.model_path, iteration)
@@ -455,26 +456,26 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
                     #optimizer_distortion.zero_grad(set_to_none=True)
 
                     # feature grid
-                    optimizer_u_distortion.step()
-                    optimizer_v_distortion.step()
-                    optimizer_u_distortion.zero_grad(set_to_none=True)
-                    optimizer_v_distortion.zero_grad(set_to_none=True)
-                    optimizer_u_radial.step()
-                    optimizer_v_radial.step()
-                    optimizer_u_radial.zero_grad(set_to_none=True)
-                    optimizer_v_radial.zero_grad(set_to_none=True)
+                    #optimizer_u_distortion.step()
+                    #optimizer_v_distortion.step()
+                    #optimizer_u_distortion.zero_grad(set_to_none=True)
+                    #optimizer_v_distortion.zero_grad(set_to_none=True)
+                    #optimizer_u_radial.step()
+                    #optimizer_v_radial.step()
+                    #optimizer_u_radial.zero_grad(set_to_none=True)
+                    #optimizer_v_radial.zero_grad(set_to_none=True)
 
                     # omindirectional
                     #optimizer_affine.step()
                     #optimizer_affine.zero_grad(set_to_none=True)
-                    #optimizer_poly.step()
-                    #optimizer_poly.zero_grad(set_to_none=True)
+                    optimizer_poly.step()
+                    optimizer_poly.zero_grad(set_to_none=True)
 
                     # optimize fov
-                    scene.optimizer_fovx.step()
-                    scene.optimizer_fovy.step()
-                    scene.optimizer_fovx.zero_grad(set_to_none=True)
-                    scene.optimizer_fovy.zero_grad(set_to_none=True)
+                    #scene.optimizer_fovx.step()
+                    #scene.optimizer_fovy.step()
+                    #scene.optimizer_fovx.zero_grad(set_to_none=True)
+                    #scene.optimizer_fovy.zero_grad(set_to_none=True)
 
                     # neuralens
                     #scene.optimizer_lens_net.param_groups[0]['lr']
