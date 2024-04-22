@@ -10,12 +10,11 @@ class iResNet(nn.Module):
         super().__init__()
         self.batch_size = 16
         self.tol = 1e-6
-        self.inp_size_linear = (3,)
+        self.inp_size_linear = (2,)
 
         torch.manual_seed(0)
         nodes = [Ff.graph_inn.InputNode(*self.inp_size_linear, name="input")]
-        for i in range(2):
-
+        for i in range(5):
             nodes.append(
                 Ff.graph_inn.Node(
                     nodes[-1],
@@ -23,14 +22,14 @@ class iResNet(nn.Module):
                     {
                         "hutchinson_samples": 1,
                         "internal_size": 256,
-                        "n_internal_layers": 2,
+                        "n_internal_layers": 4,
                     },
                     conditions=[],
                     name=f"i_resnet_{i}",
                 )
             )
         nodes.append(Ff.graph_inn.OutputNode(nodes[-1], name="output"))
-        self.i_resnet_linear = Ff.GraphINN(nodes, verbose=False).cuda()
+        self.i_resnet_linear = Ff.GraphINN(nodes, verbose=False)
 
         for node in self.i_resnet_linear.node_list:
             if isinstance(node.module, Fm.IResNetLayer):

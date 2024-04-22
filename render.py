@@ -65,7 +65,7 @@ def render_set(model_path, name, iteration, views, gaussians, pipeline, backgrou
         affine_coeff = torch.load(os.path.join(model_path, f'affine_coeff{iteration}.pt'))
         poly_coeff = torch.load(os.path.join(model_path, f'poly_coeff{iteration}.pt'))
         radial = torch.load(os.path.join(model_path, f'radial{iteration}.pt'))
-        #import pdb;pdb.set_trace()
+        import pdb;pdb.set_trace()
     elif 'test' in render_path:
         distortion_params = torch.load(os.path.join(model_path, 'distortion_params.pt'))
         u_distortion = torch.load(os.path.join(model_path, f'u_distortion{iteration}.pt'))
@@ -82,7 +82,8 @@ def render_set(model_path, name, iteration, views, gaussians, pipeline, backgrou
         u_radial = nn.Parameter(torch.ones(400, 400).cuda().requires_grad_(True))
         v_radial = nn.Parameter(torch.ones(400, 400).cuda().requires_grad_(True))
         affine_coeff = nn.Parameter(torch.tensor([1., 0., 0., 1., 0., 0.]).cuda().requires_grad_(True))
-        poly_coeff = nn.Parameter(torch.tensor([0.017343506884212139, -0.020094679982101907, -0.019892937295193619, 0.0085534590404976324]).cuda().requires_grad_(True))
+        #poly_coeff = nn.Parameter(torch.tensor([0.017343506884212139, -0.020094679982101907, -0.019892937295193619, 0.0085534590404976324]).cuda().requires_grad_(True))
+        poly_coeff = nn.Parameter(torch.tensor([0., 0., 0., 0.]).cuda().requires_grad_(True))
     for idx, view in enumerate(tqdm(views, desc="Rendering progress")):
         gt = view.original_image[0:3, :, :]
         mask = gt[:1, :, :].bool()
@@ -149,7 +150,8 @@ def render_sets(dataset : ModelParams, iteration : int, pipeline : PipelineParam
     optimizer_u_radial = torch.optim.Adam([{'params': u_radial, 'lr': 0.0001}])
     optimizer_v_radial = torch.optim.Adam([{'params': v_radial, 'lr': 0.0001}])
     affine_coeff = nn.Parameter(torch.tensor([1., 0., 0., 1., 0., 0.]).cuda().requires_grad_(True))
-    poly_coeff = nn.Parameter(torch.tensor([0.017343506884212139, -0.020094679982101907, -0.019892937295193619, 0.0085534590404976324]).cuda().requires_grad_(True))
+    #poly_coeff = nn.Parameter(torch.tensor([0.017343506884212139, -0.020094679982101907, -0.019892937295193619, 0.0085534590404976324]).cuda().requires_grad_(True))
+    poly_coeff = nn.Parameter(torch.tensor([0., 0., 0., 0.]).cuda().requires_grad_(True))
 
     scene.train_cameras = torch.load(os.path.join(scene.model_path, f'cams_train{iteration}.pt'))
     #import pdb;pdb.set_trace()
@@ -170,8 +172,8 @@ def render_sets(dataset : ModelParams, iteration : int, pipeline : PipelineParam
     if opt_test_cam:
         if os.path.exists(os.path.join(scene.model_path, 'opt_test_cam.pt')):
             scene.test_cameras = torch.load(os.path.join(scene.model_path, 'opt_test_cam.pt'))
-        progress_bar = tqdm(range(0, 15000), desc="Training progress")
-        for iteration in range(15000):
+        progress_bar = tqdm(range(0, 7000), desc="Training progress")
+        for iteration in range(7000):
             if iteration % 1000 == 0:
                 pose_gt, pose_aligned = scene.visTestCameras()
                 vis_cameras(opt_vis, vis, iteration, poses=[pose_aligned, pose_gt])

@@ -62,6 +62,17 @@ if torch.cuda.is_available():
 np.random.seed(seed_value)
 random.seed(seed_value)
 
+def homogenize(X: torch.Tensor):
+    assert X.ndim == 2
+    assert X.shape[1] in (2, 3)
+    return torch.cat(
+        (X, torch.ones((X.shape[0], 1), dtype=X.dtype, device=X.device)), dim=1
+    )
+def dehomogenize(X: torch.Tensor):
+    assert X.ndim == 2
+    assert X.shape[1] in (3, 4)
+    return X[:, :-1] / X[:, -1:]
+
 def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoint_iterations, checkpoint, debug_from, use_wandb=False, random_init=False, hybrid=False, opt_cam=False, opt_distortion=False, opt_intrinsic=False, r_t_noise=[0., 0.], r_t_lr=[0.001, 0.001], global_alignment_lr=0.001):
     first_iter = 0
     tb_writer = prepare_output_and_logger(dataset)
@@ -69,10 +80,17 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
     if hybrid:
         specular_mlp = SpecularModel()
         specular_mlp.train_setting(opt)
-    lens_net = iResNet()
-    l_lens_net = [{'params': lens_net.parameters(), 'lr': 1e-4}]
+    lens_net = iResNet().cuda()
+    l_lens_net = [{'params': lens_net.parameters(), 'lr': 1e-6}]
     optimizer_lens_net = torch.optim.Adam(l_lens_net, eps=1e-15)
     scheduler_lens_net = torch.optim.lr_scheduler.MultiStepLR(optimizer_lens_net, milestones=[7000, 50000], gamma=1)
+    def zero_weights(m):
+        if isinstance(m, nn.Linear):
+            nn.init.constant_(m.weight, 0.)
+            nn.init.constant_(m.bias, 0.)
+    #lens_net.apply(zero_weights)
+    #for param in lens_net.parameters():
+    #    print(param)
 
     scene = Scene(dataset, gaussians, random_init=random_init, r_t_noise=r_t_noise, r_t_lr=r_t_lr, global_alignment_lr=global_alignment_lr)
     gaussians.training_setup(opt)
@@ -112,12 +130,6 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
             os.makedirs(os.path.join(args.model_path, 'plot'), exist_ok=True)
             #download_pose_vis(os.path.join(args.model_path, 'plot'), 0)
 
-
-    #import pdb;pdb.set_trace()
-    #pose_GT, pose_aligned = scene.loadAlignCameras(if_vis_train=True)
-    #vis_cameras(opt_vis, vis, step=222, poses=[pose_aligned, pose_GT])
-    #import pdb;pdb.set_trace()
-
     ema_loss_for_log = 0.0
     best_psnr = 0.0
     best_iteration = 0
@@ -151,17 +163,28 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
     u_radial = nn.Parameter(torch.ones(400, 400).cuda().requires_grad_(True))
     v_radial = nn.Parameter(torch.ones(400, 400).cuda().requires_grad_(True))
     radial = nn.Parameter(torch.ones(1000).cuda().requires_grad_(True))
+    #radial = nn.Parameter(torch.zeros(1000, 4).cuda().requires_grad_(True))
     optimizer_u_distortion = torch.optim.Adam([{'params': u_distortion, 'lr': 0.0001}])
     optimizer_v_distortion = torch.optim.Adam([{'params': v_distortion, 'lr': 0.0001}])
     optimizer_u_radial = torch.optim.Adam([{'params': u_radial, 'lr': 0.0001}])
     optimizer_v_radial = torch.optim.Adam([{'params': v_radial, 'lr': 0.0001}])
+    optimizer_radial = torch.optim.Adam([{'params': radial, 'lr': 0.0001}])
+    x = torch.linspace(-1, 1, 100)
+    y = torch.linspace(1, -1, 100)  # Note the reversed order for y to get top to bottom
+    x_grid, y_grid = torch.meshgrid(x, y, indexing='xy')
+    control_points = nn.Parameter(torch.stack((x_grid, y_grid), dim=-1).cuda().requires_grad_(True))
+    optimizer_control_points = torch.optim.Adam([{'params': control_points, 'lr': 0.0001}])
+    print("Top-left corner:", control_points[0, 0])
+    print("Top-right corner:", control_points[0, -1])
+    print("Bottom-left corner:", control_points[-1, 0])
+    print("Bottom-right corner:", control_points[-1, -1])
 
     # |1 e c_x|
     # |d c c_y|
     # |0 0 1  |
     # init as e=d=0, c=1, c_x=c_y=0, order [1, e, d, c, c_x, c_y]
     affine_coeff = nn.Parameter(torch.tensor([1., 0., 0., 1., 0., 0.]).cuda().requires_grad_(True))
-    poly_coeff = nn.Parameter(torch.tensor([0., 0., 0., 0.]).cuda().requires_grad_(True))
+    poly_coeff = nn.Parameter(torch.tensor([0, 0, 0, 0.]).cuda().requires_grad_(True))
     optimizer_affine = torch.optim.Adam([{'params': affine_coeff, 'lr': 0.0001}])
     optimizer_poly = torch.optim.Adam([{'params': poly_coeff, 'lr': 0.0001}])
 
@@ -238,15 +261,67 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
         proj_mat = viewpoint_cam.get_full_proj_transform().t().detach()
         p_proj = (proj_mat @ gaussians_xyz_homo.T).T.cuda().detach()
         p_2d = p_proj[:, :2] / p_proj[:, -1:]
+
         if opt_distortion and False:
             undistorted_p_w2c = lens_net.forward(p_w2c[:, :3])
             undistorted_p_w2c_homo = torch.cat((undistorted_p_w2c, torch.ones(undistorted_p_w2c.size(0), 1).cuda()), dim=1)
         else:
             undistorted_p_w2c_homo = p_w2c
+        #distorted_points = lens_net.forward(control_points)#lens_net.i_resnet_linear.module_list[4].residual[10].weight
+        #directions = distorted_points - control_points
+        #distorted_points.retain_grad()
+        #u_distortion = directions[:, :, 0]
+        #v_distortion = directions[:, :, 1]
+        #if iteration % 1000 == 1:
+        #    print((directions[:, :, 0]).mean())
+        #    print((directions[:, :, 1]).mean())
+
+        #if iteration == 6000:
+        #    import matplotlib.pyplot as plt
+        #    u = directions[:, :, 0].detach().cpu().numpy()  # X components of vectors
+        #    v = directions[:, :, 1].detach().cpu().numpy()  # Y components of vectors
+        #    x_positions, y_positions = np.meshgrid(np.arange(100), np.arange(100), indexing='ij')
+        #    plt.figure(figsize=(10, 10))
+        #    plt.quiver(x_positions, y_positions, u, v, scale=20)
+        #    plt.title('Vector Field Plot')
+        #    plt.xlabel('X coordinate')
+        #    plt.ylabel('Y coordinate')
+        #    plt.axis('equal')  # Ensure the aspect ratio is equal to better represent direction
+        #    plt.show()
+        #    import pdb;pdb.set_trace()
         render_pkg = render(viewpoint_cam, gaussians, pipe, background, mlp_color, undistorted_p_w2c_homo, distortion_params, u_distortion, v_distortion, u_radial, v_radial, affine_coeff, poly_coeff, radial, iteration=iteration, hybrid=hybrid, global_alignment=scene.getGlobalAlignment())
         #p1 = render_pkg["means2D"]
-        #import pdb;pdb.set_trace()
+        #if iteration == 1000:
+        #    import matplotlib.pyplot as plt
+        #    x = p1[:, 0].detach().cpu().numpy()  # Convert tensor to numpy for plotting
+        #    y = p1[:, 1].detach().cpu().numpy()
+        #    plt.scatter(x, y)
+        #    plt.title('2D Points Plot')
+        #    plt.xlabel('X axis')
+        #    plt.ylabel('Y axis')
+        #    plt.grid(True)
+        #    plt.show()
+        #    import pdb;pdb.set_trace()
         image, viewspace_point_tensor, visibility_filter, radii = render_pkg["render"], render_pkg["viewspace_points"], render_pkg["visibility_filter"], render_pkg["radii"]
+
+        i, j = np.meshgrid(
+            np.linspace(0, viewpoint_cam.image_width - 1, viewpoint_cam.image_width),
+            np.linspace(0, viewpoint_cam.image_height - 1, viewpoint_cam.image_height),
+            indexing="ij",
+        )
+        i = i.T
+        j = j.T
+        P_sensor = (
+            torch.from_numpy(np.stack((i, j), axis=-1))
+            .to(torch.float32)
+            .to(image.device)
+        )
+        P_sensor_hom = homogenize(P_sensor.reshape((-1, 2)))
+        K = viewpoint_cam.get_K
+        P_view_insidelens_direction_hom = (torch.inverse(K) @ P_sensor_hom.T).T
+        P_view_insidelens_direction = dehomogenize(P_view_insidelens_direction_hom)
+        P_view_outsidelens_direction = lens_net.forward(P_view_insidelens_direction)
+        import pdb;pdb.set_trace()
 
         loss_projection = 0.
         if camera_matching_points != {} and projection_loss_count > 0:
@@ -323,14 +398,6 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
                     ssim_loss = ssim(image, gt_image)
                     loss = (1.0 - opt.lambda_dssim) * Ll1 + opt.lambda_dssim * (1.0 - ssim_loss)# + 0.1 * (loss_projection / len(camera_pairs[viewpoint_cam.uid]))
                     loss.backward(retain_graph=True)
-                    #if i == len(outliers):
-                    #    import pdb;pdb.set_trace()
-                    #print("*"*10)
-                    #print(viewpoint_cam.uid)
-                    #print(Ll1)
-                    #print(ssim_loss)
-                    #print(loss)
-                    #print("*"*10)
 
                     if opt_cam:
                         if i <= 700:
@@ -345,9 +412,6 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
 
                         scene.optimizer_rotation.step()
                         scene.optimizer_translation.step()
-                        #if i == 0:
-                        #    import pdb;pdb.set_trace()
-                        #    outliers[0].delta_quaternion.grad
                         scene.optimizer_rotation.zero_grad(set_to_none=True)
                         scene.optimizer_translation.zero_grad(set_to_none=True)
                         scene.scheduler_rotation.step()
@@ -455,6 +519,13 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
                     #optimizer_distortion.step()
                     #optimizer_distortion.zero_grad(set_to_none=True)
 
+                    # control points
+                    #optimizer_control_points.step()
+                    #optimizer_control_points.zero_grad(set_to_none=True)
+
+                    optimizer_lens_net.step() #lens_net.i_resnet_linear.module_list[0].residual[0].weight
+                    optimizer_lens_net.zero_grad(set_to_none=True)
+
                     # feature grid
                     #optimizer_u_distortion.step()
                     #optimizer_v_distortion.step()
@@ -470,6 +541,10 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
                     #optimizer_affine.zero_grad(set_to_none=True)
                     optimizer_poly.step()
                     optimizer_poly.zero_grad(set_to_none=True)
+
+                    # radial table
+                    #optimizer_radial.step()
+                    #optimizer_radial.zero_grad(set_to_none=True)
 
                     # optimize fov
                     #scene.optimizer_fovx.step()

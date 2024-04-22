@@ -136,7 +136,7 @@ class Camera(nn.Module):
         return rays_o, rays_d
 
     @property
-    def get_intrinsic(self):
+    def get_K(self):
         return self.intrinsic_matrix
 
     @property
