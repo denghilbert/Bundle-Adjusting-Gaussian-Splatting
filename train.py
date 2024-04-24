@@ -304,24 +304,6 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
         #    import pdb;pdb.set_trace()
         image, viewspace_point_tensor, visibility_filter, radii = render_pkg["render"], render_pkg["viewspace_points"], render_pkg["visibility_filter"], render_pkg["radii"]
 
-        i, j = np.meshgrid(
-            np.linspace(0, viewpoint_cam.image_width - 1, viewpoint_cam.image_width),
-            np.linspace(0, viewpoint_cam.image_height - 1, viewpoint_cam.image_height),
-            indexing="ij",
-        )
-        i = i.T
-        j = j.T
-        P_sensor = (
-            torch.from_numpy(np.stack((i, j), axis=-1))
-            .to(torch.float32)
-            .to(image.device)
-        )
-        P_sensor_hom = homogenize(P_sensor.reshape((-1, 2)))
-        K = viewpoint_cam.get_K
-        P_view_insidelens_direction_hom = (torch.inverse(K) @ P_sensor_hom.T).T
-        P_view_insidelens_direction = dehomogenize(P_view_insidelens_direction_hom)
-        P_view_outsidelens_direction = lens_net.forward(P_view_insidelens_direction)
-        import pdb;pdb.set_trace()
 
         loss_projection = 0.
         if camera_matching_points != {} and projection_loss_count > 0:
@@ -523,8 +505,8 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
                     #optimizer_control_points.step()
                     #optimizer_control_points.zero_grad(set_to_none=True)
 
-                    optimizer_lens_net.step() #lens_net.i_resnet_linear.module_list[0].residual[0].weight
-                    optimizer_lens_net.zero_grad(set_to_none=True)
+                    #optimizer_lens_net.step() #lens_net.i_resnet_linear.module_list[0].residual[0].weight
+                    #optimizer_lens_net.zero_grad(set_to_none=True)
 
                     # feature grid
                     #optimizer_u_distortion.step()
