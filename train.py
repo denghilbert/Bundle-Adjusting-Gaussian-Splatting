@@ -73,6 +73,51 @@ def dehomogenize(X: torch.Tensor):
     assert X.shape[1] in (3, 4)
     return X[:, :-1] / X[:, -1:]
 
+def colorize(uv_im, max_mag=None):
+    hsv = np.zeros((uv_im.shape[0], uv_im.shape[1], 3), dtype=np.uint8)
+    hsv[..., 1] = 255
+    mag, ang = cv2.cartToPolar(uv_im[..., 0], uv_im[..., 1])
+    hsv[..., 0] = ang * 180 / np.pi / 2
+    # print(mag.max())
+    if max_mag is None:
+        hsv[..., 2] = cv2.normalize(mag, None, 0, 255, cv2.NORM_MINMAX)
+    else:
+        mag = np.clip(mag, 0.0, max_mag)
+        mag = mag / max_mag * 255.0
+        hsv[..., 2] = mag.astype(np.uint8)
+    rgb = cv2.cvtColor(hsv, cv2.COLOR_HSV2RGB)
+    return rgb
+
+def pass_neuralens(lens_net, width, height, sample_width, sample_height, K, pass_neural=True):
+    i, j = np.meshgrid(
+        np.linspace(0, width, sample_width),
+        np.linspace(0, height, sample_height),
+        indexing="ij",
+    )
+    i = i.T
+    j = j.T
+    P_sensor = (
+        torch.from_numpy(np.stack((i, j), axis=-1))
+        .to(torch.float32)
+        .cuda()
+    )
+    P_sensor_hom = homogenize(P_sensor.reshape((-1, 2)))
+    #K[0][2] -= 0.5
+    #K[1][2] -= 0.5
+    P_view_insidelens_direction_hom = (torch.inverse(K) @ P_sensor_hom.T).T
+    P_view_insidelens_direction = dehomogenize(P_view_insidelens_direction_hom)
+
+    if pass_neural:
+        P_view_outsidelens_direction = lens_net.forward(P_view_insidelens_direction)
+    else:
+        P_view_outsidelens_direction = P_view_insidelens_direction
+
+    camera_directions_w_lens = homogenize(P_view_outsidelens_direction)
+    camera_directions_w_lens = camera_directions_w_lens.reshape((P_sensor.shape[0], P_sensor.shape[1], 3))[:, :, :2]
+
+    return camera_directions_w_lens, P_view_insidelens_direction[-1]
+
+
 def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoint_iterations, checkpoint, debug_from, use_wandb=False, random_init=False, hybrid=False, opt_cam=False, opt_distortion=False, opt_intrinsic=False, r_t_noise=[0., 0.], r_t_lr=[0.001, 0.001], global_alignment_lr=0.001):
     first_iter = 0
     tb_writer = prepare_output_and_logger(dataset)
@@ -88,7 +133,7 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
         if isinstance(m, nn.Linear):
             nn.init.constant_(m.weight, 0.)
             nn.init.constant_(m.bias, 0.)
-    #lens_net.apply(zero_weights)
+    lens_net.apply(zero_weights)
     #for param in lens_net.parameters():
     #    print(param)
 
@@ -289,20 +334,30 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
         #    plt.axis('equal')  # Ensure the aspect ratio is equal to better represent direction
         #    plt.show()
         #    import pdb;pdb.set_trace()
-        render_pkg = render(viewpoint_cam, gaussians, pipe, background, mlp_color, undistorted_p_w2c_homo, distortion_params, u_distortion, v_distortion, u_radial, v_radial, affine_coeff, poly_coeff, radial, iteration=iteration, hybrid=hybrid, global_alignment=scene.getGlobalAlignment())
-        #p1 = render_pkg["means2D"]
-        #if iteration == 1000:
-        #    import matplotlib.pyplot as plt
-        #    x = p1[:, 0].detach().cpu().numpy()  # Convert tensor to numpy for plotting
-        #    y = p1[:, 1].detach().cpu().numpy()
-        #    plt.scatter(x, y)
-        #    plt.title('2D Points Plot')
-        #    plt.xlabel('X axis')
-        #    plt.ylabel('Y axis')
-        #    plt.grid(True)
-        #    plt.show()
-        #    import pdb;pdb.set_trace()
+
+
+        #control_points, boundary_original_points = pass_neuralens(lens_net, viewpoint_cam.image_width, viewpoint_cam.image_height, int(viewpoint_cam.image_width / 8), int(viewpoint_cam.image_height / 8), viewpoint_cam.get_K)
+        control_points, boundary_original_points = pass_neuralens(lens_net, viewpoint_cam.image_width, viewpoint_cam.image_height, 3, 3, viewpoint_cam.get_K)
+        print(control_points)
+        import pdb;pdb.set_trace()
+        #control_points = nn.functional.interpolate(control_points.permute(2, 0, 1).unsqueeze(0), size=(viewpoint_cam.image_height, viewpoint_cam.image_width), mode='bilinear', align_corners=False).permute(0, 2, 3, 1).squeeze(0)
+        render_pkg = render(viewpoint_cam, gaussians, pipe, background, mlp_color, control_points, boundary_original_points, undistorted_p_w2c_homo, distortion_params, u_distortion, v_distortion, u_radial, v_radial, affine_coeff, poly_coeff, radial, iteration=iteration, hybrid=hybrid, global_alignment=scene.getGlobalAlignment())
         image, viewspace_point_tensor, visibility_filter, radii = render_pkg["render"], render_pkg["viewspace_points"], render_pkg["visibility_filter"], render_pkg["radii"]
+        import pdb;pdb.set_trace()
+
+        if iteration == 7001:
+            p1 = render_pkg["means2D"]
+            p_w_lens = pass_neuralens(lens_net, viewpoint_cam.image_width, viewpoint_cam.image_height, int(viewpoint_cam.image_width / 8), int(viewpoint_cam.image_height / 8), viewpoint_cam.get_K)
+            import matplotlib.pyplot as plt
+            x = p1[:, 0].detach().cpu().numpy()  # Convert tensor to numpy for plotting
+            y = p1[:, 1].detach().cpu().numpy()
+            plt.scatter(x, y)
+            plt.title('2D Points Plot')
+            plt.xlabel('X axis')
+            plt.ylabel('Y axis')
+            plt.grid(True)
+            plt.show()
+            import pdb;pdb.set_trace()
 
 
         loss_projection = 0.
@@ -498,8 +553,8 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
                 #if opt_distortion and iteration > 3000:
                 if opt_distortion:
                     # 8 params
-                    #optimizer_distortion.step()
-                    #optimizer_distortion.zero_grad(set_to_none=True)
+                    optimizer_distortion.step()
+                    optimizer_distortion.zero_grad(set_to_none=True)
 
                     # control points
                     #optimizer_control_points.step()
@@ -521,8 +576,8 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
                     # omindirectional
                     #optimizer_affine.step()
                     #optimizer_affine.zero_grad(set_to_none=True)
-                    optimizer_poly.step()
-                    optimizer_poly.zero_grad(set_to_none=True)
+                    #optimizer_poly.step()
+                    #optimizer_poly.zero_grad(set_to_none=True)
 
                     # radial table
                     #optimizer_radial.step()
@@ -648,7 +703,8 @@ def training_report(tb_writer, iteration, Ll1, loss, l1_loss, elapsed, testing_i
                         undistorted_p_w2c_homo = torch.cat((undistorted_p_w2c, torch.ones(undistorted_p_w2c.size(0), 1).cuda()), dim=1)
                     else:
                         undistorted_p_w2c_homo = p_w2c
-                    image = torch.clamp(renderFunc(viewpoint, scene.gaussians, *renderArgs, undistorted_p_w2c_homo, distortion_params, u_distortion, v_distortion, u_radial, v_radial, affine_coeff, poly_coeff, radial, global_alignment=scene.getGlobalAlignment())["render"], 0.0, 1.0)
+                    control_points, boundary_original_points = pass_neuralens(lens_net, viewpoint.image_width, viewpoint.image_height, int(viewpoint.image_width / 8), int(viewpoint.image_height / 8), viewpoint.get_K)
+                    image = torch.clamp(renderFunc(viewpoint, scene.gaussians, *renderArgs, control_points, boundary_original_points, undistorted_p_w2c_homo, distortion_params, u_distortion, v_distortion, u_radial, v_radial, affine_coeff, poly_coeff, radial, global_alignment=scene.getGlobalAlignment())["render"], 0.0, 1.0)
                     #image = torch.clamp(renderFunc(viewpoint, scene.gaussians, *renderArgs, p_w2c, global_alignment=scene.getGlobalAlignment())["render"], 0.0, 1.0)
                     gt_image = torch.clamp(viewpoint.original_image.to("cuda"), 0.0, 1.0)
                     if tb_writer and (idx < 5):
