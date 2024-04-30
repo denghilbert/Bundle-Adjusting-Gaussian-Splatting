@@ -398,24 +398,6 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
             plt.savefig(os.path.join(scene.model_path, f"control_points_{iteration}.png"))
 
 
-        loss_projection = 0.
-        if camera_matching_points != {} and projection_loss_count > 0:
-            projection_loss_count = projection_loss_count - 1
-            for matched_camera_id in camera_pairs[viewpoint_cam.uid]:
-                m_kpts0, m_kpts1 = camera_matching_points[viewpoint_cam.uid][matched_camera_id]
-                points_img0 = m_kpts0
-                points_img1 = m_kpts1
-                img0_row_col = m_kpts0.t()[[1, 0], :]
-                img1_row_col = m_kpts1.t()[[1, 0], :]
-                points_proj_img0, points_proj_img1, valid = correspondence_projection(img0_row_col, img1_row_col, viewpoint_cam, viewpoint_stack_constant[matched_camera_id], projection_type='average') # average, self, separate
-
-                point_dists_0 = dist_point_point(points_img0[valid], points_proj_img0[valid])
-                point_dists_1 = dist_point_point(points_img1[valid], points_proj_img1[valid])
-                proj_ray_dist_threshold = 5.0
-
-                loss_projection += projection_loss(point_dists_0, point_dists_1, proj_ray_dist_threshold)
-
-
         # Loss
         gt_image = viewpoint_cam.original_image.cuda()
         #Ll1 = l1_loss(image * mask, gt_image * mask)
@@ -424,96 +406,7 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
         ssim_loss = ssim(image, gt_image)
         loss = (1.0 - opt.lambda_dssim) * Ll1 + opt.lambda_dssim * (1.0 - ssim_loss)# + 0.1 * (loss_projection / len(camera_pairs[viewpoint_cam.uid]))
 
-        #if iteration > 3000:
-        #    residual_color = render(viewpoint_cam, gaussians, pipe, background, mlp_color, hybrid=hybrid)["render"]
-        #    reflect_loss = l1_loss(gt_image - image, residual_color)
-        #    loss = loss + reflect_loss
-
         loss.backward(retain_graph=True)
-
-        #if viewpoint_cam.uid == 57:
-        #    count_57 += 1
-        #if count_57 == 4:
-        #    count_57 = 0
-        #    torch.save(P_view_outsidelens_direction.grad.reshape((P_sensor.shape[0], P_sensor.shape[1], 2)).detach().cpu(), f'../gradient_vis/lego_p_view_gradient{iteration}.pt')
-        #    #torch.save(control_points.grad.detach().cpu(), f'../gradient_vis/lego_control_gradient{iteration}.pt')
-        #    #torch.save(control_points.grad.detach().cpu(), f'../gradient_vis/lego_learnable_control_gradient{iteration}.pt')
-        #    from torchvision.utils import save_image
-        #    save_image(viewpoint_cam.original_image, '../gradient_vis/gt.png')
-
-        if iteration == 7001 and False:
-            outlier_stack = scene.getTrainCameras().copy()
-            outliers = []
-            uid_list = []
-            best_ssim = []
-            for idx, viewpoint_cam in enumerate(outlier_stack):
-                render_pkg = render(viewpoint_cam, gaussians, pipe, background, mlp_color, iteration=iteration, hybrid=hybrid, global_alignment=scene.getGlobalAlignment())
-                image, _, _, _ = render_pkg["render"], render_pkg["viewspace_points"], render_pkg["visibility_filter"], render_pkg["radii"]
-                gt_image = viewpoint_cam.original_image.cuda()
-                Ll1 = l1_loss(image, gt_image)
-                ssim_loss = ssim(image, gt_image)
-                if Ll1 > 0.02 and ssim_loss < 0.8:
-                #if ssim_loss < 0.9:
-                #if Ll1 > 0.02:
-                    outliers.append(viewpoint_cam)
-                    uid_list.append(viewpoint_cam.uid)
-                    best_ssim.append(ssim_loss)
-                    wandb_img = image.unsqueeze(0).detach()
-                    wandb_img_gt = gt_image.unsqueeze(0).detach()
-                    images_error = (wandb_img_gt - wandb_img).abs()
-                    cat_imgs = torch.cat((gt_image, image), dim=2).detach()
-                    images = {
-                        f"failure/gt_rendered": wandb_image(cat_imgs),
-                        f"failure/gt_img": wandb_image(gt_image),
-                        f"failure/rendered_img": wandb_image(wandb_img),
-                        f"failure/rgb_error": wandb_image(images_error),
-                        f"failure/loss": Ll1,
-                        f"failure/uid": viewpoint_cam.uid,
-                    }
-                    if use_wandb:
-                        wandb.log(images, step=iteration + idx)
-            if len(outliers) > 0:
-                for i in range(2000):
-                    viewpoint_cam = outliers[i % len(outliers)]
-                    render_pkg = render(viewpoint_cam, gaussians, pipe, background, mlp_color, iteration=iteration, hybrid=hybrid, global_alignment=scene.getGlobalAlignment())
-                    image, _, _, _ = render_pkg["render"], render_pkg["viewspace_points"], render_pkg["visibility_filter"], render_pkg["radii"]
-                    gt_image = viewpoint_cam.original_image.cuda()
-
-                    Ll1 = l1_loss(image, gt_image)
-                    ssim_loss = ssim(image, gt_image)
-                    loss = (1.0 - opt.lambda_dssim) * Ll1 + opt.lambda_dssim * (1.0 - ssim_loss)# + 0.1 * (loss_projection / len(camera_pairs[viewpoint_cam.uid]))
-                    loss.backward(retain_graph=True)
-
-                    if opt_cam:
-                        if i <= 700:
-                            scene.optimizer_translation.param_groups[viewpoint_cam.uid]['lr'] = scene.optimizer_translation.param_groups[viewpoint_cam.uid]['lr'] * 10
-                            scene.optimizer_rotation.param_groups[viewpoint_cam.uid]['lr'] = scene.optimizer_rotation.param_groups[viewpoint_cam.uid]['lr'] * 10
-                        elif 700 < i < 1500:
-                            scene.optimizer_translation.param_groups[viewpoint_cam.uid]['lr'] = scene.optimizer_translation.param_groups[viewpoint_cam.uid]['lr'] * 5
-                            scene.optimizer_rotation.param_groups[viewpoint_cam.uid]['lr'] = scene.optimizer_rotation.param_groups[viewpoint_cam.uid]['lr'] * 5
-                        else:
-                            scene.optimizer_translation.param_groups[viewpoint_cam.uid]['lr'] = scene.optimizer_translation.param_groups[viewpoint_cam.uid]['lr'] * 2
-                            scene.optimizer_rotation.param_groups[viewpoint_cam.uid]['lr'] = scene.optimizer_rotation.param_groups[viewpoint_cam.uid]['lr'] * 2
-
-                        scene.optimizer_rotation.step()
-                        scene.optimizer_translation.step()
-                        scene.optimizer_rotation.zero_grad(set_to_none=True)
-                        scene.optimizer_translation.zero_grad(set_to_none=True)
-                        scene.scheduler_rotation.step()
-                        scene.scheduler_translation.step()
-                        if i <= 700:
-                            scene.optimizer_translation.param_groups[viewpoint_cam.uid]['lr'] = scene.optimizer_translation.param_groups[viewpoint_cam.uid]['lr'] / 10
-                            scene.optimizer_rotation.param_groups[viewpoint_cam.uid]['lr'] = scene.optimizer_rotation.param_groups[viewpoint_cam.uid]['lr'] / 10
-                        elif 700 < i < 1500:
-                            scene.optimizer_translation.param_groups[viewpoint_cam.uid]['lr'] = scene.optimizer_translation.param_groups[viewpoint_cam.uid]['lr'] / 5
-                            scene.optimizer_rotation.param_groups[viewpoint_cam.uid]['lr'] = scene.optimizer_rotation.param_groups[viewpoint_cam.uid]['lr'] / 5
-                        else:
-                            scene.optimizer_translation.param_groups[viewpoint_cam.uid]['lr'] = scene.optimizer_translation.param_groups[viewpoint_cam.uid]['lr'] / 2
-                            scene.optimizer_rotation.param_groups[viewpoint_cam.uid]['lr'] = scene.optimizer_rotation.param_groups[viewpoint_cam.uid]['lr'] / 2
-
-                    if args.vis_pose and i % 100 == 0:
-                        pose_GT, pose_aligned = scene.loadAlignCameras(if_vis_train=True, camera_uid_list=uid_list, path=scene.model_path)
-                        vis_cameras(opt_vis, vis, step=i, poses=[pose_aligned, pose_GT])
 
 
         if iteration % 10 == 0:
@@ -584,7 +477,6 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
                 gaussians.max_radii2D[visibility_filter] = torch.max(gaussians.max_radii2D[visibility_filter], radii[visibility_filter])
 
                 gaussians.add_densification_stats(viewspace_point_tensor, visibility_filter)
-                import pdb;pdb.set_trace()
                 if iteration % 10 == 0:
                     scalars = {
                         f"gradient/2d_gradient": viewspace_point_tensor.grad.mean(),

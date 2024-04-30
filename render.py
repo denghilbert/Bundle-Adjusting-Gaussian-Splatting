@@ -43,6 +43,17 @@ is_open = check_socket_open(opt_vis.visdom.server,opt_vis.visdom.port)
 vis = visdom.Visdom(server=opt_vis.visdom.server,port=opt_vis.visdom.port,env=opt_vis.group)
 
 
+def homogenize(X: torch.Tensor):
+    assert X.ndim == 2
+    assert X.shape[1] in (2, 3)
+    return torch.cat(
+        (X, torch.ones((X.shape[0], 1), dtype=X.dtype, device=X.device)), dim=1
+    )
+def dehomogenize(X: torch.Tensor):
+    assert X.ndim == 2
+    assert X.shape[1] in (3, 4)
+    return X[:, :-1] / X[:, -1:]
+
 
 def render_set(model_path, name, iteration, views, gaussians, pipeline, background, specular=None, hybrid=False, distortion_params=None, u_distortion=None, v_distortion=None, u_radial=None, v_radial=None, affine_coeff=None, poly_coeff=None):
     render_path = os.path.join(model_path, name, "ours_{}".format(iteration), "renders")
@@ -100,6 +111,37 @@ def render_set(model_path, name, iteration, views, gaussians, pipeline, backgrou
             mlp_color = 0
             global_alignment = [torch.tensor([[1., 0, 0], [0, 1., 0], [0, 0, 1.]], device='cuda'), torch.tensor([1.], device='cuda')]
 
+
+            width = view.image_width
+            height = view.image_height
+            sample_width = int(width / 8)
+            sample_height = int(height / 8)
+            K = view.get_K
+            i, j = np.meshgrid(
+                np.linspace(0, width, sample_width),
+                np.linspace(0, height, sample_height),
+                indexing="ij",
+            )
+            i = i.T
+            j = j.T
+            P_sensor = (
+                torch.from_numpy(np.stack((i, j), axis=-1))
+                .to(torch.float32)
+                .cuda()
+            )
+            P_sensor_hom = homogenize(P_sensor.reshape((-1, 2)))
+            P_view_insidelens_direction_hom = (torch.inverse(K) @ P_sensor_hom.T).T
+            P_view_insidelens_direction = dehomogenize(P_view_insidelens_direction_hom)
+            P_view_outsidelens_direction = P_view_insidelens_direction
+            camera_directions_w_lens = homogenize(P_view_outsidelens_direction)
+            control_points = camera_directions_w_lens.reshape((P_sensor.shape[0], P_sensor.shape[1], 3))[:, :, :2]
+            r = torch.sqrt(torch.sum(control_points**2, dim=-1, keepdim=True))
+            inv_r = 1 / r
+            theta = torch.atan(r)
+            control_points = control_points * inv_r * theta
+            boundary_original_points = P_view_insidelens_direction[-1]
+            control_points = nn.Parameter(control_points.cuda().requires_grad_(True))
+
             # render current view
             gaussians_xyz = gaussians.get_xyz.detach()
             gaussians_xyz_homo = torch.cat((gaussians_xyz, torch.ones(gaussians_xyz.size(0), 1).cuda()), dim=1)
@@ -118,7 +160,7 @@ def render_set(model_path, name, iteration, views, gaussians, pipeline, backgrou
             else:
                 undistorted_p_w2c_homo = p_w2c
 
-            results = render(view, gaussians, pipeline, background, mlp_color, undistorted_p_w2c_homo, distortion_params, u_distortion, v_distortion, u_radial, v_radial, affine_coeff, poly_coeff, radial, global_alignment=global_alignment)
+            results = render(view, gaussians, pipeline, background, mlp_color, control_points, boundary_original_points, undistorted_p_w2c_homo, distortion_params, u_distortion, v_distortion, u_radial, v_radial, affine_coeff, poly_coeff, radial, global_alignment=global_alignment)
             rendering, depth_tensor, weight_mask = results["render"], results["depth"], results["weights"]
             depth_tensor_normalized = (depth_tensor - depth_tensor[mask].min()) / (depth_tensor[mask].max() - depth_tensor[mask].min())
             depth_tensor_grey = depth_tensor_normalized.repeat(3, 1, 1)
