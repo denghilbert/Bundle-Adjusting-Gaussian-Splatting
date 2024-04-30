@@ -21,7 +21,7 @@ class iResNet(nn.Module):
                     Fm.IResNetLayer,
                     {
                         "hutchinson_samples": 1,
-                        "internal_size": 256,
+                        "internal_size": 512,
                         "n_internal_layers": 4,
                     },
                     conditions=[],
