@@ -76,6 +76,7 @@ def render_set(model_path, name, iteration, views, gaussians, pipeline, backgrou
         affine_coeff = torch.load(os.path.join(model_path, f'affine_coeff{iteration}.pt'))
         poly_coeff = torch.load(os.path.join(model_path, f'poly_coeff{iteration}.pt'))
         radial = torch.load(os.path.join(model_path, f'radial{iteration}.pt'))
+        lens_net = torch.load(os.path.join(model_path, f'lens_net{iteration}.pth'))
         import pdb;pdb.set_trace()
     elif 'test' in render_path:
         distortion_params = torch.load(os.path.join(model_path, 'distortion_params.pt'))
@@ -86,6 +87,7 @@ def render_set(model_path, name, iteration, views, gaussians, pipeline, backgrou
         affine_coeff = torch.load(os.path.join(model_path, f'affine_coeff{iteration}.pt'))
         poly_coeff = torch.load(os.path.join(model_path, f'poly_coeff{iteration}.pt'))
         radial = torch.load(os.path.join(model_path, f'radial{iteration}.pt'))
+        lens_net = torch.load(os.path.join(model_path, f'lens_net{iteration}.pt'))
     else:
         distortion_params = torch.nn.Parameter(torch.zeros(8).cuda())
         u_distortion = nn.Parameter(torch.zeros(400, 400).cuda().requires_grad_(True))
@@ -95,6 +97,36 @@ def render_set(model_path, name, iteration, views, gaussians, pipeline, backgrou
         affine_coeff = nn.Parameter(torch.tensor([1., 0., 0., 1., 0., 0.]).cuda().requires_grad_(True))
         #poly_coeff = nn.Parameter(torch.tensor([0.017343506884212139, -0.020094679982101907, -0.019892937295193619, 0.0085534590404976324]).cuda().requires_grad_(True))
         poly_coeff = nn.Parameter(torch.tensor([0., 0., 0., 0.]).cuda().requires_grad_(True))
+
+
+    width = views[0].image_width
+    height = views[0].image_height
+    sample_width = int(width / 8)
+    sample_height = int(height / 8)
+    K = views[0].get_K
+    i, j = np.meshgrid(
+        np.linspace(0 - 500, width + 500, sample_width),
+        np.linspace(0 - 250, height + 250, sample_height),
+        #np.linspace(0, width, sample_width),
+        #np.linspace(0, height, sample_height),
+        indexing="ij",
+    )
+    i = i.T
+    j = j.T
+    P_sensor = (
+        torch.from_numpy(np.stack((i, j), axis=-1))
+        .to(torch.float32)
+        .cuda()
+    )
+    P_sensor_hom = homogenize(P_sensor.reshape((-1, 2)))
+    P_view_insidelens_direction_hom = (torch.inverse(K) @ P_sensor_hom.T).T
+    P_view_insidelens_direction = dehomogenize(P_view_insidelens_direction_hom)
+    P_view_outsidelens_direction = lens_net.forward(P_view_insidelens_direction)
+    control_points = homogenize(P_view_outsidelens_direction)
+    control_points = control_points.reshape((P_sensor.shape[0], P_sensor.shape[1], 3))[:, :, :2]
+    boundary_original_points = P_view_insidelens_direction[-1]
+
+
     for idx, view in enumerate(tqdm(views, desc="Rendering progress")):
         gt = view.original_image[0:3, :, :]
         mask = gt[:1, :, :].bool()
@@ -112,35 +144,6 @@ def render_set(model_path, name, iteration, views, gaussians, pipeline, backgrou
             global_alignment = [torch.tensor([[1., 0, 0], [0, 1., 0], [0, 0, 1.]], device='cuda'), torch.tensor([1.], device='cuda')]
 
 
-            width = view.image_width
-            height = view.image_height
-            sample_width = int(width / 8)
-            sample_height = int(height / 8)
-            K = view.get_K
-            i, j = np.meshgrid(
-                np.linspace(0, width, sample_width),
-                np.linspace(0, height, sample_height),
-                indexing="ij",
-            )
-            i = i.T
-            j = j.T
-            P_sensor = (
-                torch.from_numpy(np.stack((i, j), axis=-1))
-                .to(torch.float32)
-                .cuda()
-            )
-            P_sensor_hom = homogenize(P_sensor.reshape((-1, 2)))
-            P_view_insidelens_direction_hom = (torch.inverse(K) @ P_sensor_hom.T).T
-            P_view_insidelens_direction = dehomogenize(P_view_insidelens_direction_hom)
-            P_view_outsidelens_direction = P_view_insidelens_direction
-            camera_directions_w_lens = homogenize(P_view_outsidelens_direction)
-            control_points = camera_directions_w_lens.reshape((P_sensor.shape[0], P_sensor.shape[1], 3))[:, :, :2]
-            r = torch.sqrt(torch.sum(control_points**2, dim=-1, keepdim=True))
-            inv_r = 1 / r
-            theta = torch.atan(r)
-            control_points = control_points * inv_r * theta
-            boundary_original_points = P_view_insidelens_direction[-1]
-            control_points = nn.Parameter(control_points.cuda().requires_grad_(True))
 
             # render current view
             gaussians_xyz = gaussians.get_xyz.detach()
