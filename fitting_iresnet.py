@@ -68,7 +68,7 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
     lens_net = iResNet().cuda()
     l_lens_net = [{'params': lens_net.parameters(), 'lr': 1e-5}]
     optimizer_lens_net = torch.optim.Adam(l_lens_net, eps=1e-15)
-    scheduler_lens_net = torch.optim.lr_scheduler.MultiStepLR(optimizer_lens_net, milestones=[2000, 50000], gamma=0.1)
+    scheduler_lens_net = torch.optim.lr_scheduler.MultiStepLR(optimizer_lens_net, milestones=[500, 50000], gamma=1)
     #scheduler_lens_net = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer_lens_net, 'min')
     def zero_weights(m):
         if isinstance(m, nn.Linear):
@@ -84,9 +84,26 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
     sample_width = int(width / 8)
     sample_height = int(height / 8)
     K = viewpoint_cam.get_K
+    def transform(x):
+        return np.sin(np.pi * x - np.pi/2) / 2 + 0.5
+    min_w, max_w = 0 - 500, width + 500
+    min_h, max_h = 0 - 250, width + 250
+    linear_space_w = np.linspace(0, 1, sample_width)
+    mapped_space_w = linear_space_w * (max_w - min_w) + min_w
+    normalized_space_w = (mapped_space_w - min_w) / (max_w - min_w)
+    transformed_space_normalized_w = transform(normalized_space_w)
+    transformed_space_w = transformed_space_normalized_w * (max_w - min_w) + min_w
+    linear_space_h = np.linspace(0, 1, sample_width)
+    mapped_space_h = linear_space_h * (max_h - min_h) + min_h
+    normalized_space_h = (mapped_space_h - min_h) / (max_h - min_h)
+    transformed_space_normalized_h = transform(normalized_space_h)
+    transformed_space_h = transformed_space_normalized_h * (max_h - min_h) + min_h
+
     i, j = np.meshgrid(
-        np.linspace(0, width, sample_width),
-        np.linspace(0, height, sample_height),
+        #transformed_space_w,
+        #transformed_space_h,
+        np.linspace(0 - 500, width + 500, sample_width),
+        np.linspace(0 - 250, height + 250, sample_height),
         indexing="ij",
     )
     i = i.T
@@ -118,6 +135,8 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
 
 
     boundary_original_points = P_view_insidelens_direction[-1]
+    boundary_original_points[0] -= 0.8
+    boundary_original_points[1] -= 0.3
 
     for idx, points in enumerate([control_points, gt_points]):
         p1 = points.reshape(-1, 2)
@@ -135,8 +154,8 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
         plt.savefig(os.path.join(scene.model_path, f"init{idx}.png"))
 
 
-    progress_bar = tqdm(range(0, 10000), desc="Fitting Iresnet")
-    for i in range(5000):
+    progress_bar = tqdm(range(0, 2000), desc="Fitting Iresnet")
+    for i in range(2000):
         P_view_outsidelens_direction = lens_net.forward(P_view_insidelens_direction)
         control_points = homogenize(P_view_outsidelens_direction)
         control_points = control_points.reshape((P_sensor.shape[0], P_sensor.shape[1], 3))[:, :, :2]

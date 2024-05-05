@@ -120,7 +120,7 @@ def pass_neuralens(lens_net, min_w, max_w, min_h, max_h, sample_width, sample_he
     return camera_directions_w_lens, P_view_insidelens_direction[-1]
 
 
-def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoint_iterations, checkpoint, debug_from, use_wandb=False, random_init=False, hybrid=False, opt_cam=False, opt_distortion=False, opt_intrinsic=False, r_t_noise=[0., 0.], r_t_lr=[0.001, 0.001], global_alignment_lr=0.001):
+def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoint_iterations, checkpoint, debug_from, use_wandb=False, random_init=False, hybrid=False, opt_cam=False, opt_distortion=False, opt_intrinsic=False, r_t_noise=[0., 0.], r_t_lr=[0.001, 0.001], global_alignment_lr=0.001, extra_loss=False, start_opt_lens=7000):
     first_iter = 0
     tb_writer = prepare_output_and_logger(dataset)
     gaussians = GaussianModel(dataset.sh_degree, dataset.asg_degree)
@@ -462,6 +462,9 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
         ssim_loss = ssim(image, gt_image)
         loss = (1.0 - opt.lambda_dssim) * Ll1 + opt.lambda_dssim * (1.0 - ssim_loss)# + 0.1 * (loss_projection / len(camera_pairs[viewpoint_cam.uid]))
 
+        if extra_loss:
+            loss += 100 * ((control_points - ref_points)**2).mean()
+
         loss.backward(retain_graph=True)
 
 
@@ -568,8 +571,9 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
                     #optimizer_control_points.step()
                     #optimizer_control_points.zero_grad(set_to_none=True)
 
-                    optimizer_lens_net.step() #lens_net.i_resnet_linear.module_list[0].residual[0].weight
-                    optimizer_lens_net.zero_grad(set_to_none=True)
+                    if iteration > start_opt_lens:
+                        optimizer_lens_net.step() #lens_net.i_resnet_linear.module_list[0].residual[0].weight
+                        optimizer_lens_net.zero_grad(set_to_none=True)
 
                     # feature grid
                     #optimizer_u_distortion.step()
@@ -822,6 +826,8 @@ if __name__ == "__main__":
     parser.add_argument("--vis_pose", action="store_true", default=False)
     # optimize distortion
     parser.add_argument("--opt_distortion", action="store_true", default=False)
+    parser.add_argument("--extra_loss", action="store_true", default=False)
+    parser.add_argument('--start_opt_lens', type=int, default=7000)
 
     args = parser.parse_args(sys.argv[1:])
     args.save_iterations.append(args.iterations)
@@ -845,7 +851,8 @@ if __name__ == "__main__":
     # Start GUI server, configure and run training
     network_gui.init(args.ip, args.port)
     torch.autograd.set_detect_anomaly(args.detect_anomaly)
-    training(lp.extract(args), op.extract(args), pp.extract(args), args.test_iterations, args.save_iterations, args.checkpoint_iterations, args.start_checkpoint, args.debug_from, use_wandb=args.wandb, random_init=args.random_init_pc, hybrid=args.hybrid, opt_cam=args.opt_cam, opt_distortion=args.opt_distortion, opt_intrinsic=args.opt_intrinsic, r_t_lr=args.r_t_lr, r_t_noise=args.r_t_noise, global_alignment_lr=args.global_alignment_lr)
+    training(lp.extract(args), op.extract(args), pp.extract(args), args.test_iterations, args.save_iterations, args.checkpoint_iterations, args.start_checkpoint, args.debug_from, use_wandb=args.wandb, random_init=args.random_init_pc, hybrid=args.hybrid, opt_cam=args.opt_cam, opt_distortion=args.opt_distortion, opt_intrinsic=args.opt_intrinsic, r_t_lr=args.r_t_lr, r_t_noise=args.r_t_noise, global_alignment_lr=args.global_alignment_lr,
+             extra_loss=args.extra_loss, start_opt_lens=args.start_opt_lens)
 
     # All done
     print("\nTraining complete.")

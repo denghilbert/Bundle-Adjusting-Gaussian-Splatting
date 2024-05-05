@@ -12,6 +12,7 @@
 import os
 import sys
 from PIL import Image
+import imageio
 from typing import NamedTuple, Optional
 from scene.colmap_loader import read_extrinsics_text, read_intrinsics_text, qvec2rotmat, \
     read_extrinsics_binary, read_intrinsics_binary, read_points3D_binary, read_points3D_text
@@ -111,6 +112,10 @@ def readColmapCameras(cam_extrinsics, cam_intrinsics, images_folder):
                 [0., focal_length_y, height * 0.5],
                 [0., 0., 1.]
             ], dtype=np.float32)
+            #print(intr.model)
+            #print(intr.params)
+            #print(intrinsic_matrix)
+            #import pdb;pdb.set_trace()
         elif intr.model=="SIMPLE_RADIAL":
             focal_length_x = intr.params[0]
             FovY = focal2fov(focal_length_x, height)
