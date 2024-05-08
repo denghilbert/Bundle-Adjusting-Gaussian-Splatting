@@ -246,11 +246,12 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
     inv_r = 1 / r
     theta = torch.atan(r)
     coeff = [0, 0, 0, 0]
-    cam_intrinsics = read_intrinsics_binary(os.path.join(dataset.source_path, 'sparse/0/cameras.bin'))
-    for idx, key in enumerate(cam_intrinsics):
-        if 'FISHEYE' in cam_intrinsics[key].model:
-            coeff = cam_intrinsics[key].params[-4:].tolist()
-            break
+    if os.path.exists(os.path.join(dataset.source_path, 'sparse/0/cameras.bin')):
+        cam_intrinsics = read_intrinsics_binary(os.path.join(dataset.source_path, 'sparse/0/cameras.bin'))
+        for idx, key in enumerate(cam_intrinsics):
+            if 'FISHEYE' in cam_intrinsics[key].model:
+                coeff = cam_intrinsics[key].params[-4:].tolist()
+                break
     #ref_points = ref_points * inv_r * (theta + coeff[0] * theta**3 + coeff[1] * theta**5 + coeff[2] * theta**7 + coeff[3] * theta**9)
     inf_mask = torch.isinf(ref_points)
     nan_mask = torch.isnan(ref_points)

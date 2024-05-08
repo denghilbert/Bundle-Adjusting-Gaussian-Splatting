@@ -205,12 +205,12 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
     #u_init[86, 81] = 2
     #u_init[87, 80] = 3
     #u_init[87, 81] = 4
+
     u_distortion = nn.Parameter(torch.zeros(400, 400).cuda().requires_grad_(True))
     v_distortion = nn.Parameter(torch.zeros(400, 400).cuda().requires_grad_(True))
     u_radial = nn.Parameter(torch.ones(400, 400).cuda().requires_grad_(True))
     v_radial = nn.Parameter(torch.ones(400, 400).cuda().requires_grad_(True))
     radial = nn.Parameter(torch.ones(1000).cuda().requires_grad_(True))
-    #radial = nn.Parameter(torch.zeros(1000, 4).cuda().requires_grad_(True))
     optimizer_u_distortion = torch.optim.Adam([{'params': u_distortion, 'lr': 0.0001}])
     optimizer_v_distortion = torch.optim.Adam([{'params': v_distortion, 'lr': 0.0001}])
     optimizer_u_radial = torch.optim.Adam([{'params': u_radial, 'lr': 0.0001}])
@@ -263,9 +263,6 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
     print(boundary_original_points)
     ref_points = nn.Parameter(ref_points.cuda().requires_grad_(True))
     optimizer_ref_points = torch.optim.Adam([{'params': ref_points, 'lr': 0.0001}])
-    #ref_points = ref_points.permute(2, 0, 1).unsqueeze(0)  # Shape becomes [1, 3, H, W]
-    #ref_points = F.interpolate(ref_points, size=(height, width), mode='bicubic', align_corners=False)
-    #ref_points = ref_points.squeeze(0).permute(1, 2, 0)
 
 
     width = viewpoint_cam.image_width

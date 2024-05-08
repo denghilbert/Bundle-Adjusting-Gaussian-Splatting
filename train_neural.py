@@ -120,7 +120,7 @@ def pass_neuralens(lens_net, min_w, max_w, min_h, max_h, sample_width, sample_he
     return camera_directions_w_lens, P_view_insidelens_direction[-1]
 
 
-def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoint_iterations, checkpoint, debug_from, use_wandb=False, random_init=False, hybrid=False, opt_cam=False, opt_distortion=False, opt_intrinsic=False, r_t_noise=[0., 0.], r_t_lr=[0.001, 0.001], global_alignment_lr=0.001, extra_loss=False, start_opt_lens=7000):
+def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoint_iterations, checkpoint, debug_from, use_wandb=False, random_init=False, hybrid=False, opt_cam=False, opt_distortion=False, opt_intrinsic=False, r_t_noise=[0., 0.], r_t_lr=[0.001, 0.001], global_alignment_lr=0.001, extra_loss=False, start_opt_lens=7000, extend_scale=2.):
     first_iter = 0
     tb_writer = prepare_output_and_logger(dataset)
     gaussians = GaussianModel(dataset.sh_degree, dataset.asg_degree)
@@ -225,8 +225,8 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
     sample_height = int(height / 8)
     K = viewpoint_cam.get_K
     i, j = np.meshgrid(
-        np.linspace(0 - width/2, width + width/2, sample_width),
-        np.linspace(0 - height/2, height + height/2, sample_height),
+        np.linspace(0 - width/extend_scale, width + width/extend_scale, sample_width),
+        np.linspace(0 - height/extend_scale, height + height/extend_scale, sample_height),
         indexing="ij",
     )
     i = i.T
@@ -246,11 +246,12 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
     inv_r = 1 / r
     theta = torch.atan(r)
     coeff = [0, 0, 0, 0]
-    cam_intrinsics = read_intrinsics_binary(os.path.join(dataset.source_path, 'sparse/0/cameras.bin'))
-    for idx, key in enumerate(cam_intrinsics):
-        if 'FISHEYE' in cam_intrinsics[key].model:
-            coeff = cam_intrinsics[key].params[-4:].tolist()
-            break
+    if os.path.exists(os.path.join(dataset.source_path, 'sparse/0/cameras.bin')):
+        cam_intrinsics = read_intrinsics_binary(os.path.join(dataset.source_path, 'sparse/0/cameras.bin'))
+        for idx, key in enumerate(cam_intrinsics):
+            if 'FISHEYE' in cam_intrinsics[key].model:
+                coeff = cam_intrinsics[key].params[-4:].tolist()
+                break
     ref_points = ref_points * inv_r * (theta + coeff[0] * theta**3 + coeff[1] * theta**5 + coeff[2] * theta**7 + coeff[3] * theta**9)
     boundary_original_points = P_view_insidelens_direction[-1]
     print(boundary_original_points)
@@ -267,8 +268,8 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
     sample_height = int(height / 8)
     K = viewpoint_cam.get_K
     i, j = np.meshgrid(
-        np.linspace(0 - width/2, width + width/2, sample_width),
-        np.linspace(0 - height/2, height + height/2, sample_height),
+        np.linspace(0 - width/extend_scale, width + width/extend_scale, sample_width),
+        np.linspace(0 - height/extend_scale, height + height/extend_scale, sample_height),
         indexing="ij",
     )
     i = i.T
@@ -306,8 +307,8 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
     sample_height = int(height/ 8)
     K = viewpoint_cam.get_K
     i, j = np.meshgrid(
-        np.linspace(0 - width/2, width + width/2, sample_width),
-        np.linspace(0 - height/2, height + height/2, sample_height),
+        np.linspace(0 - width/extend_scale, width + width/extend_scale, sample_width),
+        np.linspace(0 - height/extend_scale, height + height/extend_scale, sample_height),
         indexing="ij",
     )
     i = i.T
@@ -828,6 +829,7 @@ if __name__ == "__main__":
     parser.add_argument("--opt_distortion", action="store_true", default=False)
     parser.add_argument("--extra_loss", action="store_true", default=False)
     parser.add_argument('--start_opt_lens', type=int, default=7000)
+    parser.add_argument('--extend_scale', type=float, default=2.)
 
     args = parser.parse_args(sys.argv[1:])
     args.save_iterations.append(args.iterations)
@@ -852,7 +854,7 @@ if __name__ == "__main__":
     network_gui.init(args.ip, args.port)
     torch.autograd.set_detect_anomaly(args.detect_anomaly)
     training(lp.extract(args), op.extract(args), pp.extract(args), args.test_iterations, args.save_iterations, args.checkpoint_iterations, args.start_checkpoint, args.debug_from, use_wandb=args.wandb, random_init=args.random_init_pc, hybrid=args.hybrid, opt_cam=args.opt_cam, opt_distortion=args.opt_distortion, opt_intrinsic=args.opt_intrinsic, r_t_lr=args.r_t_lr, r_t_noise=args.r_t_noise, global_alignment_lr=args.global_alignment_lr,
-             extra_loss=args.extra_loss, start_opt_lens=args.start_opt_lens)
+             extra_loss=args.extra_loss, start_opt_lens=args.start_opt_lens, extend_scale=args.extend_scale)
 
     # All done
     print("\nTraining complete.")

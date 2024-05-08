@@ -90,6 +90,10 @@ def render_set(model_path, name, iteration, views, gaussians, pipeline, backgrou
         poly_coeff = nn.Parameter(torch.tensor([0., 0., 0., 0.]).cuda().requires_grad_(True))
 
 
+    #print(views[0].intrinsic_matrix)
+    #views[0].reset_intrinsic(0.725839191500477 + 0.0, 0.4940489874075565 + 0.0, scale_pix=5.)
+    #print(views[0].intrinsic_matrix)
+
     width = views[0].image_width
     height = views[0].image_height
     sample_width = int(width / 8)
@@ -123,6 +127,9 @@ def render_set(model_path, name, iteration, views, gaussians, pipeline, backgrou
         gt = view.original_image[0:3, :, :]
         mask = gt[:1, :, :].bool()
 
+        #if idx > 0:
+        #    view.reset_intrinsic(0.725839191500477 + 0.0, 0.4940489874075565 + 0.0, scale_pix=5.)
+
         if hybrid:
             dir_pp = (gaussians.get_xyz - view.camera_center.repeat(gaussians.get_features.shape[0], 1))
             dir_pp_normalized = dir_pp / dir_pp.norm(dim=1, keepdim=True)
@@ -155,20 +162,20 @@ def render_set(model_path, name, iteration, views, gaussians, pipeline, backgrou
 
             results = render(view, gaussians, pipeline, background, mlp_color, control_points, boundary_original_points, undistorted_p_w2c_homo, distortion_params, u_distortion, v_distortion, u_radial, v_radial, affine_coeff, poly_coeff, radial, global_alignment=global_alignment)
             rendering, depth_tensor, weight_mask = results["render"], results["depth"], results["weights"]
-            depth_tensor_normalized = (depth_tensor - depth_tensor[mask].min()) / (depth_tensor[mask].max() - depth_tensor[mask].min())
-            depth_tensor_grey = depth_tensor_normalized.repeat(3, 1, 1)
-            depth_array = depth_tensor_normalized.squeeze().cpu().detach().numpy()
-            depth_colored = plt.get_cmap('viridis')(depth_array)[:, :, :3]  # Drop the alpha channel
-            depth_colored_tensor = torch.from_numpy(depth_colored).permute(2, 0, 1).float()  # Rearrange dimensions to CxHxW
+            #depth_tensor_normalized = (depth_tensor - depth_tensor[mask].min()) / (depth_tensor[mask].max() - depth_tensor[mask].min())
+            #depth_tensor_grey = depth_tensor_normalized.repeat(3, 1, 1)
+            #depth_array = depth_tensor_normalized.squeeze().cpu().detach().numpy()
+            #depth_colored = plt.get_cmap('viridis')(depth_array)[:, :, :3]  # Drop the alpha channel
+            #depth_colored_tensor = torch.from_numpy(depth_colored).permute(2, 0, 1).float()  # Rearrange dimensions to CxHxW
 
 
 
         torchvision.utils.save_image(rendering, os.path.join(render_path, '{0:05d}'.format(idx) + ".png"))
         torchvision.utils.save_image(gt, os.path.join(gts_path, '{0:05d}'.format(idx) + ".png"))
-        torchvision.utils.save_image(depth_colored_tensor, os.path.join(depth_path, '{0:05d}'.format(idx) + ".png"))
-        torchvision.utils.save_image(depth_colored_tensor, os.path.join(depth_path, '{0:05d}'.format(idx) + ".png"))
-        torchvision.utils.save_image(depth_tensor_grey, os.path.join(depth_path, 'grey_{0:05d}'.format(idx) + ".png"))
-        torchvision.utils.save_image(weight_mask, os.path.join(mask_path, 'mask_{0:05d}'.format(idx) + ".png"))
+        #torchvision.utils.save_image(depth_colored_tensor, os.path.join(depth_path, '{0:05d}'.format(idx) + ".png"))
+        #torchvision.utils.save_image(depth_colored_tensor, os.path.join(depth_path, '{0:05d}'.format(idx) + ".png"))
+        #torchvision.utils.save_image(depth_tensor_grey, os.path.join(depth_path, 'grey_{0:05d}'.format(idx) + ".png"))
+        #torchvision.utils.save_image(weight_mask, os.path.join(mask_path, 'mask_{0:05d}'.format(idx) + ".png"))
 
 def render_sets(dataset : ModelParams, iteration : int, pipeline : PipelineParams, skip_train : bool, skip_test : bool, mode: str, hybrid: bool, opt_test_cam: bool, opt_intrinsic: bool, opt_extrinsic: bool, extend_scale: float):
     gaussians = GaussianModel(dataset.sh_degree, dataset.asg_degree)
@@ -185,11 +192,11 @@ def render_sets(dataset : ModelParams, iteration : int, pipeline : PipelineParam
     optimizer_u_radial = torch.optim.Adam([{'params': u_radial, 'lr': 0.0001}])
     optimizer_v_radial = torch.optim.Adam([{'params': v_radial, 'lr': 0.0001}])
     affine_coeff = nn.Parameter(torch.tensor([1., 0., 0., 1., 0., 0.]).cuda().requires_grad_(True))
-    #poly_coeff = nn.Parameter(torch.tensor([0.017343506884212139, -0.020094679982101907, -0.019892937295193619, 0.0085534590404976324]).cuda().requires_grad_(True))
     poly_coeff = nn.Parameter(torch.tensor([0., 0., 0., 0.]).cuda().requires_grad_(True))
 
-    scene.train_cameras = torch.load(os.path.join(scene.model_path, f'cams_train{iteration}.pt'))
-    #import pdb;pdb.set_trace()
+    # when we optimize pose, we wish to load poses
+    #scene.train_cameras = torch.load(os.path.join(scene.model_path, f'cams_train{iteration}.pt'))
+
     specular = None
     if hybrid:
         specular = SpecularModel()

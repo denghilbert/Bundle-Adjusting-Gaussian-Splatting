@@ -13,7 +13,7 @@ import torch
 from torch import nn
 import torch.nn.functional as F
 import numpy as np
-from utils.graphics_utils import getWorld2View2, getProjectionMatrix, getWorld2View2_torch_tensor, get_rays
+from utils.graphics_utils import getWorld2View2, getProjectionMatrix, getWorld2View2_torch_tensor, get_rays, fov2focal
 from utils.camera import Lie
 
 
@@ -89,12 +89,19 @@ class Camera(nn.Module):
         self.full_proj_transform = (self.world_view_transform.unsqueeze(0).bmm(self.projection_matrix.unsqueeze(0))).squeeze(0)
         self.camera_center = self.world_view_transform.inverse()[3, :3]
 
-    def reset_intrinsic(self, FoVx, FoVy):
+    def reset_intrinsic(self, FoVx, FoVy, scale_pix=1.):
         #self.projection_matrix = getProjectionMatrix(znear=self.znear, zfar=self.zfar, fovX=FoVx, fovY=FoVy).transpose(0,1).cuda()
         self.learnable_fovx = nn.Parameter(torch.tensor(FoVx).cuda().requires_grad_(True))
         self.learnable_fovy = nn.Parameter(torch.tensor(FoVy).cuda().requires_grad_(True))
         self.projection_matrix = getProjectionMatrix(znear=self.znear, zfar=self.zfar, fovX=self.learnable_fovx, fovY=self.learnable_fovy).transpose(0,1).cuda()
         self.full_proj_transform = (self.world_view_transform.unsqueeze(0).bmm(self.projection_matrix.unsqueeze(0))).squeeze(0)
+
+        self.image_width = scale_pix * self.image_width
+        self.image_height = scale_pix * self.image_height
+        self.intrinsic_matrix[0][0] = fov2focal(FoVx, self.image_width)
+        self.intrinsic_matrix[1][1] = fov2focal(FoVy, self.image_height)
+        self.intrinsic_matrix[0][2] = self.intrinsic_matrix[0][2] * scale_pix
+        self.intrinsic_matrix[1][2] = self.intrinsic_matrix[1][2] * scale_pix
 
     def reset_extrinsic(self, R, T):
         self.R = R
