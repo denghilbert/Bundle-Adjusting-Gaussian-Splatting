@@ -29,6 +29,7 @@ import numpy as np
 import cv2
 import visdom
 from easydict import EasyDict
+from copy import deepcopy
 
 from utils.util import check_socket_open
 from utils.util_vis import vis_cameras
@@ -78,7 +79,8 @@ def render_set(model_path, name, iteration, views, gaussians, pipeline, backgrou
         poly_coeff = torch.load(os.path.join(model_path, f'poly_coeff{iteration}.pt'))
         radial = torch.load(os.path.join(model_path, f'radial{iteration}.pt'))
         lens_net = torch.load(os.path.join(model_path, f'lens_net{iteration}.pth'))
-        #ref_points = torch.load(os.path.join(model_path, f'ref_points_{iteration}.pt'))
+        if os.path.exists(os.path.join(model_path, f'ref_points_{iteration}.pt')):
+            ref_points = torch.load(os.path.join(model_path, f'ref_points_{iteration}.pt'))
     else:
         distortion_params = torch.nn.Parameter(torch.zeros(8).cuda())
         u_distortion = nn.Parameter(torch.zeros(400, 400).cuda().requires_grad_(True))
@@ -90,6 +92,8 @@ def render_set(model_path, name, iteration, views, gaussians, pipeline, backgrou
         poly_coeff = nn.Parameter(torch.tensor([0., 0., 0., 0.]).cuda().requires_grad_(True))
 
 
+    #cam = deepcopy(views[0])
+    #cam.reset_intrinsic(cam.FoVx + 1, cam.FoVy + 0.5)
     with torch.no_grad():
         width = views[0].image_width
         height = views[0].image_height
@@ -125,10 +129,12 @@ def render_set(model_path, name, iteration, views, gaussians, pipeline, backgrou
         K = views[0].get_K
         projection_matrix = views[0].projection_matrix
         i, j = np.meshgrid(
-            np.linspace(0 - width/2, width + width/2, sample_width),
-            np.linspace(0 - height/2, height + height/2, sample_height),
-            #np.linspace(0, width, sample_width),
-            #np.linspace(0, height, sample_height),
+            #np.linspace(0 - width/2, width + width/2, sample_width),
+            #np.linspace(0 - height/2, height + height/2, sample_height),
+            #np.linspace(0 - width/2.5, width + width/2.5, sample_width),
+            #np.linspace(0 - height/2.5, height + height/2.5, sample_height),
+            np.linspace(0, width, sample_width),
+            np.linspace(0, height, sample_height),
             indexing="ij",
         )
         i = i.T
@@ -144,9 +150,15 @@ def render_set(model_path, name, iteration, views, gaussians, pipeline, backgrou
         P_view_outsidelens_direction = lens_net.forward(P_view_insidelens_direction)
         flow = homogenize(P_view_outsidelens_direction)
         flow = flow.reshape((P_sensor.shape[0], P_sensor.shape[1], 3))[:, :, :2]
+        if os.path.exists(os.path.join(model_path, f'ref_points_{iteration}.pt')):
+            flow = ref_points.clone() # vanillar gs, grid gs, and ref gs
+            flow = nn.functional.interpolate(flow.permute(2, 0, 1).unsqueeze(0), size=(height, width), mode='bilinear', align_corners=False).permute(0, 2, 3, 1).squeeze(0)
+            #import pdb;pdb.set_trace()
         flow[:, :, 0] = flow[:, :, 0] * projection_matrix[0][0]
         flow[:, :, 1] = flow[:, :, 1] * projection_matrix[1][1]
 
+    if os.path.exists(os.path.join(model_path, f'ref_points_{iteration}.pt')):
+        control_points = ref_points # vanillar gs, grid gs, and ref gs
 
     for idx, view in enumerate(tqdm(views, desc="Rendering progress")):
         gt = view.original_image[0:3, :, :]
