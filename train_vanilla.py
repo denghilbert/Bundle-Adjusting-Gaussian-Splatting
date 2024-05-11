@@ -119,6 +119,46 @@ def pass_neuralens(lens_net, min_w, max_w, min_h, max_h, sample_width, sample_he
 
     return camera_directions_w_lens, P_view_insidelens_direction[-1]
 
+def invert_transformations(matrices):
+    """ Invert a batch of 3x4 w2c matrices to get c2w matrices. """
+    R = matrices[:, :, :3]  # Rotation matrix part
+    t = matrices[:, :, 3]   # Translation vector part
+    R_inv = R.transpose(1, 2)  # Inverse of a rotation matrix is its transpose
+    t_inv = -R_inv @ t.unsqueeze(-1)  # Inverse translation
+    c2w_matrices = torch.cat([R_inv, t_inv], dim=2)
+    return c2w_matrices
+
+def relative_metrics(matrices1, matrices2):
+    assert matrices1.shape == matrices2.shape, "Tensors must be of the same shape"
+
+    n = matrices1.shape[0]
+    mean_distance = 0.0
+    mean_angle = 0.0
+
+    for i in range(n):
+        R_A = matrices1[i, :, :3]
+        t_A = matrices1[i, :, 3]
+        R_B = matrices2[i, :, :3]
+        t_B = matrices2[i, :, 3]
+
+        R = R_B @ R_A.T  # Relative rotation
+        #t = t_B - (R @ t_A)  # Relative translation
+        t = t_B - t_A
+
+        # Compute rotation angle
+        angle = torch.acos(torch.clamp((torch.trace(R) - 1) / 2, -1, 1))  # Clamped for numerical stability
+
+        # Compute translation distance
+        distance = torch.norm(t)
+
+        mean_distance += distance
+        mean_angle += angle
+
+    mean_distance /= n
+    mean_angle /= n
+
+    return mean_distance.item(), mean_angle.item()
+
 
 def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoint_iterations, checkpoint, debug_from, use_wandb=False, random_init=False, hybrid=False, opt_cam=False, opt_distortion=False, opt_intrinsic=False, r_t_noise=[0., 0.], r_t_lr=[0.001, 0.001], global_alignment_lr=0.001):
     first_iter = 0
@@ -173,6 +213,13 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
             #    else: break
             vis = visdom.Visdom(server=opt_vis.visdom.server,port=opt_vis.visdom.port,env=opt_vis.group)
             pose_GT, pose_aligned = scene.loadAlignCameras(if_vis_train=True, path=scene.model_path)
+            torch.save(pose_GT.cpu().detach(), 'init_gt.pt')
+            torch.save(pose_aligned.cpu().detach(), 'init_align.pt')
+            c2w_gt = invert_transformations(pose_GT)
+            c2w_align = invert_transformations(pose_aligned)
+            mean_distance, mean_angle = relative_metrics(c2w_gt, c2w_align)
+            print("Mean Relative Distance:", mean_distance)
+            print("Mean Relative Rotation Angle (degree):", mean_angle * 180 / 3.1415926)
             vis_cameras(opt_vis, vis, step=0, poses=[pose_aligned, pose_GT])
             os.makedirs(os.path.join(args.model_path, 'plot'), exist_ok=True)
             #download_pose_vis(os.path.join(args.model_path, 'plot'), 0)
@@ -467,6 +514,14 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
 
         loss.backward(retain_graph=True)
 
+        if iteration % 10 == 0:
+            scalars = {
+                f"gradient/transpose": torch.mean(viewpoint_cam.delta_translation.grad).item(),
+                f"gradient/quaternion": torch.mean(viewpoint_cam.delta_quaternion.grad).item(),
+            }
+            if use_wandb:
+                wandb.log(scalars, step=iteration)
+
 
         if iteration % 10 == 0:
             scalars = {
@@ -506,6 +561,14 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
             #if iteration in testing_iterations:
             if iteration % 500 == 0 and args.vis_pose:
                 pose_GT, pose_aligned = scene.loadAlignCameras(if_vis_train=True, iteration=iteration, path=scene.model_path)
+                if iteration == 7000 or iteration == 10000 or iteration ==20000 or iteration == 29000:
+                    torch.save(pose_GT.cpu().detach(), f'{iteration}_gt.pt')
+                    torch.save(pose_aligned.cpu().detach(), f'{iteration}_align.pt')
+                    c2w_gt = invert_transformations(pose_GT)
+                    c2w_align = invert_transformations(pose_aligned)
+                    mean_distance, mean_angle = relative_metrics(c2w_gt, c2w_align)
+                    print("Mean Relative Distance:", mean_distance)
+                    print("Mean Relative Rotation Angle (degree):", mean_angle * 180 / 3.1415926)
                 vis_cameras(opt_vis, vis, step=iteration, poses=[pose_aligned, pose_GT])
                 #if iteration == 20000 or iteration == 30000:
                 #    download_pose_vis(os.path.join(args.model_path, 'plot'), iteration)
@@ -558,54 +621,6 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
             if iteration < opt.iterations:
                 gaussians.optimizer.step()
                 gaussians.optimizer.zero_grad(set_to_none = True)
-
-                #if opt_distortion and iteration > 3000:
-                if opt_distortion:
-                    # 8 params
-                    #optimizer_distortion.step()
-                    #optimizer_distortion.zero_grad(set_to_none=True)
-
-                    # control points
-                    optimizer_ref_points.step()
-                    optimizer_ref_points.zero_grad(set_to_none=True)
-
-                    #optimizer_control_points.step()
-                    #optimizer_control_points.zero_grad(set_to_none=True)
-
-                    #optimizer_lens_net.step() #lens_net.i_resnet_linear.module_list[0].residual[0].weight
-                    #optimizer_lens_net.zero_grad(set_to_none=True)
-
-                    # feature grid
-                    #optimizer_u_distortion.step()
-                    #optimizer_v_distortion.step()
-                    #optimizer_u_distortion.zero_grad(set_to_none=True)
-                    #optimizer_v_distortion.zero_grad(set_to_none=True)
-                    #optimizer_u_radial.step()
-                    #optimizer_v_radial.step()
-                    #optimizer_u_radial.zero_grad(set_to_none=True)
-                    #optimizer_v_radial.zero_grad(set_to_none=True)
-
-                    # omindirectional
-                    #optimizer_affine.step()
-                    #optimizer_affine.zero_grad(set_to_none=True)
-                    #optimizer_poly.step()
-                    #optimizer_poly.zero_grad(set_to_none=True)
-
-                    # radial table
-                    #optimizer_radial.step()
-                    #optimizer_radial.zero_grad(set_to_none=True)
-
-                    # optimize fov
-                    #scene.optimizer_fovx.step()
-                    #scene.optimizer_fovy.step()
-                    #scene.optimizer_fovx.zero_grad(set_to_none=True)
-                    #scene.optimizer_fovy.zero_grad(set_to_none=True)
-
-                    # neuralens
-                    #scene.optimizer_lens_net.param_groups[0]['lr']
-                    #scene.optimizer_lens_net.step()
-                    #scene.optimizer_lens_net.zero_grad(set_to_none=True)
-                    #scene.scheduler_lens_net.step()
 
                 # do not update camera pose when densify or prune gaussians
                 if opt_cam:
