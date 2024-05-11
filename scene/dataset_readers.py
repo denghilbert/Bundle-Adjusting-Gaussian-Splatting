@@ -12,6 +12,7 @@
 import os
 import sys
 from PIL import Image
+import random
 import imageio
 from typing import NamedTuple, Optional
 from scene.colmap_loader import read_extrinsics_text, read_intrinsics_text, qvec2rotmat, \
@@ -188,6 +189,11 @@ def readColmapSceneInfo(path, images, eval, llffhold=8):
         cam_extrinsics = read_extrinsics_text(cameras_extrinsic_file)
         cam_intrinsics = read_intrinsics_text(cameras_intrinsic_file)
 
+    if len(cam_extrinsics )> 500:
+        items = list(cam_extrinsics.items())
+        items = items[:500]
+        cam_extrinsics = dict(items)
+
     reading_dir = "images" if images == None else images
     cam_infos_unsorted = readColmapCameras(cam_extrinsics=cam_extrinsics, cam_intrinsics=cam_intrinsics, images_folder=os.path.join(path, reading_dir))
     cam_infos = sorted(cam_infos_unsorted.copy(), key = lambda x : x.image_name)
@@ -281,8 +287,16 @@ def readCamerasFromTransforms(path, transformsfile, white_background, extension=
         fovx = contents["camera_angle_x"]
 
         frames = contents["frames"]
+        if len(frames) > 500:
+            random.shuffle(frames)
+            frames = frames[:300]
+
+            #import pdb;pdb.set_trace()
         for idx, frame in enumerate(frames):
-            cam_name = os.path.join(path, frame["file_path"] + extension)
+            if 'jpg' in frame["file_path"]:
+                cam_name = os.path.join(path, frame["file_path"])
+            else:
+                cam_name = os.path.join(path, frame["file_path"] + extension)
 
             # NeRF 'transform_matrix' is a camera-to-world transform
             c2w = np.array(frame["transform_matrix"])

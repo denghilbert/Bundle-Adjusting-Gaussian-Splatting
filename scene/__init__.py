@@ -179,8 +179,8 @@ class Scene:
 
         self.optimizer_rotation = torch.optim.Adam(l_rotation, eps=1e-15)
         self.optimizer_translation = torch.optim.Adam(l_translation, eps=1e-15)
-        self.scheduler_rotation = torch.optim.lr_scheduler.MultiStepLR(self.optimizer_rotation, milestones=[10000], gamma=1)
-        self.scheduler_translation = torch.optim.lr_scheduler.MultiStepLR(self.optimizer_translation, milestones=[10000], gamma=1)
+        self.scheduler_rotation = torch.optim.lr_scheduler.MultiStepLR(self.optimizer_rotation, milestones=[7000, 30000], gamma=0.5)
+        self.scheduler_translation = torch.optim.lr_scheduler.MultiStepLR(self.optimizer_translation, milestones=[7000, 30000], gamma=0.5)
 
         self.optimizer_rotation_test = torch.optim.Adam(l_rotation_test, eps=1e-15)
         self.optimizer_translation_test = torch.optim.Adam(l_translation_test, eps=1e-15)

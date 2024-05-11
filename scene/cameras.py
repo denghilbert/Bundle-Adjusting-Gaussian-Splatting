@@ -13,7 +13,7 @@ import torch
 from torch import nn
 import torch.nn.functional as F
 import numpy as np
-from utils.graphics_utils import getWorld2View2, getProjectionMatrix, getWorld2View2_torch_tensor, get_rays, fov2focal
+from utils.graphics_utils import getWorld2View2, getProjectionMatrix, getWorld2View2_torch_tensor, get_rays, fov2focal, focal2fov
 from utils.camera import Lie
 
 
@@ -46,6 +46,9 @@ class Camera(nn.Module):
         self.image_width = self.original_image.shape[2]
         self.image_height = self.original_image.shape[1]
         self.depth = torch.Tensor(depth).to(self.data_device) if depth is not None else None
+
+        #if FoVx / FoVy != self.image_width / self.image_height:
+        #    self.FoVx = (self.image_width / self.image_height) * self.FoVy
 
         if gt_alpha_mask is not None:
             self.original_image *= gt_alpha_mask.to(self.data_device)
@@ -121,6 +124,39 @@ class Camera(nn.Module):
         self.projection_matrix = getProjectionMatrix(znear=self.znear, zfar=self.zfar, fovX=self.learnable_fovx, fovY=self.learnable_fovy).transpose(0,1).cuda()
         self.full_proj_transform = (self.world_view_transform.unsqueeze(0).bmm(self.projection_matrix.unsqueeze(0))).squeeze(0)
         self.camera_center = self.world_view_transform.inverse()[3, :3]
+
+
+    def rotate_at_current_location(self, R, cam_center):
+        self.R = R
+        self.init_quaternion = rotation_matrix_to_quaternion(torch.tensor(R).float().t().cuda())
+        self.delta_quaternion = nn.Parameter(torch.zeros(4).cuda().requires_grad_(True))
+        self.quaternion = self.init_quaternion + self.delta_quaternion
+        self.rotation = quaternion_to_rotation_matrix(self.quaternion)
+        self.last_row = torch.tensor([[0., 0., 0., 1.]]).cuda()
+        self.Rt = torch.cat((self.rotation, self.translation), dim=1)
+        self.world_view_transform = torch.cat((self.Rt, self.last_row), dim=0).t()
+
+        # keep the location of camera center is the same
+        c2w = self.world_view_transform.inverse()
+        c2w[3, :3] = cam_center
+        self.world_view_transform = c2w.inverse()
+        self.T = self.world_view_transform[3, :3].cpu().detach().numpy()
+        self.init_translation = torch.tensor(self.T).float().view(-1, 1).cuda()
+        self.delta_translation = nn.Parameter(torch.zeros(3, 1).cuda().requires_grad_(True))
+        self.translation = self.init_translation + self.delta_translation
+
+
+        self.projection_matrix = getProjectionMatrix(znear=self.znear, zfar=self.zfar, fovX=self.learnable_fovx, fovY=self.learnable_fovy).transpose(0,1).cuda()
+        self.full_proj_transform = (self.world_view_transform.unsqueeze(0).bmm(self.projection_matrix.unsqueeze(0))).squeeze(0)
+        self.camera_center = self.world_view_transform.inverse()[3, :3]
+
+    def reset_cam_center(self, cam_center):
+        c2w = self.world_view_transform.inverse()
+        c2w[3, :3] = cam_center
+        self.world_view_transform = c2w.inverse()
+        self.full_proj_transform = (self.world_view_transform.unsqueeze(0).bmm(self.projection_matrix.unsqueeze(0))).squeeze(0)
+        self.camera_center = self.world_view_transform.inverse()[3, :3]
+
 
     def load2device(self, data_device='cuda'):
         self.original_image = self.original_image.to(data_device)
