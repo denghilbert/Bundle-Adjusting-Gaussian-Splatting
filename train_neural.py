@@ -120,7 +120,7 @@ def pass_neuralens(lens_net, min_w, max_w, min_h, max_h, sample_width, sample_he
     return camera_directions_w_lens, P_view_insidelens_direction[-1]
 
 
-def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoint_iterations, checkpoint, debug_from, use_wandb=False, random_init=False, hybrid=False, opt_cam=False, opt_distortion=False, opt_intrinsic=False, r_t_noise=[0., 0.], r_t_lr=[0.001, 0.001], global_alignment_lr=0.001, extra_loss=False, start_opt_lens=7000, extend_scale=2.):
+def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoint_iterations, checkpoint, debug_from, use_wandb=False, random_init=False, hybrid=False, opt_cam=False, opt_distortion=False, opt_intrinsic=False, r_t_noise=[0., 0.], r_t_lr=[0.001, 0.001], global_alignment_lr=0.001, extra_loss=False, start_opt_lens=7000, extend_scale=2., control_point_sample_scale=8.):
     first_iter = 0
     tb_writer = prepare_output_and_logger(dataset)
     gaussians = GaussianModel(dataset.sh_degree, dataset.asg_degree)
@@ -173,6 +173,9 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
             #    else: break
             vis = visdom.Visdom(server=opt_vis.visdom.server,port=opt_vis.visdom.port,env=opt_vis.group)
             pose_GT, pose_aligned = scene.loadAlignCameras(if_vis_train=True, path=scene.model_path)
+            import pdb;pdb.set_trace()
+            torch.save(pose_GT.cpu().detach(), 'init_gt.pt')
+            torch.save(pose_aligned.cpu().detach(), 'init_align.pt')
             vis_cameras(opt_vis, vis, step=0, poses=[pose_aligned, pose_GT])
             os.makedirs(os.path.join(args.model_path, 'plot'), exist_ok=True)
             #download_pose_vis(os.path.join(args.model_path, 'plot'), 0)
@@ -221,8 +224,8 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
     viewpoint_cam = scene.getTrainCameras().copy()[0]
     width = viewpoint_cam.image_width
     height = viewpoint_cam.image_height
-    sample_width = int(width / 8)
-    sample_height = int(height / 8)
+    sample_width = int(width / control_point_sample_scale)
+    sample_height = int(height / control_point_sample_scale)
     K = viewpoint_cam.get_K
     i, j = np.meshgrid(
         np.linspace(0 - width/extend_scale, width + width/extend_scale, sample_width),
@@ -264,8 +267,8 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
 
     width = viewpoint_cam.image_width
     height = viewpoint_cam.image_height
-    sample_width = int(width / 8)
-    sample_height = int(height / 8)
+    sample_width = int(width / control_point_sample_scale)
+    sample_height = int(height / control_point_sample_scale)
     K = viewpoint_cam.get_K
     i, j = np.meshgrid(
         np.linspace(0 - width/extend_scale, width + width/extend_scale, sample_width),
@@ -303,8 +306,8 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
 
     width = viewpoint_cam.image_width
     height = viewpoint_cam.image_height
-    sample_width = int(width / 8)
-    sample_height = int(height/ 8)
+    sample_width = int(width / control_point_sample_scale)
+    sample_height = int(height/ control_point_sample_scale)
     K = viewpoint_cam.get_K
     i, j = np.meshgrid(
         np.linspace(0 - width/extend_scale, width + width/extend_scale, sample_width),
@@ -507,6 +510,11 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
             #if iteration in testing_iterations:
             if iteration % 500 == 0 and args.vis_pose:
                 pose_GT, pose_aligned = scene.loadAlignCameras(if_vis_train=True, iteration=iteration, path=scene.model_path)
+                if iteration == 1000 or iteration == 10000 or iteration == 20000 or iteration == 29000:
+                    import pdb;pdb.set_trace()
+                    torch.save(pose_GT.cpu().detach(), f'{iteration}_gt.pt')
+                    torch.save(pose_aligned.cpu().detach(), f'{iteration}_align.pt')
+
                 vis_cameras(opt_vis, vis, step=iteration, poses=[pose_aligned, pose_GT])
                 #if iteration == 20000 or iteration == 30000:
                 #    download_pose_vis(os.path.join(args.model_path, 'plot'), iteration)
@@ -830,6 +838,7 @@ if __name__ == "__main__":
     parser.add_argument("--extra_loss", action="store_true", default=False)
     parser.add_argument('--start_opt_lens', type=int, default=7000)
     parser.add_argument('--extend_scale', type=float, default=2.)
+    parser.add_argument('--control_point_sample_scale', type=float, default=8.)
 
     args = parser.parse_args(sys.argv[1:])
     args.save_iterations.append(args.iterations)
@@ -854,7 +863,7 @@ if __name__ == "__main__":
     network_gui.init(args.ip, args.port)
     torch.autograd.set_detect_anomaly(args.detect_anomaly)
     training(lp.extract(args), op.extract(args), pp.extract(args), args.test_iterations, args.save_iterations, args.checkpoint_iterations, args.start_checkpoint, args.debug_from, use_wandb=args.wandb, random_init=args.random_init_pc, hybrid=args.hybrid, opt_cam=args.opt_cam, opt_distortion=args.opt_distortion, opt_intrinsic=args.opt_intrinsic, r_t_lr=args.r_t_lr, r_t_noise=args.r_t_noise, global_alignment_lr=args.global_alignment_lr,
-             extra_loss=args.extra_loss, start_opt_lens=args.start_opt_lens, extend_scale=args.extend_scale)
+             extra_loss=args.extra_loss, start_opt_lens=args.start_opt_lens, extend_scale=args.extend_scale, control_point_sample_scale=args.control_point_sample_scale)
 
     # All done
     print("\nTraining complete.")
