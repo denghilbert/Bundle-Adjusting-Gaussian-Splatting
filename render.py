@@ -195,7 +195,7 @@ def render_sets(dataset : ModelParams, iteration : int, pipeline : PipelineParam
     poly_coeff = nn.Parameter(torch.tensor([0., 0., 0., 0.]).cuda().requires_grad_(True))
 
     # when we optimize pose, we wish to load poses
-    #scene.train_cameras = torch.load(os.path.join(scene.model_path, f'cams_train{iteration}.pt'))
+    scene.train_cameras = torch.load(os.path.join(scene.model_path, f'cams_train{iteration}.pt'))
 
     specular = None
     if hybrid:
