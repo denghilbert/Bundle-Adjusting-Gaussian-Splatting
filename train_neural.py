@@ -224,8 +224,8 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
     viewpoint_cam = scene.getTrainCameras().copy()[0]
     width = viewpoint_cam.image_width
     height = viewpoint_cam.image_height
-    sample_width = int(width / control_point_sample_scale)
-    sample_height = int(height / control_point_sample_scale)
+    sample_width = int(width / 8)
+    sample_height = int(height / 8)
     K = viewpoint_cam.get_K
     i, j = np.meshgrid(
         np.linspace(0 - width/extend_scale, width + width/extend_scale, sample_width),
@@ -267,8 +267,8 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
 
     width = viewpoint_cam.image_width
     height = viewpoint_cam.image_height
-    sample_width = int(width / control_point_sample_scale)
-    sample_height = int(height / control_point_sample_scale)
+    sample_width = int(width / 8)
+    sample_height = int(height / 8)
     K = viewpoint_cam.get_K
     i, j = np.meshgrid(
         np.linspace(0 - width/extend_scale, width + width/extend_scale, sample_width),

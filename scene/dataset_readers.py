@@ -157,8 +157,9 @@ def fetchPly(path):
     vertices = plydata['vertex']
     positions = np.vstack([vertices['x'], vertices['y'], vertices['z']]).T
     colors = np.vstack([vertices['red'], vertices['green'], vertices['blue']]).T / 255.0
-    normals = np.vstack([vertices['nx'], vertices['ny'], vertices['nz']]).T
-    return BasicPointCloud(points=positions, colors=colors, normals=normals)
+    #normals = np.vstack([vertices['nx'], vertices['ny'], vertices['nz']]).T
+    #return BasicPointCloud(points=positions, colors=colors, normals=normals)
+    return BasicPointCloud(points=positions, colors=colors, normals=None)
 
 def storePly(path, xyz, rgb):
     # Define the dtype for the structured array
@@ -189,10 +190,10 @@ def readColmapSceneInfo(path, images, eval, llffhold=8):
         cam_extrinsics = read_extrinsics_text(cameras_extrinsic_file)
         cam_intrinsics = read_intrinsics_text(cameras_intrinsic_file)
 
-    if len(cam_extrinsics )> 500:
-        items = list(cam_extrinsics.items())
-        items = items[:500]
-        cam_extrinsics = dict(items)
+    #if len(cam_extrinsics )> 500:
+    #    items = list(cam_extrinsics.items())
+    #    items = items[:500]
+    #    cam_extrinsics = dict(items)
 
     reading_dir = "images" if images == None else images
     cam_infos_unsorted = readColmapCameras(cam_extrinsics=cam_extrinsics, cam_intrinsics=cam_intrinsics, images_folder=os.path.join(path, reading_dir))
@@ -287,9 +288,9 @@ def readCamerasFromTransforms(path, transformsfile, white_background, extension=
         fovx = contents["camera_angle_x"]
 
         frames = contents["frames"]
-        if len(frames) > 500:
-            random.shuffle(frames)
-            frames = frames[:300]
+        #if len(frames) > 500:
+        #    random.shuffle(frames)
+        #    frames = frames[:300]
 
             #import pdb;pdb.set_trace()
         for idx, frame in enumerate(frames):

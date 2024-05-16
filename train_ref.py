@@ -252,6 +252,7 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
             if 'FISHEYE' in cam_intrinsics[key].model:
                 coeff = cam_intrinsics[key].params[-4:].tolist()
                 break
+    before_ref_points = ref_points.clone()
     ref_points = ref_points * inv_r * (theta + coeff[0] * theta**3 + coeff[1] * theta**5 + coeff[2] * theta**7 + coeff[3] * theta**9)
     #params_8 = [-7.9475e-02,  8.5723e-03,  3.3806e-03,  9.4672e-02, -3.9149e-03, -3.7938e-03]
     #ref_points = ref_points * ((1 + params_8[0] * r**2 + params_8[1] * r**4 + params_8[2] * r**6)/ (1 + params_8[3] * r**2 + params_8[4] * r**4 + params_8[5] * r**6))
@@ -259,6 +260,40 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
     nan_mask = torch.isnan(ref_points)
     ref_points[inf_mask] = 0
     ref_points[nan_mask] = 0
+
+
+
+    p1 = ref_points.reshape(-1, 2)
+    import matplotlib.pyplot as plt
+    plt.figure(figsize=(int(ref_points.shape[1]/4), int(ref_points.shape[0]/4)))
+    x = p1[:, 0].detach().cpu().numpy()  # Convert tensor to numpy for plotting
+    y = p1[:, 1].detach().cpu().numpy()
+    plt.scatter(x, y)
+    plt.title('2D Points Plot')
+    plt.xlabel('X axis')
+    plt.ylabel('Y axis')
+    plt.xlim(p1[:, 0].min().item() - 0.1, p1[:, 0].max().item() + 0.1)
+    plt.ylim(p1[:, 1].min().item() - 0.1, p1[:, 1].max().item() + 0.1)
+    plt.grid(True)
+    plt.savefig(os.path.join(scene.model_path, f"ref_point.png"))
+
+
+    p1 = before_ref_points.reshape(-1, 2)
+    import matplotlib.pyplot as plt
+    plt.figure(figsize=(int(before_ref_points.shape[1]/4), int(before_ref_points.shape[0]/4)))
+    x = p1[:, 0].detach().cpu().numpy()  # Convert tensor to numpy for plotting
+    y = p1[:, 1].detach().cpu().numpy()
+    plt.scatter(x, y)
+    plt.title('2D Points Plot')
+    plt.xlabel('X axis')
+    plt.ylabel('Y axis')
+    plt.xlim(p1[:, 0].min().item() - 0.1, p1[:, 0].max().item() + 0.1)
+    plt.ylim(p1[:, 1].min().item() - 0.1, p1[:, 1].max().item() + 0.1)
+    plt.grid(True)
+    plt.savefig(os.path.join(scene.model_path, f"before_ref_points.png"))
+    import pdb;pdb.set_trace()
+
+
     boundary_original_points = P_view_insidelens_direction[-1]
     print(boundary_original_points)
     ref_points = nn.Parameter(ref_points.cuda().requires_grad_(True))
