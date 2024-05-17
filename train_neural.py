@@ -252,10 +252,18 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
     if os.path.exists(os.path.join(dataset.source_path, 'sparse/0/cameras.bin')):
         cam_intrinsics = read_intrinsics_binary(os.path.join(dataset.source_path, 'sparse/0/cameras.bin'))
         for idx, key in enumerate(cam_intrinsics):
+            if 'RADIAL' in cam_intrinsics[key].model:
+                coeff = cam_intrinsics[key].params[-2:].tolist()
             if 'FISHEYE' in cam_intrinsics[key].model:
                 coeff = cam_intrinsics[key].params[-4:].tolist()
                 break
-    ref_points = ref_points * inv_r * (theta + coeff[0] * theta**3 + coeff[1] * theta**5 + coeff[2] * theta**7 + coeff[3] * theta**9)
+    if len(coeff) == 4:
+        ref_points = ref_points * inv_r * (theta + coeff[0] * theta**3 + coeff[1] * theta**5 + coeff[2] * theta**7 + coeff[3] * theta**9)
+    elif len(coeff) == 2:
+        ref_points = ref_points * (1 + coeff[0] * r**2 + coeff[1] * r**4)
+    else:
+        ref_points = ref_points
+    import pdb;pdb.set_trace()
     boundary_original_points = P_view_insidelens_direction[-1]
     print(boundary_original_points)
     ref_points = nn.Parameter(ref_points.cuda().requires_grad_(True))
@@ -287,8 +295,8 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
     P_view_insidelens_direction = dehomogenize(P_view_insidelens_direction_hom)
 
 
-    progress_bar_ires = tqdm(range(0, 4000), desc="Fitting Iresnet")
-    for i in range(4000):
+    progress_bar_ires = tqdm(range(0, 6000), desc="Fitting Iresnet")
+    for i in range(6000):
     #for i in range(0):
         P_view_outsidelens_direction = lens_net.forward(P_view_insidelens_direction)
         control_points = homogenize(P_view_outsidelens_direction)

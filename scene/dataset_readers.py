@@ -94,7 +94,7 @@ def readColmapCameras(cam_extrinsics, cam_intrinsics, images_folder):
         #    return mat
         #R_test = mat_from_quat(extr.qvec)
 
-        if intr.model=="SIMPLE_PINHOLE":
+        if intr.model=="SIMPLE_PINHOLE" or intr.model=="RADIAL":
             focal_length_x = intr.params[0]
             FovY = focal2fov(focal_length_x, height)
             FovX = focal2fov(focal_length_x, width)
