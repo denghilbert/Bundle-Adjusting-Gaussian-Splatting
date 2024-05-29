@@ -12,6 +12,7 @@
 import os
 import random
 import json
+import numpy as np
 from utils.system_utils import searchForMaxIteration
 from scene.dataset_readers import sceneLoadTypeCallbacks
 from scene.gaussian_model import GaussianModel
@@ -82,6 +83,9 @@ class Scene:
         elif os.path.exists(os.path.join(args.source_path, "transforms_train.json")):
             print("Found transforms_train.json file, assuming Blender data set!")
             scene_info = sceneLoadTypeCallbacks["Blender"](args.source_path, args.white_background, args.eval)
+        elif os.path.exists(os.path.join(args.source_path, "cameras.json")):
+            print("Found cameras.json file, assuming Metashape data set!")
+            scene_info = sceneLoadTypeCallbacks["Metashape"](args.source_path, args.white_background, args.eval)
         elif os.path.exists(os.path.join(args.source_path, "transforms_train_diffusion.json")):
             print("Found transforms_train_diffusion.json file!")
             scene_info = sceneLoadTypeCallbacks["Diffusion"](args.source_path, args.white_background, args.eval, extension=".jpg")
@@ -118,6 +122,7 @@ class Scene:
             # simply add noise
             so3_noise = torch.randn((len(scene_info.train_cameras), 3), generator=generator) * r_t_noise[0]
             t_noise = (torch.randn((len(scene_info.train_cameras), 3), generator=generator) * r_t_noise[1]).numpy()
+            fov_noise = np.exp(np.random.normal(0., np.log(1.02), 100))
             #so3_noise = torch.randn((len(scene_info.train_cameras), 3)) * r_t_noise[0]
             #t_noise = (torch.randn((len(scene_info.train_cameras), 3)) * r_t_noise[1]).numpy()
 
@@ -135,7 +140,9 @@ class Scene:
                 #tmp_T = so3[index] @ scene_info.train_cameras[index].T + t_noise[index]
                 #tmp_T = so3[index] @ (scene_info.train_cameras[index].T + t_noise[index])
                 tmp_T = scene_info.train_cameras[index].T + t_noise[index]
-                scene_info.train_cameras[index] = scene_info.train_cameras[index]._replace(T=tmp_T, R=tmp_R)
+                tmp_fovx = scene_info.train_cameras[index].FovX * fov_noise[index]
+                tmp_fovy = scene_info.train_cameras[index].FovX * fov_noise[index]
+                scene_info.train_cameras[index] = scene_info.train_cameras[index]._replace(T=tmp_T, R=tmp_R, FovX=tmp_fovx, FovY=tmp_fovy)
                 #import pdb; pdb.set_trace()
                 #print(scene_info.train_cameras[index])
             #import pdb; pdb.set_trace()

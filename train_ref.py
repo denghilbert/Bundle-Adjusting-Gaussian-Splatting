@@ -253,7 +253,7 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
                 coeff = cam_intrinsics[key].params[-4:].tolist()
                 break
     before_ref_points = ref_points.clone()
-    ref_points = ref_points * inv_r * (theta + coeff[0] * theta**3 + coeff[1] * theta**5 + coeff[2] * theta**7 + coeff[3] * theta**9)
+    #ref_points = ref_points * inv_r * (theta + coeff[0] * theta**3 + coeff[1] * theta**5 + coeff[2] * theta**7 + coeff[3] * theta**9)
     #params_8 = [-7.9475e-02,  8.5723e-03,  3.3806e-03,  9.4672e-02, -3.9149e-03, -3.7938e-03]
     #ref_points = ref_points * ((1 + params_8[0] * r**2 + params_8[1] * r**4 + params_8[2] * r**6)/ (1 + params_8[3] * r**2 + params_8[4] * r**4 + params_8[5] * r**6))
     inf_mask = torch.isinf(ref_points)
@@ -291,7 +291,6 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
     plt.ylim(p1[:, 1].min().item() - 0.1, p1[:, 1].max().item() + 0.1)
     plt.grid(True)
     plt.savefig(os.path.join(scene.model_path, f"before_ref_points.png"))
-    import pdb;pdb.set_trace()
 
 
     boundary_original_points = P_view_insidelens_direction[-1]

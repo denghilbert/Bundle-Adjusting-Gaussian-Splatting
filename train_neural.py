@@ -120,7 +120,7 @@ def pass_neuralens(lens_net, min_w, max_w, min_h, max_h, sample_width, sample_he
     return camera_directions_w_lens, P_view_insidelens_direction[-1]
 
 
-def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoint_iterations, checkpoint, debug_from, use_wandb=False, random_init=False, hybrid=False, opt_cam=False, opt_distortion=False, opt_intrinsic=False, r_t_noise=[0., 0.], r_t_lr=[0.001, 0.001], global_alignment_lr=0.001, extra_loss=False, start_opt_lens=7000, extend_scale=2., control_point_sample_scale=8.):
+def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoint_iterations, checkpoint, debug_from, use_wandb=False, random_init=False, hybrid=False, opt_cam=False, opt_distortion=False, opt_intrinsic=False, r_t_noise=[0., 0.], r_t_lr=[0.001, 0.001], global_alignment_lr=0.001, extra_loss=False, start_opt_lens=1, extend_scale=2., control_point_sample_scale=8.):
     first_iter = 0
     tb_writer = prepare_output_and_logger(dataset)
     gaussians = GaussianModel(dataset.sh_degree, dataset.asg_degree)
@@ -130,7 +130,6 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
     lens_net = iResNet().cuda()
     l_lens_net = [{'params': lens_net.parameters(), 'lr': 1e-5}]
     optimizer_lens_net = torch.optim.Adam(l_lens_net, eps=1e-15)
-    scheduler_lens_net = torch.optim.lr_scheduler.MultiStepLR(optimizer_lens_net, milestones=[2000, 50000], gamma=1)
     def zero_weights(m):
         if isinstance(m, nn.Linear):
             nn.init.constant_(m.weight, 0.)
@@ -187,14 +186,14 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
     first_iter += 1
     smooth_term = get_linear_noise_func(lr_init=0.1, lr_final=1e-15, lr_delay_mult=0.01, max_steps=20000)
 
-    height, width = 512, 512
+    height, width = 1024, 684
     mask = torch.zeros((height, width), dtype=torch.bool)
-    center_x, center_y = 256, 256
-    radius = 256  # Example radius
+    center_x, center_y = 342, 512
+    radius = 512  # Example radius
     for y in range(height):
         for x in range(width):
             if (x - center_x)**2 + (y - center_y)**2 <= radius**2:
-                mask[y, x] = True
+                mask[y, x] = 1.
     mask = mask.unsqueeze(0)  # For channel-first, adds a new dimension at the beginning
     mask = mask.repeat(3, 1, 1).cuda()  # Repeat the mask across the channel dimension
 
@@ -252,10 +251,19 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
     if os.path.exists(os.path.join(dataset.source_path, 'sparse/0/cameras.bin')):
         cam_intrinsics = read_intrinsics_binary(os.path.join(dataset.source_path, 'sparse/0/cameras.bin'))
         for idx, key in enumerate(cam_intrinsics):
+            if 'RADIAL' in cam_intrinsics[key].model:
+                coeff = cam_intrinsics[key].params[-2:].tolist()
             if 'FISHEYE' in cam_intrinsics[key].model:
                 coeff = cam_intrinsics[key].params[-4:].tolist()
                 break
-    ref_points = ref_points * inv_r * (theta + coeff[0] * theta**3 + coeff[1] * theta**5 + coeff[2] * theta**7 + coeff[3] * theta**9)
+    if len(coeff) == 4:
+        ref_points = ref_points * inv_r * (theta + coeff[0] * theta**3 + coeff[1] * theta**5 + coeff[2] * theta**7 + coeff[3] * theta**9)
+    elif len(coeff) == 2:
+        ref_points = ref_points * (1 + coeff[0] * r**2 + coeff[1] * r**4)
+    elif len(coeff) == 3:
+        ref_points = ref_points * (1 + coeff[0] * r**2 + coeff[1] * r**4 + coeff[2] * r**6)
+    else:
+        ref_points = ref_points
     boundary_original_points = P_view_insidelens_direction[-1]
     print(boundary_original_points)
     ref_points = nn.Parameter(ref_points.cuda().requires_grad_(True))
@@ -287,8 +295,8 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
     P_view_insidelens_direction = dehomogenize(P_view_insidelens_direction_hom)
 
 
-    progress_bar_ires = tqdm(range(0, 4000), desc="Fitting Iresnet")
-    for i in range(4000):
+    progress_bar_ires = tqdm(range(0, 2000), desc="Init Iresnet")
+    for i in range(2000):
     #for i in range(0):
         P_view_outsidelens_direction = lens_net.forward(P_view_insidelens_direction)
         control_points = homogenize(P_view_outsidelens_direction)
@@ -302,7 +310,8 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
     progress_bar_ires.close()
 
     for param_group in optimizer_lens_net.param_groups:
-        param_group['lr'] = 1e-7
+        param_group['lr'] = 1e-6
+    scheduler_lens_net = torch.optim.lr_scheduler.MultiStepLR(optimizer_lens_net, milestones=[10000, 20000], gamma=0.5)
 
     width = viewpoint_cam.image_width
     height = viewpoint_cam.image_height
@@ -836,7 +845,7 @@ if __name__ == "__main__":
     # optimize distortion
     parser.add_argument("--opt_distortion", action="store_true", default=False)
     parser.add_argument("--extra_loss", action="store_true", default=False)
-    parser.add_argument('--start_opt_lens', type=int, default=7000)
+    parser.add_argument('--start_opt_lens', type=int, default=1)
     parser.add_argument('--extend_scale', type=float, default=2.)
     parser.add_argument('--control_point_sample_scale', type=float, default=8.)
 

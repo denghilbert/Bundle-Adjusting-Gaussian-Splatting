@@ -119,48 +119,8 @@ def pass_neuralens(lens_net, min_w, max_w, min_h, max_h, sample_width, sample_he
 
     return camera_directions_w_lens, P_view_insidelens_direction[-1]
 
-def invert_transformations(matrices):
-    """ Invert a batch of 3x4 w2c matrices to get c2w matrices. """
-    R = matrices[:, :, :3]  # Rotation matrix part
-    t = matrices[:, :, 3]   # Translation vector part
-    R_inv = R.transpose(1, 2)  # Inverse of a rotation matrix is its transpose
-    t_inv = -R_inv @ t.unsqueeze(-1)  # Inverse translation
-    c2w_matrices = torch.cat([R_inv, t_inv], dim=2)
-    return c2w_matrices
 
-def relative_metrics(matrices1, matrices2):
-    assert matrices1.shape == matrices2.shape, "Tensors must be of the same shape"
-
-    n = matrices1.shape[0]
-    mean_distance = 0.0
-    mean_angle = 0.0
-
-    for i in range(n):
-        R_A = matrices1[i, :, :3]
-        t_A = matrices1[i, :, 3]
-        R_B = matrices2[i, :, :3]
-        t_B = matrices2[i, :, 3]
-
-        R = R_B @ R_A.T  # Relative rotation
-        #t = t_B - (R @ t_A)  # Relative translation
-        t = t_B - t_A
-
-        # Compute rotation angle
-        angle = torch.acos(torch.clamp((torch.trace(R) - 1) / 2, -1, 1))  # Clamped for numerical stability
-
-        # Compute translation distance
-        distance = torch.norm(t)
-
-        mean_distance += distance
-        mean_angle += angle
-
-    mean_distance /= n
-    mean_angle /= n
-
-    return mean_distance.item(), mean_angle.item()
-
-
-def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoint_iterations, checkpoint, debug_from, use_wandb=False, random_init=False, hybrid=False, opt_cam=False, opt_distortion=False, opt_intrinsic=False, r_t_noise=[0., 0.], r_t_lr=[0.001, 0.001], global_alignment_lr=0.001):
+def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoint_iterations, checkpoint, debug_from, use_wandb=False, random_init=False, hybrid=False, opt_cam=False, opt_distortion=False, opt_intrinsic=False, r_t_noise=[0., 0.], r_t_lr=[0.001, 0.001], global_alignment_lr=0.001, extra_loss=False, start_opt_lens=1, extend_scale=2., control_point_sample_scale=8.):
     first_iter = 0
     tb_writer = prepare_output_and_logger(dataset)
     gaussians = GaussianModel(dataset.sh_degree, dataset.asg_degree)
@@ -170,7 +130,6 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
     lens_net = iResNet().cuda()
     l_lens_net = [{'params': lens_net.parameters(), 'lr': 1e-5}]
     optimizer_lens_net = torch.optim.Adam(l_lens_net, eps=1e-15)
-    scheduler_lens_net = torch.optim.lr_scheduler.MultiStepLR(optimizer_lens_net, milestones=[2000, 50000], gamma=1)
     def zero_weights(m):
         if isinstance(m, nn.Linear):
             nn.init.constant_(m.weight, 0.)
@@ -213,13 +172,9 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
             #    else: break
             vis = visdom.Visdom(server=opt_vis.visdom.server,port=opt_vis.visdom.port,env=opt_vis.group)
             pose_GT, pose_aligned = scene.loadAlignCameras(if_vis_train=True, path=scene.model_path)
+            import pdb;pdb.set_trace()
             torch.save(pose_GT.cpu().detach(), 'init_gt.pt')
             torch.save(pose_aligned.cpu().detach(), 'init_align.pt')
-            c2w_gt = invert_transformations(pose_GT)
-            c2w_align = invert_transformations(pose_aligned)
-            mean_distance, mean_angle = relative_metrics(c2w_gt, c2w_align)
-            print("Mean Relative Distance:", mean_distance)
-            print("Mean Relative Rotation Angle (degree):", mean_angle * 180 / 3.1415926)
             vis_cameras(opt_vis, vis, step=0, poses=[pose_aligned, pose_GT])
             os.makedirs(os.path.join(args.model_path, 'plot'), exist_ok=True)
             #download_pose_vis(os.path.join(args.model_path, 'plot'), 0)
@@ -231,14 +186,14 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
     first_iter += 1
     smooth_term = get_linear_noise_func(lr_init=0.1, lr_final=1e-15, lr_delay_mult=0.01, max_steps=20000)
 
-    height, width = 512, 512
+    height, width = 1024, 684
     mask = torch.zeros((height, width), dtype=torch.bool)
-    center_x, center_y = 256, 256
-    radius = 256  # Example radius
+    center_x, center_y = 342, 512
+    radius = 512  # Example radius
     for y in range(height):
         for x in range(width):
             if (x - center_x)**2 + (y - center_y)**2 <= radius**2:
-                mask[y, x] = True
+                mask[y, x] = 1.
     mask = mask.unsqueeze(0)  # For channel-first, adds a new dimension at the beginning
     mask = mask.repeat(3, 1, 1).cuda()  # Repeat the mask across the channel dimension
 
@@ -272,8 +227,8 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
     sample_height = int(height / 8)
     K = viewpoint_cam.get_K
     i, j = np.meshgrid(
-        np.linspace(0 - width/2, width + width/2, sample_width),
-        np.linspace(0 - height/2, height + height/2, sample_height),
+        np.linspace(0 - width/extend_scale, width + width/extend_scale, sample_width),
+        np.linspace(0 - height/extend_scale, height + height/extend_scale, sample_height),
         indexing="ij",
     )
     i = i.T
@@ -296,14 +251,19 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
     if os.path.exists(os.path.join(dataset.source_path, 'sparse/0/cameras.bin')):
         cam_intrinsics = read_intrinsics_binary(os.path.join(dataset.source_path, 'sparse/0/cameras.bin'))
         for idx, key in enumerate(cam_intrinsics):
+            if 'RADIAL' in cam_intrinsics[key].model:
+                coeff = cam_intrinsics[key].params[-2:].tolist()
             if 'FISHEYE' in cam_intrinsics[key].model:
                 coeff = cam_intrinsics[key].params[-4:].tolist()
                 break
-    #ref_points = ref_points * inv_r * (theta + coeff[0] * theta**3 + coeff[1] * theta**5 + coeff[2] * theta**7 + coeff[3] * theta**9)
-    inf_mask = torch.isinf(ref_points)
-    nan_mask = torch.isnan(ref_points)
-    ref_points[inf_mask] = 0
-    ref_points[nan_mask] = 0
+    if len(coeff) == 4:
+        ref_points = ref_points * inv_r * (theta + coeff[0] * theta**3 + coeff[1] * theta**5 + coeff[2] * theta**7 + coeff[3] * theta**9)
+    elif len(coeff) == 2:
+        ref_points = ref_points * (1 + coeff[0] * r**2 + coeff[1] * r**4)
+    elif len(coeff) == 3:
+        ref_points = ref_points * (1 + coeff[0] * r**2 + coeff[1] * r**4 + coeff[2] * r**6)
+    else:
+        ref_points = ref_points
     boundary_original_points = P_view_insidelens_direction[-1]
     print(boundary_original_points)
     ref_points = nn.Parameter(ref_points.cuda().requires_grad_(True))
@@ -319,8 +279,8 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
     sample_height = int(height / 8)
     K = viewpoint_cam.get_K
     i, j = np.meshgrid(
-        np.linspace(0 - width/2, width + width/2, sample_width),
-        np.linspace(0 - height/2, height + height/2, sample_height),
+        np.linspace(0 - width/extend_scale, width + width/extend_scale, sample_width),
+        np.linspace(0 - height/extend_scale, height + height/extend_scale, sample_height),
         indexing="ij",
     )
     i = i.T
@@ -335,9 +295,8 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
     P_view_insidelens_direction = dehomogenize(P_view_insidelens_direction_hom)
 
 
-    progress_bar_ires = tqdm(range(0, 4000), desc="Fitting Iresnet")
-    #for i in range(4000):
-    for i in range(0):
+    progress_bar_ires = tqdm(range(0, 2000), desc="Init Iresnet")
+    for i in range(2000):
         P_view_outsidelens_direction = lens_net.forward(P_view_insidelens_direction)
         control_points = homogenize(P_view_outsidelens_direction)
         control_points = control_points.reshape((P_sensor.shape[0], P_sensor.shape[1], 3))[:, :, :2]
@@ -349,15 +308,17 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
         optimizer_lens_net.zero_grad(set_to_none = True)
     progress_bar_ires.close()
 
+    for param_group in optimizer_lens_net.param_groups:
+        param_group['lr'] = 1e-6
 
     width = viewpoint_cam.image_width
     height = viewpoint_cam.image_height
-    sample_width = int(width / 8)
-    sample_height = int(height/ 8)
+    sample_width = int(width / control_point_sample_scale)
+    sample_height = int(height/ control_point_sample_scale)
     K = viewpoint_cam.get_K
     i, j = np.meshgrid(
-        np.linspace(0 - width/2, width + width/2, sample_width),
-        np.linspace(0 - height/2, height + height/2, sample_height),
+        np.linspace(0 - width/extend_scale, width + width/extend_scale, sample_width),
+        np.linspace(0 - height/extend_scale, height + height/extend_scale, sample_height),
         indexing="ij",
     )
     i = i.T
@@ -420,31 +381,7 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
             pipe.debug = True
         # input type
         N = gaussians.get_xyz.shape[0]
-        if iteration > 3000 and hybrid:
-            dir_pp = (gaussians.get_xyz - viewpoint_cam.get_camera_center.repeat(gaussians.get_features.shape[0], 1))
-            dir_pp_normalized = dir_pp / dir_pp.norm(dim=1, keepdim=True)
-            mlp_color = specular_mlp.step(gaussians.get_asg_features, dir_pp_normalized)
-        else:
-            mlp_color = 0
-
-        # other views rendering
-        if (iteration == 10001 or iteration == 20001) and args.projection_loss:
-            progress_bar_matching = tqdm(range(0, len(viewpoint_stack_constant)), desc="Matching pairs")
-            for viewpoint_cam_0 in viewpoint_stack_constant:
-                progress_bar_matching.update(1)
-
-                render_pkg = render(viewpoint_cam_0, gaussians, pipe, background, mlp_color, iteration=iteration, hybrid=hybrid)
-                image = render_pkg["render"]
-                matching_point_dic = {}
-                for camera_id in camera_pairs[viewpoint_cam_0.uid]:
-                    viewpoint_cam_i = viewpoint_stack_constant[camera_id]
-                    render_pkg_i = render(viewpoint_cam_i, gaussians, pipe, background, mlp_color, iteration=iteration, hybrid=hybrid)
-                    image_i = render_pkg_i["render"]
-                    matching_point_dic[camera_id] = light_glue_simple(image, image_i, 'disk')
-                camera_matching_points[viewpoint_cam_0.uid] = matching_point_dic
-
-            progress_bar_matching.close()
-            projection_loss_count = 10000
+        mlp_color = 0
 
         # render current view
         gaussians_xyz = gaussians.get_xyz.detach()
@@ -463,64 +400,22 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
             undistorted_p_w2c_homo = torch.cat((undistorted_p_w2c, torch.ones(undistorted_p_w2c.size(0), 1).cuda()), dim=1)
         else:
             undistorted_p_w2c_homo = p_w2c
-        #distorted_points = lens_net.forward(control_points)#lens_net.i_resnet_linear.module_list[4].residual[10].weight
-        #directions = distorted_points - control_points
-        #distorted_points.retain_grad()
-        #u_distortion = directions[:, :, 0]
-        #v_distortion = directions[:, :, 1]
-        #if iteration % 1000 == 1:
-        #    print((directions[:, :, 0]).mean())
-        #    print((directions[:, :, 1]).mean())
-
-        #control_points, boundary_original_points = pass_neuralens(lens_net, viewpoint_cam.image_width, viewpoint_cam.image_height, int(viewpoint_cam.image_width / 8), int(viewpoint_cam.image_height / 8), viewpoint_cam.get_K)
-        #control_points = nn.functional.interpolate(control_points.permute(2, 0, 1).unsqueeze(0), size=(viewpoint_cam.image_height, viewpoint_cam.image_width), mode='bilinear', align_corners=False).permute(0, 2, 3, 1).squeeze(0)
-
 
         # using iresnet to predict next round control points
-        #P_view_outsidelens_direction = lens_net.forward(P_view_insidelens_direction)
-        #camera_directions_w_lens = homogenize(P_view_outsidelens_direction)
-        #control_points = camera_directions_w_lens.reshape((P_sensor.shape[0], P_sensor.shape[1], 3))[:, :, :2]
-        #boundary_original_points = P_view_insidelens_direction[-1]
+        P_view_outsidelens_direction = lens_net.forward(P_view_insidelens_direction)
+        camera_directions_w_lens = homogenize(P_view_outsidelens_direction)
+        control_points = camera_directions_w_lens.reshape((P_sensor.shape[0], P_sensor.shape[1], 3))[:, :, :2]
+        boundary_original_points = P_view_insidelens_direction[-1]
 
-        render_pkg = render(viewpoint_cam, gaussians, pipe, background, mlp_color, ref_points, boundary_original_points, undistorted_p_w2c_homo, distortion_params, u_distortion, v_distortion, u_radial, v_radial, affine_coeff, poly_coeff, radial, iteration=iteration, hybrid=hybrid, global_alignment=scene.getGlobalAlignment())
+        render_pkg = render(viewpoint_cam, gaussians, pipe, background, mlp_color, control_points, boundary_original_points, undistorted_p_w2c_homo, distortion_params, u_distortion, v_distortion, u_radial, v_radial, affine_coeff, poly_coeff, radial, iteration=iteration, hybrid=hybrid, global_alignment=scene.getGlobalAlignment())
         image, viewspace_point_tensor, visibility_filter, radii = render_pkg["render"], render_pkg["viewspace_points"], render_pkg["visibility_filter"], render_pkg["radii"]
-
-        if iteration % 1000 == 1:
-            #p1 = render_pkg["means2D"]
-            p1 = ref_points.reshape(-1, 2)
-            import matplotlib.pyplot as plt
-            plt.figure(figsize=(int(ref_points.shape[1]/4), int(ref_points.shape[0]/4)))
-            x = p1[:, 0].detach().cpu().numpy()  # Convert tensor to numpy for plotting
-            y = p1[:, 1].detach().cpu().numpy()
-            plt.scatter(x, y)
-            plt.title('2D Points Plot')
-            plt.xlabel('X axis')
-            plt.ylabel('Y axis')
-            plt.xlim(p1[:, 0].min().item() - 0.1, p1[:, 0].max().item() + 0.1)
-            plt.ylim(p1[:, 1].min().item() - 0.1, p1[:, 1].max().item() + 0.1)
-            plt.grid(True)
-            #plt.show()
-            plt.savefig(os.path.join(scene.model_path, f"ref_points_{iteration}.png"))
-            #import pdb;pdb.set_trace()
-
 
         # Loss
         gt_image = viewpoint_cam.original_image.cuda()
-        #Ll1 = l1_loss(image * mask, gt_image * mask)
-        #ssim_loss = ssim(image * mask, gt_image * mask)
         Ll1 = l1_loss(image, gt_image)
         ssim_loss = ssim(image, gt_image)
         loss = (1.0 - opt.lambda_dssim) * Ll1 + opt.lambda_dssim * (1.0 - ssim_loss)# + 0.1 * (loss_projection / len(camera_pairs[viewpoint_cam.uid]))
-
         loss.backward(retain_graph=True)
-
-        if iteration % 10 == 0:
-            scalars = {
-                f"gradient/transpose": torch.mean(viewpoint_cam.delta_translation.grad).item(),
-                f"gradient/quaternion": torch.mean(viewpoint_cam.delta_quaternion.grad).item(),
-            }
-            if use_wandb:
-                wandb.log(scalars, step=iteration)
 
 
         if iteration % 10 == 0:
@@ -558,37 +453,17 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
             if iteration == opt.iterations:
                 progress_bar.close()
 
-            if viewpoint_cam.uid == 5 and False:
-                render_pkg = render(viewpoint_cam, gaussians, pipe, background, mlp_color, ref_points, boundary_original_points, undistorted_p_w2c_homo, distortion_params, u_distortion, v_distortion, u_radial, v_radial, affine_coeff, poly_coeff, radial, iteration=iteration, hybrid=hybrid, global_alignment=scene.getGlobalAlignment())
-                image = render_pkg["render"]
-                os.makedirs(os.path.join(scene.model_path, 'fix_view'), exist_ok = True)
-                torchvision.utils.save_image(image, os.path.join(scene.model_path, 'fix_view/{}'.format(iteration) + ".png"))
-            if iteration % 100 == 1 and False:
-                torch.save(pose_GT.cpu().detach(), os.path.join(args.model_path, f'{iteration}_gt.pt'))
-                torch.save(pose_aligned.cpu().detach(), os.path.join(args.model_path, f'{iteration}_align.pt'))
-
             #if iteration in testing_iterations:
             if iteration % 500 == 0 and args.vis_pose:
                 pose_GT, pose_aligned = scene.loadAlignCameras(if_vis_train=True, iteration=iteration, path=scene.model_path)
-                if iteration == 7000 or iteration == 10000 or iteration ==20000 or iteration == 29000:
-                    torch.save(pose_GT.cpu().detach(), f'{iteration}_gt.pt')
-                    torch.save(pose_aligned.cpu().detach(), f'{iteration}_align.pt')
-                    c2w_gt = invert_transformations(pose_GT)
-                    c2w_align = invert_transformations(pose_aligned)
-                    mean_distance, mean_angle = relative_metrics(c2w_gt, c2w_align)
-                    print("Mean Relative Distance:", mean_distance)
-                    print("Mean Relative Rotation Angle (degree):", mean_angle * 180 / 3.1415926)
                 vis_cameras(opt_vis, vis, step=iteration, poses=[pose_aligned, pose_GT])
-                #if iteration == 20000 or iteration == 30000:
-                #    download_pose_vis(os.path.join(args.model_path, 'plot'), iteration)
 
             # Log and save
-            training_report(tb_writer, iteration, Ll1, loss, l1_loss, iter_start.elapsed_time(iter_end), testing_iterations, scene, render, (pipe, background, mlp_color), lens_net, ref_points, boundary_original_points, opt_distortion, distortion_params, u_distortion, v_distortion, u_radial, v_radial, affine_coeff, poly_coeff, radial)
+            training_report(tb_writer, iteration, Ll1, loss, l1_loss, iter_start.elapsed_time(iter_end), testing_iterations, scene, render, (pipe, background, mlp_color), lens_net, control_points, boundary_original_points, opt_distortion, distortion_params, u_distortion, v_distortion, u_radial, v_radial, affine_coeff, poly_coeff, radial)
             if (iteration in saving_iterations):
                 print("\n[ITER {}] Saving Gaussians".format(iteration))
                 scene.save(iteration)
                 torch.save(lens_net, os.path.join(scene.model_path, f'lens_net{iteration}.pth'))
-                torch.save(ref_points, os.path.join(scene.model_path, f'ref_points_{iteration}.pt'))
                 torch.save(scene.train_cameras, os.path.join(scene.model_path, 'opt_cams.pt'))
                 torch.save(scene.unnoisy_train_cameras, os.path.join(scene.model_path, 'gt_cams.pt'))
                 torch.save(distortion_params, os.path.join(scene.model_path, 'distortion_params.pt'))
@@ -630,7 +505,8 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
             if iteration < opt.iterations:
                 gaussians.optimizer.step()
                 gaussians.optimizer.zero_grad(set_to_none = True)
-
+                optimizer_lens_net.step() #lens_net.i_resnet_linear.module_list[0].residual[0].weight
+                optimizer_lens_net.zero_grad(set_to_none=True)
                 # do not update camera pose when densify or prune gaussians
                 if opt_cam:
                     if iteration % opt.densification_interval != 0:# and iteration > opt.densify_from_iter:
@@ -647,15 +523,6 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
                             scene.optimizer_fovy.zero_grad(set_to_none=True)
                             scene.scheduler_fovx.step()
                             scene.scheduler_fovy.step()
-
-                        if iteration > 100000 and iteration % 100 == 0:
-                            scene.optimizer_global_alignment.step()
-                            scene.optimizer_global_alignment.zero_grad(set_to_none=True)
-                            scene.scheduler_global_aligment.step()
-
-                if hybrid:
-                    specular_mlp.optimizer.step()
-                    specular_mlp.optimizer.zero_grad()
 
             if (iteration in checkpoint_iterations):
                 print("\n[ITER {}] Saving Checkpoint".format(iteration))
@@ -850,6 +717,10 @@ if __name__ == "__main__":
     parser.add_argument("--vis_pose", action="store_true", default=False)
     # optimize distortion
     parser.add_argument("--opt_distortion", action="store_true", default=False)
+    parser.add_argument("--extra_loss", action="store_true", default=False)
+    parser.add_argument('--start_opt_lens', type=int, default=1)
+    parser.add_argument('--extend_scale', type=float, default=2.)
+    parser.add_argument('--control_point_sample_scale', type=float, default=8.)
 
     args = parser.parse_args(sys.argv[1:])
     args.save_iterations.append(args.iterations)
@@ -873,7 +744,8 @@ if __name__ == "__main__":
     # Start GUI server, configure and run training
     network_gui.init(args.ip, args.port)
     torch.autograd.set_detect_anomaly(args.detect_anomaly)
-    training(lp.extract(args), op.extract(args), pp.extract(args), args.test_iterations, args.save_iterations, args.checkpoint_iterations, args.start_checkpoint, args.debug_from, use_wandb=args.wandb, random_init=args.random_init_pc, hybrid=args.hybrid, opt_cam=args.opt_cam, opt_distortion=args.opt_distortion, opt_intrinsic=args.opt_intrinsic, r_t_lr=args.r_t_lr, r_t_noise=args.r_t_noise, global_alignment_lr=args.global_alignment_lr)
+    training(lp.extract(args), op.extract(args), pp.extract(args), args.test_iterations, args.save_iterations, args.checkpoint_iterations, args.start_checkpoint, args.debug_from, use_wandb=args.wandb, random_init=args.random_init_pc, hybrid=args.hybrid, opt_cam=args.opt_cam, opt_distortion=args.opt_distortion, opt_intrinsic=args.opt_intrinsic, r_t_lr=args.r_t_lr, r_t_noise=args.r_t_noise, global_alignment_lr=args.global_alignment_lr,
+             extra_loss=args.extra_loss, start_opt_lens=args.start_opt_lens, extend_scale=args.extend_scale, control_point_sample_scale=args.control_point_sample_scale)
 
     # All done
     print("\nTraining complete.")
