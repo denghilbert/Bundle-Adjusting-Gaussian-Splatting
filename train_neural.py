@@ -264,6 +264,7 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
         ref_points = ref_points * (1 + coeff[0] * r**2 + coeff[1] * r**4 + coeff[2] * r**6)
     else:
         ref_points = ref_points
+
     boundary_original_points = P_view_insidelens_direction[-1]
     print(boundary_original_points)
     ref_points = nn.Parameter(ref_points.cuda().requires_grad_(True))
