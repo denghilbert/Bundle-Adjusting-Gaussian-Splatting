@@ -264,7 +264,6 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
         ref_points = ref_points * (1 + coeff[0] * r**2 + coeff[1] * r**4 + coeff[2] * r**6)
     else:
         ref_points = ref_points
-
     boundary_original_points = P_view_insidelens_direction[-1]
     print(boundary_original_points)
     ref_points = nn.Parameter(ref_points.cuda().requires_grad_(True))
@@ -298,7 +297,6 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
 
     progress_bar_ires = tqdm(range(0, 2000), desc="Init Iresnet")
     for i in range(2000):
-    #for i in range(0):
         P_view_outsidelens_direction = lens_net.forward(P_view_insidelens_direction)
         control_points = homogenize(P_view_outsidelens_direction)
         control_points = control_points.reshape((P_sensor.shape[0], P_sensor.shape[1], 3))[:, :, :2]
@@ -312,7 +310,6 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
 
     for param_group in optimizer_lens_net.param_groups:
         param_group['lr'] = 1e-6
-    scheduler_lens_net = torch.optim.lr_scheduler.MultiStepLR(optimizer_lens_net, milestones=[10000, 20000], gamma=0.5)
 
     width = viewpoint_cam.image_width
     height = viewpoint_cam.image_height
@@ -384,31 +381,7 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
             pipe.debug = True
         # input type
         N = gaussians.get_xyz.shape[0]
-        if iteration > 3000 and hybrid:
-            dir_pp = (gaussians.get_xyz - viewpoint_cam.get_camera_center.repeat(gaussians.get_features.shape[0], 1))
-            dir_pp_normalized = dir_pp / dir_pp.norm(dim=1, keepdim=True)
-            mlp_color = specular_mlp.step(gaussians.get_asg_features, dir_pp_normalized)
-        else:
-            mlp_color = 0
-
-        # other views rendering
-        if (iteration == 10001 or iteration == 20001) and args.projection_loss:
-            progress_bar_matching = tqdm(range(0, len(viewpoint_stack_constant)), desc="Matching pairs")
-            for viewpoint_cam_0 in viewpoint_stack_constant:
-                progress_bar_matching.update(1)
-
-                render_pkg = render(viewpoint_cam_0, gaussians, pipe, background, mlp_color, iteration=iteration, hybrid=hybrid)
-                image = render_pkg["render"]
-                matching_point_dic = {}
-                for camera_id in camera_pairs[viewpoint_cam_0.uid]:
-                    viewpoint_cam_i = viewpoint_stack_constant[camera_id]
-                    render_pkg_i = render(viewpoint_cam_i, gaussians, pipe, background, mlp_color, iteration=iteration, hybrid=hybrid)
-                    image_i = render_pkg_i["render"]
-                    matching_point_dic[camera_id] = light_glue_simple(image, image_i, 'disk')
-                camera_matching_points[viewpoint_cam_0.uid] = matching_point_dic
-
-            progress_bar_matching.close()
-            projection_loss_count = 10000
+        mlp_color = 0
 
         # render current view
         gaussians_xyz = gaussians.get_xyz.detach()
@@ -427,18 +400,6 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
             undistorted_p_w2c_homo = torch.cat((undistorted_p_w2c, torch.ones(undistorted_p_w2c.size(0), 1).cuda()), dim=1)
         else:
             undistorted_p_w2c_homo = p_w2c
-        #distorted_points = lens_net.forward(control_points)#lens_net.i_resnet_linear.module_list[4].residual[10].weight
-        #directions = distorted_points - control_points
-        #distorted_points.retain_grad()
-        #u_distortion = directions[:, :, 0]
-        #v_distortion = directions[:, :, 1]
-        #if iteration % 1000 == 1:
-        #    print((directions[:, :, 0]).mean())
-        #    print((directions[:, :, 1]).mean())
-
-        #control_points, boundary_original_points = pass_neuralens(lens_net, viewpoint_cam.image_width, viewpoint_cam.image_height, int(viewpoint_cam.image_width / 8), int(viewpoint_cam.image_height / 8), viewpoint_cam.get_K)
-        #control_points = nn.functional.interpolate(control_points.permute(2, 0, 1).unsqueeze(0), size=(viewpoint_cam.image_height, viewpoint_cam.image_width), mode='bilinear', align_corners=False).permute(0, 2, 3, 1).squeeze(0)
-
 
         # using iresnet to predict next round control points
         P_view_outsidelens_direction = lens_net.forward(P_view_insidelens_direction)
@@ -449,36 +410,11 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
         render_pkg = render(viewpoint_cam, gaussians, pipe, background, mlp_color, control_points, boundary_original_points, undistorted_p_w2c_homo, distortion_params, u_distortion, v_distortion, u_radial, v_radial, affine_coeff, poly_coeff, radial, iteration=iteration, hybrid=hybrid, global_alignment=scene.getGlobalAlignment())
         image, viewspace_point_tensor, visibility_filter, radii = render_pkg["render"], render_pkg["viewspace_points"], render_pkg["visibility_filter"], render_pkg["radii"]
 
-        if iteration % 1000 == 1:
-            #p1 = render_pkg["means2D"]
-            p1 = control_points.reshape(-1, 2)
-            import matplotlib.pyplot as plt
-            plt.figure(figsize=(int(control_points.shape[1]/4), int(control_points.shape[0]/4)))
-            x = p1[:, 0].detach().cpu().numpy()  # Convert tensor to numpy for plotting
-            y = p1[:, 1].detach().cpu().numpy()
-            plt.scatter(x, y)
-            plt.title('2D Points Plot')
-            plt.xlabel('X axis')
-            plt.ylabel('Y axis')
-            plt.xlim(p1[:, 0].min().item() - 0.1, p1[:, 0].max().item() + 0.1)
-            plt.ylim(p1[:, 1].min().item() - 0.1, p1[:, 1].max().item() + 0.1)
-            plt.grid(True)
-            #plt.show()
-            plt.savefig(os.path.join(scene.model_path, f"control_points_{iteration}.png"))
-            #import pdb;pdb.set_trace()
-
-
         # Loss
         gt_image = viewpoint_cam.original_image.cuda()
-        #Ll1 = l1_loss(image * mask, gt_image * mask)
-        #ssim_loss = ssim(image * mask, gt_image * mask)
         Ll1 = l1_loss(image, gt_image)
         ssim_loss = ssim(image, gt_image)
         loss = (1.0 - opt.lambda_dssim) * Ll1 + opt.lambda_dssim * (1.0 - ssim_loss)# + 0.1 * (loss_projection / len(camera_pairs[viewpoint_cam.uid]))
-
-        if extra_loss:
-            loss += 100 * ((control_points - ref_points)**2).mean()
-
         loss.backward(retain_graph=True)
 
 
@@ -520,14 +456,7 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
             #if iteration in testing_iterations:
             if iteration % 500 == 0 and args.vis_pose:
                 pose_GT, pose_aligned = scene.loadAlignCameras(if_vis_train=True, iteration=iteration, path=scene.model_path)
-                if iteration == 1000 or iteration == 10000 or iteration == 20000 or iteration == 29000:
-                    import pdb;pdb.set_trace()
-                    torch.save(pose_GT.cpu().detach(), f'{iteration}_gt.pt')
-                    torch.save(pose_aligned.cpu().detach(), f'{iteration}_align.pt')
-
                 vis_cameras(opt_vis, vis, step=iteration, poses=[pose_aligned, pose_GT])
-                #if iteration == 20000 or iteration == 30000:
-                #    download_pose_vis(os.path.join(args.model_path, 'plot'), iteration)
 
             # Log and save
             training_report(tb_writer, iteration, Ll1, loss, l1_loss, iter_start.elapsed_time(iter_end), testing_iterations, scene, render, (pipe, background, mlp_color), lens_net, control_points, boundary_original_points, opt_distortion, distortion_params, u_distortion, v_distortion, u_radial, v_radial, affine_coeff, poly_coeff, radial)
@@ -576,56 +505,8 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
             if iteration < opt.iterations:
                 gaussians.optimizer.step()
                 gaussians.optimizer.zero_grad(set_to_none = True)
-
-                #if opt_distortion and iteration > 3000:
-                if opt_distortion:
-                    # 8 params
-                    #optimizer_distortion.step()
-                    #optimizer_distortion.zero_grad(set_to_none=True)
-
-                    # control points
-                    #optimizer_ref_points.step()
-                    #optimizer_ref_points.zero_grad(set_to_none=True)
-
-                    #optimizer_control_points.step()
-                    #optimizer_control_points.zero_grad(set_to_none=True)
-
-                    if iteration > start_opt_lens:
-                        optimizer_lens_net.step() #lens_net.i_resnet_linear.module_list[0].residual[0].weight
-                        optimizer_lens_net.zero_grad(set_to_none=True)
-
-                    # feature grid
-                    #optimizer_u_distortion.step()
-                    #optimizer_v_distortion.step()
-                    #optimizer_u_distortion.zero_grad(set_to_none=True)
-                    #optimizer_v_distortion.zero_grad(set_to_none=True)
-                    #optimizer_u_radial.step()
-                    #optimizer_v_radial.step()
-                    #optimizer_u_radial.zero_grad(set_to_none=True)
-                    #optimizer_v_radial.zero_grad(set_to_none=True)
-
-                    # omindirectional
-                    #optimizer_affine.step()
-                    #optimizer_affine.zero_grad(set_to_none=True)
-                    #optimizer_poly.step()
-                    #optimizer_poly.zero_grad(set_to_none=True)
-
-                    # radial table
-                    #optimizer_radial.step()
-                    #optimizer_radial.zero_grad(set_to_none=True)
-
-                    # optimize fov
-                    #scene.optimizer_fovx.step()
-                    #scene.optimizer_fovy.step()
-                    #scene.optimizer_fovx.zero_grad(set_to_none=True)
-                    #scene.optimizer_fovy.zero_grad(set_to_none=True)
-
-                    # neuralens
-                    #scene.optimizer_lens_net.param_groups[0]['lr']
-                    #scene.optimizer_lens_net.step()
-                    #scene.optimizer_lens_net.zero_grad(set_to_none=True)
-                    #scene.scheduler_lens_net.step()
-
+                optimizer_lens_net.step() #lens_net.i_resnet_linear.module_list[0].residual[0].weight
+                optimizer_lens_net.zero_grad(set_to_none=True)
                 # do not update camera pose when densify or prune gaussians
                 if opt_cam:
                     if iteration % opt.densification_interval != 0:# and iteration > opt.densify_from_iter:
@@ -642,15 +523,6 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
                             scene.optimizer_fovy.zero_grad(set_to_none=True)
                             scene.scheduler_fovx.step()
                             scene.scheduler_fovy.step()
-
-                        if iteration > 100000 and iteration % 100 == 0:
-                            scene.optimizer_global_alignment.step()
-                            scene.optimizer_global_alignment.zero_grad(set_to_none=True)
-                            scene.scheduler_global_aligment.step()
-
-                if hybrid:
-                    specular_mlp.optimizer.step()
-                    specular_mlp.optimizer.zero_grad()
 
             if (iteration in checkpoint_iterations):
                 print("\n[ITER {}] Saving Checkpoint".format(iteration))

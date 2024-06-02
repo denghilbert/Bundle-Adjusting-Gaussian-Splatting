@@ -52,7 +52,8 @@ class Camera(nn.Module):
         #    self.FoVx = (self.image_width / self.image_height) * self.FoVy
 
         if gt_alpha_mask is not None:
-            self.original_image *= gt_alpha_mask.to(self.data_device)
+            #self.original_image *= gt_alpha_mask.to(self.data_device)
+            self.original_image *= gt_alpha_mask
         else:
             #self.original_image *= torch.ones((1, self.image_height, self.image_width), device=self.data_device)
             self.original_image *= torch.ones((1, self.image_height, self.image_width))
@@ -91,6 +92,9 @@ class Camera(nn.Module):
         self.learnable_fovy = nn.Parameter(torch.tensor(self.FoVy).cuda().requires_grad_(True))
         #self.projection_matrix = getProjectionMatrix(znear=self.znear, zfar=self.zfar, fovX=self.FoVx, fovY=self.FoVy).transpose(0,1).cuda()
         self.projection_matrix = getProjectionMatrix(znear=self.znear, zfar=self.zfar, fovX=self.learnable_fovx, fovY=self.learnable_fovy).transpose(0,1).cuda()
+        #print(self.projection_matrix)
+        #print(self.intrinsic_matrix)
+        #import pdb;pdb.set_trace()
         self.full_proj_transform = (self.world_view_transform.unsqueeze(0).bmm(self.projection_matrix.unsqueeze(0))).squeeze(0)
         self.camera_center = self.world_view_transform.inverse()[3, :3]
 
@@ -107,6 +111,10 @@ class Camera(nn.Module):
         self.intrinsic_matrix[1][1] = fov2focal(FoVy, self.image_height)
         self.intrinsic_matrix[0][2] = self.intrinsic_matrix[0][2] * scale_pix
         self.intrinsic_matrix[1][2] = self.intrinsic_matrix[1][2] * scale_pix
+
+    def perturb_fov(self, scale):
+        self.learnable_fovx *= scale
+        self.learnable_fovy *= scale
 
     def reset_extrinsic(self, R, T):
         self.R = R
@@ -195,6 +203,10 @@ class Camera(nn.Module):
         self.world_view_transform = torch.cat((self.Rt, self.last_row), dim=0).t()
 
         return self.world_view_transform.t()
+
+
+    def get_c2w(self):
+        return self.get_w2c.inverse()
 
     def get_intrinsic(self):
         return self.projection_matrix

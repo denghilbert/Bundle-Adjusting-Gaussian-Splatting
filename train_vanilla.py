@@ -558,11 +558,12 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
             if iteration == opt.iterations:
                 progress_bar.close()
 
-            if viewpoint_cam.uid == 5:
+            if viewpoint_cam.uid == 5 and False:
                 render_pkg = render(viewpoint_cam, gaussians, pipe, background, mlp_color, ref_points, boundary_original_points, undistorted_p_w2c_homo, distortion_params, u_distortion, v_distortion, u_radial, v_radial, affine_coeff, poly_coeff, radial, iteration=iteration, hybrid=hybrid, global_alignment=scene.getGlobalAlignment())
                 image = render_pkg["render"]
+                os.makedirs(os.path.join(scene.model_path, 'fix_view'), exist_ok = True)
                 torchvision.utils.save_image(image, os.path.join(scene.model_path, 'fix_view/{}'.format(iteration) + ".png"))
-            if iteration % 100 == 1:
+            if iteration % 100 == 1 and False:
                 torch.save(pose_GT.cpu().detach(), os.path.join(args.model_path, f'{iteration}_gt.pt'))
                 torch.save(pose_aligned.cpu().detach(), os.path.join(args.model_path, f'{iteration}_align.pt'))
 

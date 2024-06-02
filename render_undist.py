@@ -73,13 +73,15 @@ def colorize(uv_im, max_mag=None):
     return rgb
 
 
-def render_set(model_path, name, iteration, views, gaussians, pipeline, background, specular=None, hybrid=False, distortion_params=None, u_distortion=None, v_distortion=None, u_radial=None, v_radial=None, affine_coeff=None, poly_coeff=None, save_distortion_map=None):
+def render_set(model_path, name, iteration, views, gaussians, pipeline, background, specular=None, hybrid=False, distortion_params=None, u_distortion=None, v_distortion=None, u_radial=None, v_radial=None, affine_coeff=None, poly_coeff=None, save_distortion_map=None, extend_scale=None):
     render_path = os.path.join(model_path, name, "ours_{}".format(iteration), "renders")
+    render_undistorted_path = os.path.join(model_path, name, "ours_{}".format(iteration), "renders_perspective")
     gts_path = os.path.join(model_path, name, "ours_{}".format(iteration), "gt")
     depth_path = os.path.join(model_path, name, "ours_{}".format(iteration), "depth")
     mask_path = os.path.join(model_path, name, "ours_{}".format(iteration), "mask")
 
     makedirs(render_path, exist_ok=True)
+    makedirs(render_undistorted_path, exist_ok=True)
     makedirs(gts_path, exist_ok=True)
     makedirs(depth_path, exist_ok=True)
     makedirs(mask_path, exist_ok=True)
@@ -117,8 +119,8 @@ def render_set(model_path, name, iteration, views, gaussians, pipeline, backgrou
         sample_height = int(height / 1)
         K = views[0].get_K
         i, j = np.meshgrid(
-            np.linspace(0 - width/2, width + width/2, sample_width),
-            np.linspace(0 - height/2, height + height/2, sample_height),
+            np.linspace(0 - width/extend_scale, width + width/extend_scale, sample_width),
+            np.linspace(0 - height/extend_scale, height + height/extend_scale, sample_height),
             indexing="ij",
         )
         i = i.T
@@ -136,16 +138,19 @@ def render_set(model_path, name, iteration, views, gaussians, pipeline, backgrou
         control_points = homogenize(P_view_outsidelens_direction)
         control_points = control_points.reshape((P_sensor.shape[0], P_sensor.shape[1], 3))[:, :, :2]
         boundary_original_points = P_view_insidelens_direction[-1]
-        P_view_outsidelens_direction = P_view_insidelens_direction
-        tes_p = homogenize(P_view_outsidelens_direction)
-        tes_p = tes_p.reshape((P_sensor.shape[0], P_sensor.shape[1], 3))[:, :, :2]
-        tensor = control_points-tes_p
-        tensor = tensor.permute(2, 0, 1).unsqueeze(0)  # Shape: (1, 2, 596, 1060)
-        downsampled_tensor = F.interpolate(tensor, size=(74, 132), mode='area')
-        downsampled_tensor = downsampled_tensor.squeeze(0).permute(1, 2, 0)  # Shape: (74, 132, 2)
-        torch.save(downsampled_tensor.cpu().detach(), './flow.pt')
-        import pdb;pdb.set_trace()
-        print(9)
+
+        ## find distortion flow
+        #P_view_outsidelens_direction = P_view_insidelens_direction
+        #tes_p = homogenize(P_view_outsidelens_direction)
+        #tes_p = tes_p.reshape((P_sensor.shape[0], P_sensor.shape[1], 3))[:, :, :2]
+        #tensor = control_points-tes_p
+        #tensor = tensor.permute(2, 0, 1).unsqueeze(0)  # Shape: (1, 2, 596, 1060)
+        #downsampled_tensor = F.interpolate(tensor, size=(74, 132), mode='area')
+        #downsampled_tensor = downsampled_tensor.squeeze(0).permute(1, 2, 0)  # Shape: (74, 132, 2)
+        #torch.save(downsampled_tensor.cpu().detach(), './fern_iresnet_pred_flow.pt')
+        #torch.save(downsampled_tensor.cpu().detach(), './trex_iresnet_pred_flow.pt')
+        #import pdb;pdb.set_trace()
+        ##print(9)
 
     with torch.no_grad():
         width = views[0].image_width
@@ -184,75 +189,75 @@ def render_set(model_path, name, iteration, views, gaussians, pipeline, backgrou
         flow[:, :, 1] = flow[:, :, 1] * projection_matrix[1][1]
 
 
-    with torch.no_grad():
-        width = views[0].image_width
-        height = views[0].image_height
-        sample_width = int(width / 40)
-        sample_height = int(height / 40)
-        K = views[0].get_K
-        projection_matrix = views[0].projection_matrix
-        i, j = np.meshgrid(
-            np.linspace(0, width, sample_width),
-            np.linspace(0, height, sample_height),
-            indexing="ij",
-        )
-        i = i.T
-        j = j.T
-        P_sensor = (
-            torch.from_numpy(np.stack((i, j), axis=-1))
-            .to(torch.float32)
-            .cuda()
-        )
-        P_sensor_hom = homogenize(P_sensor.reshape((-1, 2)))
-        P_view_insidelens_direction_hom = (torch.inverse(K) @ P_sensor_hom.T).T
-        P_view_insidelens_direction = dehomogenize(P_view_insidelens_direction_hom)
-        P_view_outsidelens_direction = lens_net.forward(P_view_insidelens_direction)
-        dist = homogenize(P_view_outsidelens_direction)
-        dist = dist.reshape((P_sensor.shape[0], P_sensor.shape[1], 3))[:, :, :2]
-        P_view_outsidelens_direction = P_view_insidelens_direction
-        wo_dist = homogenize(P_view_outsidelens_direction)
-        wo_dist = wo_dist.reshape((P_sensor.shape[0], P_sensor.shape[1], 3))[:, :, :2]
+    #with torch.no_grad():
+    #    width = views[0].image_width
+    #    height = views[0].image_height
+    #    sample_width = int(width / 40)
+    #    sample_height = int(height / 40)
+    #    K = views[0].get_K
+    #    projection_matrix = views[0].projection_matrix
+    #    i, j = np.meshgrid(
+    #        np.linspace(0, width, sample_width),
+    #        np.linspace(0, height, sample_height),
+    #        indexing="ij",
+    #    )
+    #    i = i.T
+    #    j = j.T
+    #    P_sensor = (
+    #        torch.from_numpy(np.stack((i, j), axis=-1))
+    #        .to(torch.float32)
+    #        .cuda()
+    #    )
+    #    P_sensor_hom = homogenize(P_sensor.reshape((-1, 2)))
+    #    P_view_insidelens_direction_hom = (torch.inverse(K) @ P_sensor_hom.T).T
+    #    P_view_insidelens_direction = dehomogenize(P_view_insidelens_direction_hom)
+    #    P_view_outsidelens_direction = lens_net.forward(P_view_insidelens_direction)
+    #    dist = homogenize(P_view_outsidelens_direction)
+    #    dist = dist.reshape((P_sensor.shape[0], P_sensor.shape[1], 3))[:, :, :2]
+    #    P_view_outsidelens_direction = P_view_insidelens_direction
+    #    wo_dist = homogenize(P_view_outsidelens_direction)
+    #    wo_dist = wo_dist.reshape((P_sensor.shape[0], P_sensor.shape[1], 3))[:, :, :2]
 
-    save_distortion_list = [dist, wo_dist]
-    names = ['distorted', 'wo_dist']
-    rainbow = colorize((nn.functional.interpolate(dist.permute(2, 0, 1).unsqueeze(0), size=(height, width), mode='bilinear', align_corners=False).permute(0, 2, 3, 1).squeeze(0)).detach().cpu().numpy())
-    image = Image.fromarray(rainbow)
-    image.save(os.path.join(model_path, f'final_rainbow.png'))
+    #save_distortion_list = [dist, wo_dist]
+    #names = ['distorted', 'wo_dist']
+    #rainbow = colorize((nn.functional.interpolate(dist.permute(2, 0, 1).unsqueeze(0), size=(height, width), mode='bilinear', align_corners=False).permute(0, 2, 3, 1).squeeze(0)).detach().cpu().numpy())
+    #image = Image.fromarray(rainbow)
+    #image.save(os.path.join(model_path, f'final_rainbow.png'))
 
 
-    image = views[0].original_image.permute(1, 2, 0).cpu().detach().numpy()
-    height, width, _ = image.shape
-    x, y = np.meshgrid(np.arange(0, width, 4), np.arange(0, height, 4))
-    x = x.flatten()
-    y = y.flatten()
-    plt.figure(figsize=(int(save_distortion_list[0].shape[1]), int(save_distortion_list[0].shape[0])))
-    plt.imshow(image)  # Display the image
-    plt.scatter(x, y, color='orange', s=4, marker='o')  # Plot points on each pixel
-    plt.axis('off')
-    plt.savefig(os.path.join(model_path, f'final_each_pix.png'))
-    import pdb;pdb.set_trace()
+    #image = views[0].original_image.permute(1, 2, 0).cpu().detach().numpy()
+    #height, width, _ = image.shape
+    #x, y = np.meshgrid(np.arange(0, width, 4), np.arange(0, height, 4))
+    #x = x.flatten()
+    #y = y.flatten()
+    #plt.figure(figsize=(int(save_distortion_list[0].shape[1]), int(save_distortion_list[0].shape[0])))
+    #plt.imshow(image)  # Display the image
+    #plt.scatter(x, y, color='orange', s=4, marker='o')  # Plot points on each pixel
+    #plt.axis('off')
+    #plt.savefig(os.path.join(model_path, f'final_each_pix.png'))
+    #import pdb;pdb.set_trace()
 
 
     #color = rainbow
-    if save_distortion_map:
-        for points, name in zip(save_distortion_list, names):
-            p1 = points.reshape(-1, 2)
-            plt.figure(figsize=(int(points.shape[1]), int(points.shape[0])))
-            x = (p1[:, 0].detach().cpu().numpy() + p1[:, 0].max().item()) * color.shape[1] / (2 * p1[:, 0].max().item())
-            y = (p1[:, 1].detach().cpu().numpy() + p1[:, 1].max().item()) * color.shape[0] / (2 * p1[:, 1].max().item())
-            if 'wo' in name:
-                plt.imshow(color)
-                plt.scatter(x, y, s=60, c='orange')
-            else:
-                plt.scatter(x, y)
-            #plt.xlim(p1[:, 0].min().item() - 0.1, p1[:, 0].max().item() + 0.1)
-            #plt.ylim(p1[:, 1].min().item() - 0.1, p1[:, 1].max().item() + 0.1)
-            plt.xlim(-1, color.shape[1] + 1)
-            plt.ylim(-1, color.shape[0] + 1)
-            #plt.grid(True)
-            plt.gca().invert_yaxis()
-            plt.savefig(os.path.join(model_path, f"final_visual_{name}.png"))
-    import pdb;pdb.set_trace()
+    #if save_distortion_map:
+    #    for points, name in zip(save_distortion_list, names):
+    #        p1 = points.reshape(-1, 2)
+    #        plt.figure(figsize=(int(points.shape[1]), int(points.shape[0])))
+    #        x = (p1[:, 0].detach().cpu().numpy() + p1[:, 0].max().item()) * color.shape[1] / (2 * p1[:, 0].max().item())
+    #        y = (p1[:, 1].detach().cpu().numpy() + p1[:, 1].max().item()) * color.shape[0] / (2 * p1[:, 1].max().item())
+    #        if 'wo' in name:
+    #            plt.imshow(color)
+    #            plt.scatter(x, y, s=60, c='orange')
+    #        else:
+    #            plt.scatter(x, y)
+    #        #plt.xlim(p1[:, 0].min().item() - 0.1, p1[:, 0].max().item() + 0.1)
+    #        #plt.ylim(p1[:, 1].min().item() - 0.1, p1[:, 1].max().item() + 0.1)
+    #        plt.xlim(-1, color.shape[1] + 1)
+    #        plt.ylim(-1, color.shape[0] + 1)
+    #        #plt.grid(True)
+    #        plt.gca().invert_yaxis()
+    #        plt.savefig(os.path.join(model_path, f"final_visual_{name}.png"))
+    #import pdb;pdb.set_trace()
 
 
     if os.path.exists(os.path.join(model_path, f'ref_points_{iteration}.pt')):
@@ -285,15 +290,11 @@ def render_set(model_path, name, iteration, views, gaussians, pipeline, backgrou
             proj_mat = view.get_full_proj_transform().t().detach()
             p_proj = (proj_mat @ gaussians_xyz_homo.T).T.cuda().detach()
             p_2d = p_proj[:, :2] / p_proj[:, -1:]
-            #if opt_distortion and iteration > 3000:
-            if False:
-                undistorted_p_w2c = lens_net.forward(p_w2c[:, :3])
-                undistorted_p_w2c_homo = torch.cat((undistorted_p_w2c, torch.ones(undistorted_p_w2c.size(0), 1).cuda()), dim=1)
-            else:
-                undistorted_p_w2c_homo = p_w2c
+            undistorted_p_w2c_homo = p_w2c
 
             results = render(view, gaussians, pipeline, background, mlp_color, control_points, boundary_original_points, undistorted_p_w2c_homo, distortion_params, u_distortion, v_distortion, u_radial, v_radial, affine_coeff, poly_coeff, radial, global_alignment=global_alignment)
             rendering, depth_tensor, weight_mask = results["render"], results["depth"], results["weights"]
+            #rendering = rendering * mask.cuda()
             output = F.grid_sample(
                 rendering.unsqueeze(0),
                 flow.unsqueeze(0),
@@ -307,13 +308,11 @@ def render_set(model_path, name, iteration, views, gaussians, pipeline, backgrou
             depth_colored = plt.get_cmap('viridis')(depth_array)[:, :, :3]  # Drop the alpha channel
             depth_colored_tensor = torch.from_numpy(depth_colored).permute(2, 0, 1).float()  # Rearrange dimensions to CxHxW
 
-
-
-        torchvision.utils.save_image(output.squeeze(0), os.path.join(render_path, 'perspective_{0:05d}'.format(idx) + ".png"))
+        torchvision.utils.save_image(output.squeeze(0), os.path.join(render_undistorted_path, 'perspective_{0:05d}'.format(idx) + ".png"))
         torchvision.utils.save_image(rendering, os.path.join(render_path, '{0:05d}'.format(idx) + ".png"))
-        torchvision.utils.save_image(gt, os.path.join(gts_path, 'perspective_{0:05d}'.format(idx) + ".png"))
+        torchvision.utils.save_image(gt, os.path.join(gts_path, '{0:05d}'.format(idx) + ".png"))
 
-def render_sets(dataset : ModelParams, iteration : int, pipeline : PipelineParams, skip_train : bool, skip_test : bool, mode: str, hybrid: bool, opt_test_cam: bool, opt_intrinsic: bool, opt_extrinsic: bool, render_fisheyefov_from_colmap_perspective: bool, save_distortion_map: bool):
+def render_sets(dataset : ModelParams, iteration : int, pipeline : PipelineParams, skip_train : bool, skip_test : bool, mode: str, hybrid: bool, opt_test_cam: bool, opt_intrinsic: bool, opt_extrinsic: bool, render_fisheyefov_from_colmap_perspective: bool, save_distortion_map: bool, extend_scale: float):
     gaussians = GaussianModel(dataset.sh_degree, dataset.asg_degree)
     lens_net = iResNet()
     scene = Scene(dataset, gaussians, load_iteration=iteration, shuffle=False)
@@ -422,10 +421,10 @@ def render_sets(dataset : ModelParams, iteration : int, pipeline : PipelineParam
     torch.save(scene.test_cameras, os.path.join(scene.model_path, 'opt_test_cam.pt'))
 
     if not skip_train:
-         render_set(dataset.model_path, "train", scene.loaded_iter, scene.getTrainCameras(), gaussians, pipeline, background, specular, hybrid, save_distortion_map=save_distortion_map)
+         render_set(dataset.model_path, "train", scene.loaded_iter, scene.getTrainCameras(), gaussians, pipeline, background, specular, hybrid, save_distortion_map=save_distortion_map, extend_scale=extend_scale)
 
     if not skip_test:
-         render_set(dataset.model_path, "test", scene.loaded_iter, scene.getTestCameras(), gaussians, pipeline, background, specular, hybrid, distortion_params, u_distortion, v_distortion, u_radial, v_radial, affine_coeff, poly_coeff)
+         render_set(dataset.model_path, "test", scene.loaded_iter, scene.getTestCameras(), gaussians, pipeline, background, specular, hybrid, distortion_params, u_distortion, v_distortion, u_radial, v_radial, affine_coeff, poly_coeff, extend_scale=extend_scale)
 
 def init_wandb(cfg, wandb_id=None, project="", run_name=None, mode="online", resume=False, use_group=False, set_group=None):
     r"""Initialize Weights & Biases (wandb) logger.
@@ -491,6 +490,7 @@ if __name__ == "__main__":
     parser.add_argument("--wandb_mode", type=str, default = "online")
     parser.add_argument("--render_fisheyefov_from_colmap_perspective", action="store_true", default=False)
     parser.add_argument("--save_distortion_map", action="store_true", default=False)
+    parser.add_argument('--extend_scale', type=float, default=2.)
     args = get_combined_args(parser)
     print("Rendering " + args.model_path)
 
@@ -507,4 +507,4 @@ if __name__ == "__main__":
                                set_group=args.wandb_group_name
                                )
 
-    render_sets(model.extract(args), args.iteration, pipeline.extract(args), args.skip_train, args.skip_test, args.mode, args.hybrid, args.opt_test_cam, args.opt_intrinsic, args.opt_extrinsic, args.render_fisheyefov_from_colmap_perspective, args.save_distortion_map)
+    render_sets(model.extract(args), args.iteration, pipeline.extract(args), args.skip_train, args.skip_test, args.mode, args.hybrid, args.opt_test_cam, args.opt_intrinsic, args.opt_extrinsic, args.render_fisheyefov_from_colmap_perspective, args.save_distortion_map, args.extend_scale)
