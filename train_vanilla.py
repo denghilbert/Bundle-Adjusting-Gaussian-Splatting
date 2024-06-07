@@ -160,7 +160,7 @@ def relative_metrics(matrices1, matrices2):
     return mean_distance.item(), mean_angle.item()
 
 
-def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoint_iterations, checkpoint, debug_from, use_wandb=False, random_init=False, hybrid=False, opt_cam=False, opt_distortion=False, opt_intrinsic=False, r_t_noise=[0., 0.], r_t_lr=[0.001, 0.001], global_alignment_lr=0.001):
+def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoint_iterations, checkpoint, debug_from, use_wandb=False, random_init=False, hybrid=False, opt_cam=False, opt_distortion=False, opt_intrinsic=False, r_t_noise=[0., 0., 1.], r_t_lr=[0.001, 0.001], global_alignment_lr=0.001):
     first_iter = 0
     tb_writer = prepare_output_and_logger(dataset)
     gaussians = GaussianModel(dataset.sh_degree, dataset.asg_degree)
@@ -264,7 +264,7 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
     optimizer_v_radial = torch.optim.Adam([{'params': v_radial, 'lr': 0.0001}])
     optimizer_radial = torch.optim.Adam([{'params': radial, 'lr': 0.0001}])
 
-    # Control points
+    # colmap init points
     viewpoint_cam = scene.getTrainCameras().copy()[0]
     width = viewpoint_cam.image_width
     height = viewpoint_cam.image_height
@@ -841,7 +841,7 @@ if __name__ == "__main__":
     # learning rate for global alignment
     parser.add_argument('--global_alignment_lr', type=float, default=0.01)
     # noise for rotation and translation
-    parser.add_argument("--r_t_noise", nargs="+", type=float, default=[0., 0.])
+    parser.add_argument("--r_t_noise", nargs="+", type=float, default=[0., 0., 1.])
     # rotation filter for light_glue
     parser.add_argument('--angle_threshold', type=float, default=30.)
     # if optimize camera poses with projection_loss

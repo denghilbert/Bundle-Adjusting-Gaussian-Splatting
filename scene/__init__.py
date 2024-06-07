@@ -52,7 +52,7 @@ class Scene:
 
     gaussians : GaussianModel
 
-    def __init__(self, args : ModelParams, gaussians : GaussianModel, load_iteration=None, shuffle=True, resolution_scales=[1.0], random_init=False, r_t_noise=[0., 0.], r_t_lr=[0.001, 0.001], global_alignment_lr=0.001):
+    def __init__(self, args : ModelParams, gaussians : GaussianModel, load_iteration=None, shuffle=True, resolution_scales=[1.0], random_init=False, r_t_noise=[0., 0., 1.], r_t_lr=[0.001, 0.001], global_alignment_lr=0.001):
         """b
         :param path: Path to colmap scene main folder.
         """
@@ -122,7 +122,7 @@ class Scene:
             # simply add noise
             so3_noise = torch.randn((len(scene_info.train_cameras), 3), generator=generator) * r_t_noise[0]
             t_noise = (torch.randn((len(scene_info.train_cameras), 3), generator=generator) * r_t_noise[1]).numpy()
-            fov_noise = np.exp(np.random.normal(0., np.log(1.02), len(scene_info.train_cameras)))
+            fov_noise = np.exp(np.random.normal(0., np.log(r_t_noise[2]), len(scene_info.train_cameras)))
             #so3_noise = torch.randn((len(scene_info.train_cameras), 3)) * r_t_noise[0]
             #t_noise = (torch.randn((len(scene_info.train_cameras), 3)) * r_t_noise[1]).numpy()
 
@@ -141,7 +141,7 @@ class Scene:
                 #tmp_T = so3[index] @ (scene_info.train_cameras[index].T + t_noise[index])
                 tmp_T = scene_info.train_cameras[index].T + t_noise[index]
                 tmp_fovx = scene_info.train_cameras[index].FovX * fov_noise[index]
-                tmp_fovy = scene_info.train_cameras[index].FovX * fov_noise[index]
+                tmp_fovy = scene_info.train_cameras[index].FovY * fov_noise[index]
                 scene_info.train_cameras[index] = scene_info.train_cameras[index]._replace(T=tmp_T, R=tmp_R, FovX=tmp_fovx, FovY=tmp_fovy)
                 #import pdb; pdb.set_trace()
                 #print(scene_info.train_cameras[index])

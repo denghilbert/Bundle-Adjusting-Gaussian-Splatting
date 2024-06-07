@@ -25,6 +25,7 @@ from projection_test import image_pair_candidates, light_glue_simple, projection
 import uuid
 from tqdm import tqdm
 from utils.image_utils import psnr
+from utils.graphics_utils import fov2focal, getProjectionMatrix
 from utils.visualization import wandb_image
 from utils.util_vis import vis_cameras
 from utils.util import check_socket_open
@@ -135,7 +136,28 @@ def plot_points(ref_points, path):
     #plt.show()
     plt.savefig(path)
 
-def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoint_iterations, checkpoint, debug_from, use_wandb=False, random_init=False, hybrid=False, opt_cam=False, opt_distortion=False, opt_intrinsic=False, r_t_noise=[0., 0., 1.], r_t_lr=[0.001, 0.001], global_alignment_lr=0.001, extra_loss=False, start_opt_lens=1, extend_scale=2., control_point_sample_scale=8.):
+def center_crop(tensor, target_height, target_width):
+    _, _, height, width = tensor.size()
+
+    # Calculate the starting coordinates for the crop
+    start_y = (height - target_height) // 2
+    start_x = (width - target_width) // 2
+
+    # Create a grid for the interpolation
+    grid_y, grid_x = torch.meshgrid(torch.linspace(start_y, start_y + target_height - 1, target_height),
+                                    torch.linspace(start_x, start_x + target_width - 1, target_width))
+    grid = torch.stack((grid_x, grid_y), 2).unsqueeze(0).to(tensor.device)
+
+    # Normalize grid to [-1, 1]
+    grid = 2.0 * grid / torch.tensor([width - 1, height - 1]).cuda() - 1.0
+    grid = grid.permute(0, 1, 2, 3).expand(tensor.size(0), target_height, target_width, 2)
+
+    # Perform the interpolation
+    cropped_tensor = F.grid_sample(tensor, grid, align_corners=True)
+
+    return cropped_tensor
+
+def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoint_iterations, checkpoint, debug_from, use_wandb=False, random_init=False, hybrid=False, opt_cam=False, opt_distortion=False, opt_intrinsic=False, r_t_noise=[0., 0.], r_t_lr=[0.001, 0.001], global_alignment_lr=0.001, extra_loss=False, start_opt_lens=1, extend_scale=2., control_point_sample_scale=8.):
     first_iter = 0
     tb_writer = prepare_output_and_logger(dataset)
     gaussians = GaussianModel(dataset.sh_degree, dataset.asg_degree)
@@ -145,7 +167,6 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
     lens_net = iResNet().cuda()
     l_lens_net = [{'params': lens_net.parameters(), 'lr': 1e-5}]
     optimizer_lens_net = torch.optim.Adam(l_lens_net, eps=1e-15)
-    scheduler_lens_net = torch.optim.lr_scheduler.MultiStepLR(optimizer_lens_net, milestones=[20000, 40000], gamma=0.1)
     def zero_weights(m):
         if isinstance(m, nn.Linear):
             nn.init.constant_(m.weight, 0.)
@@ -188,9 +209,6 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
             #    else: break
             vis = visdom.Visdom(server=opt_vis.visdom.server,port=opt_vis.visdom.port,env=opt_vis.group)
             pose_GT, pose_aligned = scene.loadAlignCameras(if_vis_train=True, path=scene.model_path)
-            import pdb;pdb.set_trace()
-            torch.save(pose_GT.cpu().detach(), 'init_gt.pt')
-            torch.save(pose_aligned.cpu().detach(), 'init_align.pt')
             vis_cameras(opt_vis, vis, step=0, poses=[pose_aligned, pose_GT])
             os.makedirs(os.path.join(args.model_path, 'plot'), exist_ok=True)
             #download_pose_vis(os.path.join(args.model_path, 'plot'), 0)
@@ -235,16 +253,26 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
     optimizer_v_radial = torch.optim.Adam([{'params': v_radial, 'lr': 0.0001}])
     optimizer_radial = torch.optim.Adam([{'params': radial, 'lr': 0.0001}])
 
-    # iresnet init points
+    # colmap init
     viewpoint_cam = scene.getTrainCameras().copy()[0]
     width = viewpoint_cam.image_width
     height = viewpoint_cam.image_height
-    sample_width = int(width / 50)
-    sample_height = int(height / 50)
+    sample_width = int(width / 8)
+    sample_height = int(height / 8)
     K = viewpoint_cam.get_K
+    width = 1060
+    height = 596
+    width = int(width * 2)
+    height = int(height * 2)
+    K[0, 2] = width / 2
+    K[1, 2] = height / 2
     i, j = np.meshgrid(
-        np.linspace(0 - width/extend_scale, width + width/extend_scale, sample_width),
-        np.linspace(0 - height/extend_scale, height + height/extend_scale, sample_height),
+        np.linspace(0, width, sample_width),
+        np.linspace(0, height, sample_height),
+        #np.linspace(0 - width/2, width + width/2, sample_width),
+        #np.linspace(0 - height/2, height + height/2, sample_height),
+        #np.linspace(0 - width/1, width + width/1, sample_width),
+        #np.linspace(0 - height/1, height + height/1, sample_height),
         indexing="ij",
     )
     i = i.T
@@ -273,7 +301,7 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
                 coeff = cam_intrinsics[key].params[-4:].tolist()
                 break
     if len(coeff) == 4:
-        ref_points = ref_points * inv_r * (theta + coeff[0] * theta**3 + coeff[1] * theta**5 + coeff[2] * theta**7 + coeff[3] * theta**9)
+        ref_points = ref_points * (inv_r * (theta + coeff[0] * theta**3 + coeff[1] * theta**5 + coeff[2] * theta**7 + coeff[3] * theta**9))
     elif len(coeff) == 2:
         ref_points = ref_points * (1 + coeff[0] * r**2 + coeff[1] * r**4)
     elif len(coeff) == 3:
@@ -286,21 +314,28 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
     ref_points[nan_mask] = 0
     boundary_original_points = P_view_insidelens_direction[-1]
     print(boundary_original_points)
-    ref_points = nn.Parameter(ref_points.cuda().requires_grad_(True))
-    optimizer_ref_points = torch.optim.Adam([{'params': ref_points, 'lr': 0.0001}])
-    #ref_points = ref_points.permute(2, 0, 1).unsqueeze(0)  # Shape becomes [1, 3, H, W]
-    #ref_points = F.interpolate(ref_points, size=(height, width), mode='bicubic', align_corners=False)
-    #ref_points = ref_points.squeeze(0).permute(1, 2, 0)
+    #ref_points = nn.Parameter(ref_points.cuda().requires_grad_(True))
+    #optimizer_ref_points = torch.optim.Adam([{'params': ref_points, 'lr': 0.0001}])
 
 
     width = viewpoint_cam.image_width
     height = viewpoint_cam.image_height
-    sample_width = int(width / 50)
-    sample_height = int(height / 50)
+    sample_width = int(width / 8)
+    sample_height = int(height / 8)
     K = viewpoint_cam.get_K
+    width = 1060
+    height = 596
+    width = int(width * 2)
+    height = int(height * 2)
+    K[0, 2] = width / 2
+    K[1, 2] = height / 2
     i, j = np.meshgrid(
-        np.linspace(0 - width/extend_scale, width + width/extend_scale, sample_width),
-        np.linspace(0 - height/extend_scale, height + height/extend_scale, sample_height),
+        np.linspace(0, width, sample_width),
+        np.linspace(0, height, sample_height),
+        #np.linspace(0 - width/2, width + width/2, sample_width),
+        #np.linspace(0 - height/2, height + height/2, sample_height),
+        #np.linspace(0 - width/1, width + width/1, sample_width),
+        #np.linspace(0 - height/1, height + height/1, sample_height),
         indexing="ij",
     )
     i = i.T
@@ -333,16 +368,26 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
     progress_bar_ires.close()
 
     for param_group in optimizer_lens_net.param_groups:
-        param_group['lr'] = 1e-7
+        param_group['lr'] = 1e-6
 
     width = viewpoint_cam.image_width
     height = viewpoint_cam.image_height
     sample_width = int(width / control_point_sample_scale)
     sample_height = int(height/ control_point_sample_scale)
     K = viewpoint_cam.get_K
+    width = 1060
+    height = 596
+    width = int(width * 2)
+    height = int(height * 2)
+    K[0, 2] = width / 2
+    K[1, 2] = height / 2
     i, j = np.meshgrid(
-        np.linspace(0 - width/extend_scale, width + width/extend_scale, sample_width),
-        np.linspace(0 - height/extend_scale, height + height/extend_scale, sample_height),
+        #np.linspace(0 - width/1, width + width/1, sample_width),
+        #np.linspace(0 - height/1, height + height/1, sample_height),
+        #np.linspace(0 - width/2, width + width/2, sample_width),
+        #np.linspace(0 - height/2, height + height/2, sample_height),
+        np.linspace(0, width, sample_width),
+        np.linspace(0, height, sample_height),
         indexing="ij",
     )
     i = i.T
@@ -355,7 +400,9 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
     P_sensor_hom = homogenize(P_sensor.reshape((-1, 2)))
     P_view_insidelens_direction_hom = (torch.inverse(K) @ P_sensor_hom.T).T
     P_view_insidelens_direction = dehomogenize(P_view_insidelens_direction_hom)
-    P_view_outsidelens_direction = lens_net.forward(P_view_insidelens_direction)
+    P_view_outsidelens_direction = P_view_insidelens_direction
+    camera_directions_w_lens = homogenize(P_view_outsidelens_direction)
+    rectangle_points = camera_directions_w_lens.reshape((P_sensor.shape[0], P_sensor.shape[1], 3))[:, :, :2]
 
     # |1 e c_x|
     # |d c c_y|
@@ -419,15 +466,29 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
         undistorted_p_w2c_homo = p_w2c
 
         # using iresnet to predict next round control points
-        P_view_outsidelens_direction = lens_net.forward(P_view_insidelens_direction)
+        P_view_outsidelens_direction = lens_net.forward(P_view_insidelens_direction, sensor_to_frustum=False)
         camera_directions_w_lens = homogenize(P_view_outsidelens_direction)
         control_points = camera_directions_w_lens.reshape((P_sensor.shape[0], P_sensor.shape[1], 3))[:, :, :2]
         boundary_original_points = P_view_insidelens_direction[-1]
-        if iteration % 1000 == 1:
-            plot_points(control_points, os.path.join(scene.model_path, f"control_points_{iteration}.png"))
 
-
-
+        intrinsic_scale = 1.
+        plot_points(control_points, os.path.join(scene.model_path, f"control_points_beforeK.png"))
+        projection_matrix = viewpoint_cam.projection_matrix
+        control_points[:, :, 0] = control_points[:, :, 0].clone() * projection_matrix[0][0] * intrinsic_scale
+        control_points[:, :, 1] = control_points[:, :, 1].clone() * projection_matrix[1][1] * intrinsic_scale
+        plot_points(control_points, os.path.join(scene.model_path, f"control_points_applyK.png"))
+        control_points = nn.functional.interpolate(control_points.permute(2, 0, 1).unsqueeze(0), size=(height, width), mode='bilinear', align_corners=False).permute(0, 2, 3, 1).squeeze(0)
+        tmp_img = F.grid_sample(
+            viewpoint_cam.original_image.cuda().unsqueeze(0),
+            control_points.unsqueeze(0),
+            mode="bilinear",
+            padding_mode="zeros",
+            align_corners=True,
+        )
+        tmp_img = center_crop(tmp_img, height//2, width//2).squeeze(0)
+        torchvision.utils.save_image(tmp_img, os.path.join(scene.model_path, f"gt_control.png"))
+        torchvision.utils.save_image(viewpoint_cam.original_image, os.path.join(scene.model_path, f"gt.png"))
+        import pdb;pdb.set_trace()
         render_pkg = render(viewpoint_cam, gaussians, pipe, background, mlp_color, control_points, boundary_original_points, undistorted_p_w2c_homo, distortion_params, u_distortion, v_distortion, u_radial, v_radial, affine_coeff, poly_coeff, radial, iteration=iteration, hybrid=hybrid, global_alignment=scene.getGlobalAlignment())
         image, viewspace_point_tensor, visibility_filter, radii = render_pkg["render"], render_pkg["viewspace_points"], render_pkg["visibility_filter"], render_pkg["radii"]
 
@@ -729,7 +790,7 @@ if __name__ == "__main__":
     # learning rate for global alignment
     parser.add_argument('--global_alignment_lr', type=float, default=0.01)
     # noise for rotation and translation
-    parser.add_argument("--r_t_noise", nargs="+", type=float, default=[0., 0., 1.])
+    parser.add_argument("--r_t_noise", nargs="+", type=float, default=[0., 0.])
     # rotation filter for light_glue
     parser.add_argument('--angle_threshold', type=float, default=30.)
     # if optimize camera poses with projection_loss
