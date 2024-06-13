@@ -110,15 +110,15 @@ class Camera(nn.Module):
             gt_image = resized_image_rgb[:3, ...]
             self.fish_gt_image = gt_image.clamp(0.0, 1.0)
 
-            self.original_image = gt_image.clamp(0.0, 1.0)
-            self.reset_intrinsic(
-                focal2fov(self.focal_x, int(2. * 1946)),
-                focal2fov(self.focal_y, int(2. * 675)),
-                self.focal_x,
-                self.focal_y,
-                int(2. * 1600),
-                int(2. * 554)
-            )
+            #self.original_image = gt_image.clamp(0.0, 1.0)
+            #self.reset_intrinsic(
+            #    focal2fov(self.focal_x, int(2. * 1946)),
+            #    focal2fov(self.focal_y, int(2. * 675)),
+            #    self.focal_x,
+            #    self.focal_y,
+            #    int(2. * 1600),
+            #    int(2. * 554)
+            #)
 
 
     def reset_intrinsic(self, FoVx, FoVy, focal_x, focal_y, width, height):

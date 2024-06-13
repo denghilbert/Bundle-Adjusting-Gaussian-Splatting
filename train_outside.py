@@ -472,9 +472,8 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
         rectangle_points = camera_directions_w_lens.reshape((P_sensor.shape[0], P_sensor.shape[1], 3))[:, :, :2]
         boundary_original_points = P_view_insidelens_direction[-1]
 
-        torch.autograd.set_detect_anomaly(True)
 
-        if False:
+        if iteration == 2000:
             viewpoint_cam.reset_intrinsic(
                 focal2fov(viewpoint_cam.focal_x, int(2. * 1946)),
                 focal2fov(viewpoint_cam.focal_y, int(2. * 675)),
@@ -488,7 +487,7 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
         render_pkg = render(viewpoint_cam, gaussians, pipe, background, mlp_color, rectangle_points, boundary_original_points, undistorted_p_w2c_homo, distortion_params, u_distortion, v_distortion, u_radial, v_radial, affine_coeff, poly_coeff, radial, iteration=iteration, hybrid=hybrid, global_alignment=scene.getGlobalAlignment())
         image, viewspace_point_tensor, visibility_filter, radii = render_pkg["render"], render_pkg["viewspace_points"], render_pkg["visibility_filter"], render_pkg["radii"]
 
-        if iteration == 1 or True:
+        if iteration == 2000:
             P_view_outsidelens_direction = lens_net.forward(P_view_insidelens_direction, sensor_to_frustum=False)
             camera_directions_w_lens = homogenize(P_view_outsidelens_direction)
             control_points = camera_directions_w_lens.reshape((P_sensor.shape[0], P_sensor.shape[1], 3))[:, :, :2]
@@ -506,21 +505,22 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
                 padding_mode="zeros",
                 align_corners=True,
             )
-            #torchvision.utils.save_image(tmp_img, os.path.join(scene.model_path, f"rendered_fish.png"))
+            torchvision.utils.save_image(image, os.path.join(scene.model_path, f"rendered_fish.png"))
             image = center_crop(image, int(height/2), int(width/2)).squeeze(0)
-            #torchvision.utils.save_image(tmp_img, os.path.join(scene.model_path, f"rendered_fish_crop.png"))
-            #torchvision.utils.save_image(viewpoint_cam.fish_gt_image, os.path.join(scene.model_path, f"gt.png"))
+            torchvision.utils.save_image(image, os.path.join(scene.model_path, f"rendered_fish_crop.png"))
+            torchvision.utils.save_image(viewpoint_cam.fish_gt_image, os.path.join(scene.model_path, f"gt.png"))
 
             mask = (~((image[0]==0) & (image[1]==0)).unsqueeze(0)).float()
-            #torchvision.utils.save_image(mask*viewpoint_cam.fish_gt_image.cuda(), os.path.join(scene.model_path, f"mask.png"))
+            torchvision.utils.save_image(mask*viewpoint_cam.fish_gt_image.cuda(), os.path.join(scene.model_path, f"mask.png"))
+            import pdb;pdb.set_trace()
 
         # Loss
-        #gt_image = viewpoint_cam.original_image.cuda()
-        #Ll1 = l1_loss(image, gt_image)
-        #ssim_loss = ssim(image, gt_image)
-        gt_image = viewpoint_cam.fish_gt_image.cuda()
-        Ll1 = l1_loss(image, gt_image*mask)
-        ssim_loss = ssim(image, gt_image*mask)
+        gt_image = viewpoint_cam.original_image.cuda()
+        Ll1 = l1_loss(image, gt_image)
+        ssim_loss = ssim(image, gt_image)
+        #gt_image = viewpoint_cam.fish_gt_image.cuda()
+        #Ll1 = l1_loss(image, gt_image*mask)
+        #ssim_loss = ssim(image, gt_image*mask)
         loss = (1.0 - opt.lambda_dssim) * Ll1 + opt.lambda_dssim * (1.0 - ssim_loss)# + 0.1 * (loss_projection / len(camera_pairs[viewpoint_cam.uid]))
         loss.backward(retain_graph=True)
 
@@ -613,8 +613,8 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
             if iteration < opt.iterations:
                 gaussians.optimizer.step()
                 gaussians.optimizer.zero_grad(set_to_none = True)
-                #optimizer_lens_net.step() #lens_net.i_resnet_linear.module_list[0].residual[0].weight
-                #optimizer_lens_net.zero_grad(set_to_none=True)
+                optimizer_lens_net.step() #lens_net.i_resnet_linear.module_list[0].residual[0].weight
+                optimizer_lens_net.zero_grad(set_to_none=True)
                 # do not update camera pose when densify or prune gaussians
                 if opt_cam:
                     if iteration % opt.densification_interval != 0:# and iteration > opt.densify_from_iter:
