@@ -10,17 +10,18 @@
 #
 
 import torch
+import os
 from torch import nn
+from PIL import Image
 import torch.nn.functional as F
 import numpy as np
 from utils.graphics_utils import getWorld2View2, getProjectionMatrix, getWorld2View2_torch_tensor, get_rays, fov2focal, focal2fov
 from utils.camera import Lie
+from utils.general_utils import PILtoTorch
 
 
 class Camera(nn.Module):
-    def __init__(self, colmap_id, R, T, intrinsic_matrix, FoVx, FoVy, image, gt_alpha_mask,
-                 image_name, uid,
-                 trans=np.array([0.0, 0.0, 0.0]), scale=1.0, data_device = "cuda", depth=None):
+    def __init__(self, colmap_id, R, T, intrinsic_matrix, FoVx, FoVy, focal_length_x, focal_length_y, image, gt_alpha_mask, image_name, uid, trans=np.array([0.0, 0.0, 0.0]), scale=1.0, data_device = "cuda", depth=None, ori_path=None):
         super(Camera, self).__init__()
 
         self.uid = uid
@@ -32,6 +33,8 @@ class Camera(nn.Module):
         self.intrinsic_matrix = torch.from_numpy(intrinsic_matrix).cuda()
         self.FoVx = FoVx
         self.FoVy = FoVy
+        self.focal_x = focal_length_x
+        self.focal_y = focal_length_y
         self.image_name = image_name
         self.lie = Lie()
 
@@ -57,6 +60,7 @@ class Camera(nn.Module):
         else:
             #self.original_image *= torch.ones((1, self.image_height, self.image_width), device=self.data_device)
             self.original_image *= torch.ones((1, self.image_height, self.image_width))
+
 
         self.zfar = 100.0
         self.znear = 0.01
@@ -98,19 +102,40 @@ class Camera(nn.Module):
         self.full_proj_transform = (self.world_view_transform.unsqueeze(0).bmm(self.projection_matrix.unsqueeze(0))).squeeze(0)
         self.camera_center = self.world_view_transform.inverse()[3, :3]
 
-    def reset_intrinsic(self, FoVx, FoVy, scale_pix=1.):
+
+        if True:
+            image = Image.open(ori_path.split('images')[0] + 'fish/images' + ori_path.split('images')[1])
+            orig_w, orig_h = image.size
+            resized_image_rgb = PILtoTorch(image, (orig_w, orig_h))
+            gt_image = resized_image_rgb[:3, ...]
+            self.fish_gt_image = gt_image.clamp(0.0, 1.0)
+
+            self.original_image = gt_image.clamp(0.0, 1.0)
+            self.reset_intrinsic(
+                focal2fov(self.focal_x, int(2. * 1946)),
+                focal2fov(self.focal_y, int(2. * 675)),
+                self.focal_x,
+                self.focal_y,
+                int(2. * 1600),
+                int(2. * 554)
+            )
+
+
+    def reset_intrinsic(self, FoVx, FoVy, focal_x, focal_y, width, height):
         #self.projection_matrix = getProjectionMatrix(znear=self.znear, zfar=self.zfar, fovX=FoVx, fovY=FoVy).transpose(0,1).cuda()
+        self.FoVx = FoVx
+        self.FoVy = FoVy
         self.learnable_fovx = nn.Parameter(torch.tensor(FoVx).cuda().requires_grad_(True))
         self.learnable_fovy = nn.Parameter(torch.tensor(FoVy).cuda().requires_grad_(True))
         self.projection_matrix = getProjectionMatrix(znear=self.znear, zfar=self.zfar, fovX=self.learnable_fovx, fovY=self.learnable_fovy).transpose(0,1).cuda()
         self.full_proj_transform = (self.world_view_transform.unsqueeze(0).bmm(self.projection_matrix.unsqueeze(0))).squeeze(0)
 
-        self.image_width = scale_pix * self.image_width
-        self.image_height = scale_pix * self.image_height
-        self.intrinsic_matrix[0][0] = fov2focal(FoVx, self.image_width)
-        self.intrinsic_matrix[1][1] = fov2focal(FoVy, self.image_height)
-        self.intrinsic_matrix[0][2] = self.intrinsic_matrix[0][2] * scale_pix
-        self.intrinsic_matrix[1][2] = self.intrinsic_matrix[1][2] * scale_pix
+        self.image_width = width
+        self.image_height = height
+        self.intrinsic_matrix[0][0] = focal_x
+        self.intrinsic_matrix[1][1] = focal_y
+        self.intrinsic_matrix[0][2] = width / 2
+        self.intrinsic_matrix[1][2] = height / 2
 
     def perturb_fov(self, scale):
         self.learnable_fovx *= scale

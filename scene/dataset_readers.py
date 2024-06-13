@@ -31,6 +31,8 @@ class CameraInfo(NamedTuple):
     T: np.array
     FovY: np.array
     FovX: np.array
+    focal_length_x: np.array
+    focal_length_y: np.array
     intrinsic_matrix: np.array
     image: np.array
     image_path: str
@@ -147,8 +149,13 @@ def readColmapCameras(cam_extrinsics, cam_intrinsics, images_folder):
         image = Image.open(image_path)
         # depth = imageio.imread(depth_name)
 
-        cam_info = CameraInfo(uid=uid, R=R, T=T, FovY=FovY, FovX=FovX, image=image, intrinsic_matrix=intrinsic_matrix,                              image_path=image_path, image_name=image_name, width=width, height=height)
-        cam_infos.append(cam_info)
+        if focal_length_y != None:
+            cam_info = CameraInfo(uid=uid, R=R, T=T, FovY=FovY, FovX=FovX, focal_length_x=focal_length_x, focal_length_y=focal_length_x, image=image, intrinsic_matrix=intrinsic_matrix,                              image_path=image_path, image_name=image_name, width=width, height=height)
+            cam_infos.append(cam_info)
+        else:
+            cam_info = CameraInfo(uid=uid, R=R, T=T, FovY=FovY, FovX=FovX, focal_length_x=focal_length_x, focal_length_y=focal_length_y, image=image, intrinsic_matrix=intrinsic_matrix,                              image_path=image_path, image_name=image_name, width=width, height=height)
+            cam_infos.append(cam_info)
+
     sys.stdout.write('\n')
     return cam_infos
 

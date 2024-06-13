@@ -25,7 +25,7 @@ from projection_test import image_pair_candidates, light_glue_simple, projection
 import uuid
 from tqdm import tqdm
 from utils.image_utils import psnr
-from utils.graphics_utils import fov2focal, getProjectionMatrix
+from utils.graphics_utils import fov2focal, focal2fov, getProjectionMatrix
 from utils.visualization import wandb_image
 from utils.util_vis import vis_cameras
 from utils.util import check_socket_open
@@ -257,8 +257,8 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
     viewpoint_cam = scene.getTrainCameras().copy()[0]
     width = viewpoint_cam.image_width
     height = viewpoint_cam.image_height
-    sample_width = int(width / 8)
-    sample_height = int(height / 8)
+    sample_width = int(width / 50)
+    sample_height = int(height / 50)
     K = viewpoint_cam.get_K
     width = 1060
     height = 596
@@ -292,8 +292,8 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
     inv_r = 1 / r
     theta = torch.atan(r)
     coeff = [0, 0, 0, 0]
-    if os.path.exists(os.path.join(dataset.source_path, 'sparse/0/cameras.bin')):
-        cam_intrinsics = read_intrinsics_binary(os.path.join(dataset.source_path, 'sparse/0/cameras.bin'))
+    if os.path.exists(os.path.join(dataset.source_path, 'fish/sparse/0/cameras.bin')):
+        cam_intrinsics = read_intrinsics_binary(os.path.join(dataset.source_path, 'fish/sparse/0/cameras.bin'))
         for idx, key in enumerate(cam_intrinsics):
             if 'RADIAL' in cam_intrinsics[key].model:
                 coeff = cam_intrinsics[key].params[-2:].tolist()
@@ -320,8 +320,8 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
 
     width = viewpoint_cam.image_width
     height = viewpoint_cam.image_height
-    sample_width = int(width / 8)
-    sample_height = int(height / 8)
+    sample_width = int(width / 50)
+    sample_height = int(height / 50)
     K = viewpoint_cam.get_K
     width = 1060
     height = 596
@@ -466,36 +466,61 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
         undistorted_p_w2c_homo = p_w2c
 
         # using iresnet to predict next round control points
-        P_view_outsidelens_direction = lens_net.forward(P_view_insidelens_direction, sensor_to_frustum=False)
+        #P_view_outsidelens_direction = lens_net.forward(P_view_insidelens_direction, sensor_to_frustum=False)
+        P_view_outsidelens_direction = P_view_insidelens_direction
         camera_directions_w_lens = homogenize(P_view_outsidelens_direction)
-        control_points = camera_directions_w_lens.reshape((P_sensor.shape[0], P_sensor.shape[1], 3))[:, :, :2]
+        rectangle_points = camera_directions_w_lens.reshape((P_sensor.shape[0], P_sensor.shape[1], 3))[:, :, :2]
         boundary_original_points = P_view_insidelens_direction[-1]
 
-        intrinsic_scale = 1.
-        plot_points(control_points, os.path.join(scene.model_path, f"control_points_beforeK.png"))
-        projection_matrix = viewpoint_cam.projection_matrix
-        control_points[:, :, 0] = control_points[:, :, 0].clone() * projection_matrix[0][0] * intrinsic_scale
-        control_points[:, :, 1] = control_points[:, :, 1].clone() * projection_matrix[1][1] * intrinsic_scale
-        plot_points(control_points, os.path.join(scene.model_path, f"control_points_applyK.png"))
-        control_points = nn.functional.interpolate(control_points.permute(2, 0, 1).unsqueeze(0), size=(height, width), mode='bilinear', align_corners=False).permute(0, 2, 3, 1).squeeze(0)
-        tmp_img = F.grid_sample(
-            viewpoint_cam.original_image.cuda().unsqueeze(0),
-            control_points.unsqueeze(0),
-            mode="bilinear",
-            padding_mode="zeros",
-            align_corners=True,
-        )
-        tmp_img = center_crop(tmp_img, height//2, width//2).squeeze(0)
-        torchvision.utils.save_image(tmp_img, os.path.join(scene.model_path, f"gt_control.png"))
-        torchvision.utils.save_image(viewpoint_cam.original_image, os.path.join(scene.model_path, f"gt.png"))
-        import pdb;pdb.set_trace()
-        render_pkg = render(viewpoint_cam, gaussians, pipe, background, mlp_color, control_points, boundary_original_points, undistorted_p_w2c_homo, distortion_params, u_distortion, v_distortion, u_radial, v_radial, affine_coeff, poly_coeff, radial, iteration=iteration, hybrid=hybrid, global_alignment=scene.getGlobalAlignment())
+        torch.autograd.set_detect_anomaly(True)
+
+        if False:
+            viewpoint_cam.reset_intrinsic(
+                focal2fov(viewpoint_cam.focal_x, int(2. * 1946)),
+                focal2fov(viewpoint_cam.focal_y, int(2. * 675)),
+                viewpoint_cam.focal_x,
+                viewpoint_cam.focal_y,
+                int(2. * 1600),
+                int(2. * 554)
+                #int(2. * viewpoint_cam.image_width),
+                #int(2. * viewpoint_cam.image_height)
+            )
+        render_pkg = render(viewpoint_cam, gaussians, pipe, background, mlp_color, rectangle_points, boundary_original_points, undistorted_p_w2c_homo, distortion_params, u_distortion, v_distortion, u_radial, v_radial, affine_coeff, poly_coeff, radial, iteration=iteration, hybrid=hybrid, global_alignment=scene.getGlobalAlignment())
         image, viewspace_point_tensor, visibility_filter, radii = render_pkg["render"], render_pkg["viewspace_points"], render_pkg["visibility_filter"], render_pkg["radii"]
 
+        if iteration == 1 or True:
+            P_view_outsidelens_direction = lens_net.forward(P_view_insidelens_direction, sensor_to_frustum=False)
+            camera_directions_w_lens = homogenize(P_view_outsidelens_direction)
+            control_points = camera_directions_w_lens.reshape((P_sensor.shape[0], P_sensor.shape[1], 3))[:, :, :2]
+
+            #plot_points(control_points, os.path.join(scene.model_path, f"control_points_beforeK.png"))
+            projection_matrix = viewpoint_cam.projection_matrix
+            flow = control_points @ projection_matrix[:2, :2]
+            #plot_points(flow, os.path.join(scene.model_path, f"control_points_applyK.png"))
+            flow = nn.functional.interpolate(flow.permute(2, 0, 1).unsqueeze(0), size=(height, width), mode='bilinear', align_corners=False).permute(0, 2, 3, 1).squeeze(0)
+            #torchvision.utils.save_image(image, os.path.join(scene.model_path, f"rendered.png"))
+            image = F.grid_sample(
+                image.unsqueeze(0),
+                flow.unsqueeze(0),
+                mode="bilinear",
+                padding_mode="zeros",
+                align_corners=True,
+            )
+            #torchvision.utils.save_image(tmp_img, os.path.join(scene.model_path, f"rendered_fish.png"))
+            image = center_crop(image, int(height/2), int(width/2)).squeeze(0)
+            #torchvision.utils.save_image(tmp_img, os.path.join(scene.model_path, f"rendered_fish_crop.png"))
+            #torchvision.utils.save_image(viewpoint_cam.fish_gt_image, os.path.join(scene.model_path, f"gt.png"))
+
+            mask = (~((image[0]==0) & (image[1]==0)).unsqueeze(0)).float()
+            #torchvision.utils.save_image(mask*viewpoint_cam.fish_gt_image.cuda(), os.path.join(scene.model_path, f"mask.png"))
+
         # Loss
-        gt_image = viewpoint_cam.original_image.cuda()
-        Ll1 = l1_loss(image, gt_image)
-        ssim_loss = ssim(image, gt_image)
+        #gt_image = viewpoint_cam.original_image.cuda()
+        #Ll1 = l1_loss(image, gt_image)
+        #ssim_loss = ssim(image, gt_image)
+        gt_image = viewpoint_cam.fish_gt_image.cuda()
+        Ll1 = l1_loss(image, gt_image*mask)
+        ssim_loss = ssim(image, gt_image*mask)
         loss = (1.0 - opt.lambda_dssim) * Ll1 + opt.lambda_dssim * (1.0 - ssim_loss)# + 0.1 * (loss_projection / len(camera_pairs[viewpoint_cam.uid]))
         loss.backward(retain_graph=True)
 
@@ -513,6 +538,7 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
 
         if iteration % 3000 == 0 or iteration == 1:
             wandb_img = image.unsqueeze(0).detach()
+            #wandb_img = tmp_img.unsqueeze(0).detach()
             wandb_img_gt = gt_image.unsqueeze(0).detach()
             images_error = (wandb_img_gt - wandb_img).abs()
             images = {
@@ -541,7 +567,7 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
                 vis_cameras(opt_vis, vis, step=iteration, poses=[pose_aligned, pose_GT])
 
             # Log and save
-            training_report(tb_writer, iteration, Ll1, loss, l1_loss, iter_start.elapsed_time(iter_end), testing_iterations, scene, render, (pipe, background, mlp_color), lens_net, control_points, boundary_original_points, opt_distortion, distortion_params, u_distortion, v_distortion, u_radial, v_radial, affine_coeff, poly_coeff, radial)
+            training_report(tb_writer, iteration, Ll1, loss, l1_loss, iter_start.elapsed_time(iter_end), testing_iterations, scene, render, (pipe, background, mlp_color), lens_net, rectangle_points, boundary_original_points, opt_distortion, distortion_params, u_distortion, v_distortion, u_radial, v_radial, affine_coeff, poly_coeff, radial)
             if (iteration in saving_iterations):
                 print("\n[ITER {}] Saving Gaussians".format(iteration))
                 scene.save(iteration)
@@ -587,8 +613,8 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
             if iteration < opt.iterations:
                 gaussians.optimizer.step()
                 gaussians.optimizer.zero_grad(set_to_none = True)
-                optimizer_lens_net.step() #lens_net.i_resnet_linear.module_list[0].residual[0].weight
-                optimizer_lens_net.zero_grad(set_to_none=True)
+                #optimizer_lens_net.step() #lens_net.i_resnet_linear.module_list[0].residual[0].weight
+                #optimizer_lens_net.zero_grad(set_to_none=True)
                 # do not update camera pose when densify or prune gaussians
                 if opt_cam:
                     if iteration % opt.densification_interval != 0:# and iteration > opt.densify_from_iter:
