@@ -473,21 +473,21 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
         boundary_original_points = P_view_insidelens_direction[-1]
 
 
-        if iteration == 2000:
-            viewpoint_cam.reset_intrinsic(
-                focal2fov(viewpoint_cam.focal_x, int(2. * 1946)),
-                focal2fov(viewpoint_cam.focal_y, int(2. * 675)),
-                viewpoint_cam.focal_x,
-                viewpoint_cam.focal_y,
-                int(2. * 1600),
-                int(2. * 554)
-                #int(2. * viewpoint_cam.image_width),
-                #int(2. * viewpoint_cam.image_height)
-            )
+        #if iteration == 2000:
+        #    viewpoint_cam.reset_intrinsic(
+        #        focal2fov(viewpoint_cam.focal_x, int(2. * 1946)),
+        #        focal2fov(viewpoint_cam.focal_y, int(2. * 675)),
+        #        viewpoint_cam.focal_x,
+        #        viewpoint_cam.focal_y,
+        #        int(2. * 1600),
+        #        int(2. * 554)
+        #        #int(2. * viewpoint_cam.image_width),
+        #        #int(2. * viewpoint_cam.image_height)
+        #    )
         render_pkg = render(viewpoint_cam, gaussians, pipe, background, mlp_color, rectangle_points, boundary_original_points, undistorted_p_w2c_homo, distortion_params, u_distortion, v_distortion, u_radial, v_radial, affine_coeff, poly_coeff, radial, iteration=iteration, hybrid=hybrid, global_alignment=scene.getGlobalAlignment())
         image, viewspace_point_tensor, visibility_filter, radii = render_pkg["render"], render_pkg["viewspace_points"], render_pkg["visibility_filter"], render_pkg["radii"]
 
-        if iteration == 2000:
+        if iteration == 2000 or True:
             P_view_outsidelens_direction = lens_net.forward(P_view_insidelens_direction, sensor_to_frustum=False)
             camera_directions_w_lens = homogenize(P_view_outsidelens_direction)
             control_points = camera_directions_w_lens.reshape((P_sensor.shape[0], P_sensor.shape[1], 3))[:, :, :2]
@@ -505,22 +505,21 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
                 padding_mode="zeros",
                 align_corners=True,
             )
-            torchvision.utils.save_image(image, os.path.join(scene.model_path, f"rendered_fish.png"))
+            #torchvision.utils.save_image(image, os.path.join(scene.model_path, f"rendered_fish.png"))
             image = center_crop(image, int(height/2), int(width/2)).squeeze(0)
-            torchvision.utils.save_image(image, os.path.join(scene.model_path, f"rendered_fish_crop.png"))
-            torchvision.utils.save_image(viewpoint_cam.fish_gt_image, os.path.join(scene.model_path, f"gt.png"))
+            #torchvision.utils.save_image(image, os.path.join(scene.model_path, f"rendered_fish_crop.png"))
+            #torchvision.utils.save_image(viewpoint_cam.fish_gt_image, os.path.join(scene.model_path, f"gt.png"))
 
             mask = (~((image[0]==0) & (image[1]==0)).unsqueeze(0)).float()
-            torchvision.utils.save_image(mask*viewpoint_cam.fish_gt_image.cuda(), os.path.join(scene.model_path, f"mask.png"))
-            import pdb;pdb.set_trace()
+            #torchvision.utils.save_image(mask*viewpoint_cam.fish_gt_image.cuda(), os.path.join(scene.model_path, f"mask.png"))
 
         # Loss
-        gt_image = viewpoint_cam.original_image.cuda()
-        Ll1 = l1_loss(image, gt_image)
-        ssim_loss = ssim(image, gt_image)
-        #gt_image = viewpoint_cam.fish_gt_image.cuda()
-        #Ll1 = l1_loss(image, gt_image*mask)
-        #ssim_loss = ssim(image, gt_image*mask)
+        #gt_image = viewpoint_cam.original_image.cuda()
+        #Ll1 = l1_loss(image, gt_image)
+        #ssim_loss = ssim(image, gt_image)
+        gt_image = viewpoint_cam.fish_gt_image.cuda()
+        Ll1 = l1_loss(image, gt_image*mask)
+        ssim_loss = ssim(image, gt_image*mask)
         loss = (1.0 - opt.lambda_dssim) * Ll1 + opt.lambda_dssim * (1.0 - ssim_loss)# + 0.1 * (loss_projection / len(camera_pairs[viewpoint_cam.uid]))
         loss.backward(retain_graph=True)
 
@@ -567,7 +566,7 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
                 vis_cameras(opt_vis, vis, step=iteration, poses=[pose_aligned, pose_GT])
 
             # Log and save
-            training_report(tb_writer, iteration, Ll1, loss, l1_loss, iter_start.elapsed_time(iter_end), testing_iterations, scene, render, (pipe, background, mlp_color), lens_net, rectangle_points, boundary_original_points, opt_distortion, distortion_params, u_distortion, v_distortion, u_radial, v_radial, affine_coeff, poly_coeff, radial)
+            training_report(tb_writer, iteration, Ll1, loss, l1_loss, iter_start.elapsed_time(iter_end), testing_iterations, scene, render, (pipe, background, mlp_color), lens_net, P_view_insidelens_direction, P_sensor, rectangle_points, boundary_original_points, opt_distortion, distortion_params, u_distortion, v_distortion, u_radial, v_radial, affine_coeff, poly_coeff, radial)
             if (iteration in saving_iterations):
                 print("\n[ITER {}] Saving Gaussians".format(iteration))
                 scene.save(iteration)
@@ -688,7 +687,7 @@ def prepare_output_and_logger(args):
         print("Tensorboard not available: not logging progress")
     return tb_writer
 
-def training_report(tb_writer, iteration, Ll1, loss, l1_loss, elapsed, testing_iterations, scene : Scene, renderFunc, renderArgs, lens_net, control_points, boundary_original_points,  opt_distortion, distortion_params, u_distortion, v_distortion, u_radial, v_radial, affine_coeff, poly_coeff, radial):
+def training_report(tb_writer, iteration, Ll1, loss, l1_loss, elapsed, testing_iterations, scene : Scene, renderFunc, renderArgs, lens_net, P_view_insidelens_direction, P_sensor, control_points, boundary_original_points,  opt_distortion, distortion_params, u_distortion, v_distortion, u_radial, v_radial, affine_coeff, poly_coeff, radial):
     if tb_writer:
         tb_writer.add_scalar('train_loss_patches/l1_loss', Ll1.item(), iteration)
         tb_writer.add_scalar('train_loss_patches/total_loss', loss.item(), iteration)
@@ -711,17 +710,28 @@ def training_report(tb_writer, iteration, Ll1, loss, l1_loss, elapsed, testing_i
                     # glm use the transpose of w2c
                     w2c = viewpoint.get_world_view_transform().t().detach()
                     p_w2c = (w2c @ gaussians_xyz_homo.T).T.cuda().detach()
-                    if opt_distortion and False:
-                        undistorted_p_w2c = lens_net.forward(p_w2c[:, :3])
-                        undistorted_p_w2c_homo = torch.cat((undistorted_p_w2c, torch.ones(undistorted_p_w2c.size(0), 1).cuda()), dim=1)
-                    else:
-                        undistorted_p_w2c_homo = p_w2c
-                    #control_points, boundary_original_points = pass_neuralens(lens_net, viewpoint.image_width, viewpoint.image_height, int(viewpoint.image_width / 8), int(viewpoint.image_height / 8), viewpoint.get_K)
+                    undistorted_p_w2c_homo = p_w2c
                     image = torch.clamp(renderFunc(viewpoint, scene.gaussians, *renderArgs, control_points, boundary_original_points, undistorted_p_w2c_homo, distortion_params, u_distortion, v_distortion, u_radial, v_radial, affine_coeff, poly_coeff, radial, global_alignment=scene.getGlobalAlignment())["render"], 0.0, 1.0)
-                    #image = torch.clamp(renderFunc(viewpoint, scene.gaussians, *renderArgs, p_w2c, global_alignment=scene.getGlobalAlignment())["render"], 0.0, 1.0)
-                    gt_image = torch.clamp(viewpoint.original_image.to("cuda"), 0.0, 1.0)
+
+                    P_view_outsidelens_direction = lens_net.forward(P_view_insidelens_direction, sensor_to_frustum=False)
+                    camera_directions_w_lens = homogenize(P_view_outsidelens_direction)
+                    flow = camera_directions_w_lens.reshape((P_sensor.shape[0], P_sensor.shape[1], 3))[:, :, :2]
+                    projection_matrix = viewpoint.projection_matrix
+                    flow = flow @ projection_matrix[:2, :2]
+                    flow = nn.functional.interpolate(flow.permute(2, 0, 1).unsqueeze(0), size=(viewpoint.fish_gt_image.shape[1]*2, viewpoint.fish_gt_image.shape[2]*2), mode='bilinear', align_corners=False).permute(0, 2, 3, 1).squeeze(0)
+                    image = F.grid_sample(
+                        image.unsqueeze(0),
+                        flow.unsqueeze(0),
+                        mode="bilinear",
+                        padding_mode="zeros",
+                        align_corners=True,
+                    )
                     name = config['name']
+                    torchvision.utils.save_image(image, os.path.join(scene.model_path, 'training_val/{0:05d}'.format(idx) + "_" + name + "_before_crop.png"))
+                    image = center_crop(image, viewpoint.fish_gt_image.shape[1], viewpoint.fish_gt_image.shape[2]).squeeze(0)
+                    gt_image = torch.clamp(viewpoint.original_image.to("cuda"), 0.0, 1.0)
                     torchvision.utils.save_image(image, os.path.join(scene.model_path, 'training_val/{0:05d}'.format(idx) + "_" + name + ".png"))
+                    torchvision.utils.save_image(gt_image, os.path.join(scene.model_path, 'training_val/gt_{0:05d}'.format(idx) + "_" + name + ".png"))
                     if tb_writer and (idx < 5):
                         tb_writer.add_images(config['name'] + "_view_{}/render".format(viewpoint.image_name), image[None], global_step=iteration)
                         if iteration == testing_iterations[0]:
