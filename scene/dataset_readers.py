@@ -191,6 +191,7 @@ def readColmapSceneInfo(path, images, eval, llffhold=8):
         cameras_intrinsic_file = os.path.join(path, "sparse/0", "cameras.bin")
         cam_extrinsics = read_extrinsics_binary(cameras_extrinsic_file)
         cam_intrinsics = read_intrinsics_binary(cameras_intrinsic_file)
+        #cam_intrinsics = read_intrinsics_binary(cameras_intrinsic_file.split('sparse')[0] + 'fish/sparse' + cameras_intrinsic_file.split('sparse')[1])
     except:
         cameras_extrinsic_file = os.path.join(path, "sparse/0", "images.txt")
         cameras_intrinsic_file = os.path.join(path, "sparse/0", "cameras.txt")
@@ -381,8 +382,7 @@ def readCamerasFromTransforms(path, transformsfile, white_background, extension=
                 [0., 0., 1.]
             ], dtype=np.float32)
 
-            cam_infos.append(CameraInfo(uid=idx, R=R, T=T, FovY=FovY, FovX=FovX, image=image, intrinsic_matrix=intrinsic_matrix,
-                            image_path=image_path, image_name=image_name, width=image.size[0], height=image.size[1]))
+            cam_infos.append(CameraInfo(uid=idx, R=R, T=T, FovY=FovY, FovX=FovX, focal_length_x=fov2focal(FovX, image.size[0]), focal_length_y=fov2focal(FovY, image.size[1]), image=image, intrinsic_matrix=intrinsic_matrix, image_path=image_path, image_name=image_name, width=image.size[0], height=image.size[1]))
 
     return cam_infos
 

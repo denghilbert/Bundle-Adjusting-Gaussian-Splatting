@@ -18,7 +18,7 @@ import json
 WARNED = False
 
 
-def loadCam(args, id, cam_info, resolution_scale):
+def loadCam(args, id, cam_info, resolution_scale, outside_rasterizer):
     orig_w, orig_h = cam_info.image.size
 
     if args.resolution in [1, 2, 4, 8]:
@@ -58,15 +58,16 @@ def loadCam(args, id, cam_info, resolution_scale):
         image=gt_image, gt_alpha_mask=loaded_mask,
         image_name=cam_info.image_name, uid=id,
         data_device=args.data_device, depth=cam_info.depth,
-        ori_path=cam_info.image_path
+        ori_path=cam_info.image_path,
+        outside_rasterizer=outside_rasterizer
     )
 
 
-def cameraList_from_camInfos(cam_infos, resolution_scale, args):
+def cameraList_from_camInfos(cam_infos, resolution_scale, args, outside_rasterizer):
     camera_list = []
 
     for id, c in enumerate(cam_infos):
-        camera_list.append(loadCam(args, id, c, resolution_scale))
+        camera_list.append(loadCam(args, id, c, resolution_scale, outside_rasterizer))
 
     return camera_list
 

@@ -27,7 +27,7 @@ def quaternion_multiply(q1, q2):
 
     return torch.stack((w, x, y, z), dim=-1)
 
-def render(viewpoint_camera, pc : GaussianModel, pipe, bg_color : torch.Tensor, mlp_color, control_points, boundary_original_points, displacement_p_w2c, distortion_params, u_distortion, v_distortion, u_radial, v_radial, affine_coeff, poly_coeff, radial, hybrid=True, scaling_modifier = 1.0, override_color = None, iteration = None, global_alignment=None):
+def render(viewpoint_camera, pc : GaussianModel, pipe, bg_color : torch.Tensor, mlp_color, hybrid=True, scaling_modifier = 1.0, override_color = None, iteration = None, global_alignment=None):
     """
     Render the scene.
 
@@ -50,7 +50,6 @@ def render(viewpoint_camera, pc : GaussianModel, pipe, bg_color : torch.Tensor, 
     raster_settings = GaussianRasterizationSettings(
         image_height=int(viewpoint_camera.image_height),
         image_width=int(viewpoint_camera.image_width),
-        boundary_original_points = boundary_original_points,
         tanfovx=tanfovx,
         tanfovy=tanfovy,
         bg=bg_color,
@@ -118,16 +117,6 @@ def render(viewpoint_camera, pc : GaussianModel, pipe, bg_color : torch.Tensor, 
         scales = scales,
         rotations = rotations,
         cov3D_precomp = cov3D_precomp,
-        control_points = control_points,
-        displacement_p_w2c = displacement_p_w2c,
-        distortion_params = distortion_params,
-        u_distortion = u_distortion,
-        v_distortion = v_distortion,
-        u_radial = u_radial,
-        v_radial = v_radial,
-        affine_coeff = affine_coeff,
-        poly_coeff = poly_coeff,
-        radial = radial
     )
 
     # Those Gaussians that were frustum culled or had a radius of 0 were not visible.

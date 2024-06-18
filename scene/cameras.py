@@ -21,7 +21,7 @@ from utils.general_utils import PILtoTorch
 
 
 class Camera(nn.Module):
-    def __init__(self, colmap_id, R, T, intrinsic_matrix, FoVx, FoVy, focal_length_x, focal_length_y, image, gt_alpha_mask, image_name, uid, trans=np.array([0.0, 0.0, 0.0]), scale=1.0, data_device = "cuda", depth=None, ori_path=None):
+    def __init__(self, colmap_id, R, T, intrinsic_matrix, FoVx, FoVy, focal_length_x, focal_length_y, image, gt_alpha_mask, image_name, uid, trans=np.array([0.0, 0.0, 0.0]), scale=1.0, data_device = "cuda", depth=None, ori_path=None, outside_rasterizer=False):
         super(Camera, self).__init__()
 
         self.uid = uid
@@ -103,21 +103,20 @@ class Camera(nn.Module):
         self.camera_center = self.world_view_transform.inverse()[3, :3]
 
 
-        if True:
+        if outside_rasterizer:
             image = Image.open(ori_path.split('images')[0] + 'fish/images' + ori_path.split('images')[1])
             orig_w, orig_h = image.size
             resized_image_rgb = PILtoTorch(image, (orig_w, orig_h))
             gt_image = resized_image_rgb[:3, ...]
             self.fish_gt_image = gt_image.clamp(0.0, 1.0)
 
-            self.original_image = gt_image.clamp(0.0, 1.0)
             self.reset_intrinsic(
-                focal2fov(self.focal_x, int(2. * 1946)),
-                focal2fov(self.focal_y, int(2. * 675)),
+                focal2fov(self.focal_x, int(2.4 * self.original_image.shape[2])),
+                focal2fov(self.focal_y, int(2.4 * self.original_image.shape[1])),
                 self.focal_x,
                 self.focal_y,
-                int(1.5 * 1600),
-                int(1.5 * 554)
+                int(1. * self.original_image.shape[2]),
+                int(1. * self.original_image.shape[1])
             )
 
 
