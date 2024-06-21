@@ -95,8 +95,8 @@ def generate_render_path(poses, focal=1, comps=None, N=30):
     rads[2] = zdelta
     if comps[3]:
         render_poses += render_path_spiral(c2w, up, rads, focal, zdelta, 0., 1, N*2)
-        #render_poses += render_path_spiral(c2w, up, rads, focal, zdelta, 0., 1, N*2)
-        #render_poses += render_path_spiral(c2w, up, rads, focal, zdelta, 0., 1, N*2)
+        render_poses += render_path_spiral(c2w, up, rads, focal, zdelta, 0., 1, N*2)
+        render_poses += render_path_spiral(c2w, up, rads, focal, zdelta, 0., 1, N*2)
     if comps[4]:
         render_poses += render_path_spiral(c2w, up, rads, focal, zdelta, .5, 2, N*4)
 
