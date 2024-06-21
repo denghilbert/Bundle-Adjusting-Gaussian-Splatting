@@ -276,8 +276,10 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
             #sigmoid(np.linspace(-2.398, 2.398, sample_height))*height,
             #sigmoid(np.linspace(-1.61, 1.61, sample_width))*width,#1.5
             #sigmoid(np.linspace(-1.61, 1.61, sample_height))*height,
-            np.linspace(0, width, sample_width),
-            np.linspace(0, height, sample_height),
+            #np.linspace(0, width, sample_width),
+            #np.linspace(0, height, sample_height),
+            np.linspace(0 - width/extend_scale, width + width/extend_scale, sample_width),
+            np.linspace(0 - height/extend_scale, height + height/extend_scale, sample_height),
             #np.linspace(0 - width/2, width + width/2, sample_width),
             #np.linspace(0 - height/2, height + height/2, sample_height),
             #np.linspace(0 - width/1, width + width/1, sample_width),
@@ -344,8 +346,10 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
             #sigmoid(np.linspace(-2.398, 2.398, sample_height))*height,
             #sigmoid(np.linspace(-1.61, 1.61, sample_width))*width,
             #sigmoid(np.linspace(-1.61, 1.61, sample_height))*height,
-            np.linspace(0, width, sample_width),
-            np.linspace(0, height, sample_height),
+            #np.linspace(0, width, sample_width),
+            #np.linspace(0, height, sample_height),
+            np.linspace(0 - width/extend_scale, width + width/extend_scale, sample_width),
+            np.linspace(0 - height/extend_scale, height + height/extend_scale, sample_height),
             #np.linspace(0 - width/2, width + width/2, sample_width),
             #np.linspace(0 - height/2, height + height/2, sample_height),
             #np.linspace(0 - width/1, width + width/1, sample_width),
@@ -401,8 +405,10 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
             #sigmoid(np.linspace(-2.398, 2.398, sample_height))*height,
             #sigmoid(np.linspace(-1.61, 1.61, sample_width))*width,
             #sigmoid(np.linspace(-1.61, 1.61, sample_height))*height,
-            np.linspace(0, width, sample_width),
-            np.linspace(0, height, sample_height),
+            #np.linspace(0, width, sample_width),
+            #np.linspace(0, height, sample_height),
+            np.linspace(0 - width/extend_scale, width + width/extend_scale, sample_width),
+            np.linspace(0 - height/extend_scale, height + height/extend_scale, sample_height),
             #np.linspace(0 - width/1, width + width/1, sample_width),
             #np.linspace(0 - height/1, height + height/1, sample_height),
             #np.linspace(0 - width/2, width + width/2, sample_width),
@@ -555,6 +561,9 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
                 vis_cameras(opt_vis, vis, step=iteration, poses=[pose_aligned, pose_GT])
 
             # Log and save
+            if not outside_rasterizer:
+                P_view_insidelens_direction = None
+                P_sensor = None
             training_report(tb_writer, iteration, Ll1, loss, l1_loss, iter_start.elapsed_time(iter_end), testing_iterations, scene, render, (pipe, background, mlp_color), lens_net, opt_distortion, P_view_insidelens_direction, P_sensor, outside_rasterizer)
             if (iteration in saving_iterations):
                 print("\n[ITER {}] Saving Gaussians".format(iteration))
@@ -562,14 +571,14 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
                 torch.save(lens_net, os.path.join(scene.model_path, f'lens_net{iteration}.pth'))
                 torch.save(scene.train_cameras, os.path.join(scene.model_path, 'opt_cams.pt'))
                 torch.save(scene.unnoisy_train_cameras, os.path.join(scene.model_path, 'gt_cams.pt'))
-                torch.save(distortion_params, os.path.join(scene.model_path, 'distortion_params.pt'))
-                torch.save(u_distortion, os.path.join(scene.model_path, f'u_distortion{iteration}.pt'))
-                torch.save(v_distortion, os.path.join(scene.model_path, f'v_distortion{iteration}.pt'))
-                torch.save(u_radial, os.path.join(scene.model_path, f'u_radial{iteration}.pt'))
-                torch.save(v_radial, os.path.join(scene.model_path, f'v_radial{iteration}.pt'))
-                torch.save(affine_coeff, os.path.join(scene.model_path, f'affine_coeff{iteration}.pt'))
-                torch.save(poly_coeff, os.path.join(scene.model_path, f'poly_coeff{iteration}.pt'))
-                torch.save(radial, os.path.join(scene.model_path, f'radial{iteration}.pt'))
+                #torch.save(distortion_params, os.path.join(scene.model_path, 'distortion_params.pt'))
+                #torch.save(u_distortion, os.path.join(scene.model_path, f'u_distortion{iteration}.pt'))
+                #torch.save(v_distortion, os.path.join(scene.model_path, f'v_distortion{iteration}.pt'))
+                #torch.save(u_radial, os.path.join(scene.model_path, f'u_radial{iteration}.pt'))
+                #torch.save(v_radial, os.path.join(scene.model_path, f'v_radial{iteration}.pt'))
+                #torch.save(affine_coeff, os.path.join(scene.model_path, f'affine_coeff{iteration}.pt'))
+                #torch.save(poly_coeff, os.path.join(scene.model_path, f'poly_coeff{iteration}.pt'))
+                #torch.save(radial, os.path.join(scene.model_path, f'radial{iteration}.pt'))
                 torch.save(scene.train_cameras, os.path.join(scene.model_path, f'cams_train{iteration}.pt'))
                 if hybrid:
                     specular_mlp.save_weights(args.model_path, iteration)

@@ -21,7 +21,7 @@ from utils.general_utils import PILtoTorch
 
 
 class Camera(nn.Module):
-    def __init__(self, colmap_id, R, T, intrinsic_matrix, FoVx, FoVy, focal_length_x, focal_length_y, image, gt_alpha_mask, image_name, uid, trans=np.array([0.0, 0.0, 0.0]), scale=1.0, data_device = "cuda", depth=None, ori_path=None, outside_rasterizer=False):
+    def __init__(self, colmap_id, R, T, intrinsic_matrix, FoVx, FoVy, focal_length_x, focal_length_y, image, gt_alpha_mask, image_name, uid, trans=np.array([0.0, 0.0, 0.0]), scale=1.0, data_device = "cuda", depth=None, ori_path=None, outside_rasterizer=False, test_outside_rasterizer=False):
         super(Camera, self).__init__()
 
         self.uid = uid
@@ -102,14 +102,27 @@ class Camera(nn.Module):
         self.full_proj_transform = (self.world_view_transform.unsqueeze(0).bmm(self.projection_matrix.unsqueeze(0))).squeeze(0)
         self.camera_center = self.world_view_transform.inverse()[3, :3]
 
+        if test_outside_rasterizer:
+            self.reset_intrinsic(
+                focal2fov(self.focal_x, int(2.4 * self.original_image.shape[2])),
+                focal2fov(self.focal_y, int(2.4 * self.original_image.shape[1])),
+                self.focal_x,
+                self.focal_y,
+                int(2. * self.original_image.shape[2]),
+                int(2. * self.original_image.shape[1])
+            )
 
-        if outside_rasterizer:
-            image = Image.open(ori_path.split('images')[0] + 'fish/images' + ori_path.split('images')[1])
+        if not test_outside_rasterizer:
+            if 'fish' not in ori_path:
+                image = Image.open(ori_path.split('images')[0] + 'fish/images' + ori_path.split('images')[1])
+            else:
+                image = Image.open(ori_path)
             orig_w, orig_h = image.size
             resized_image_rgb = PILtoTorch(image, (orig_w, orig_h))
             gt_image = resized_image_rgb[:3, ...]
             self.fish_gt_image = gt_image.clamp(0.0, 1.0)
 
+        if outside_rasterizer:
             self.reset_intrinsic(
                 focal2fov(self.focal_x, int(2.4 * self.original_image.shape[2])),
                 focal2fov(self.focal_y, int(2.4 * self.original_image.shape[1])),
