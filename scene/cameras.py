@@ -113,7 +113,7 @@ class Camera(nn.Module):
             )
 
         if not test_outside_rasterizer:
-            if 'fish' not in ori_path:
+            if outside_rasterizer:
                 image = Image.open(ori_path.split('images')[0] + 'fish/images' + ori_path.split('images')[1])
             else:
                 image = Image.open(ori_path)

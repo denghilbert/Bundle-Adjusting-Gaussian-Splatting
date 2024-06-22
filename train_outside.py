@@ -489,7 +489,7 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
             projection_matrix = viewpoint_cam.projection_matrix
             flow = control_points @ projection_matrix[:2, :2]
             #plot_points(flow, os.path.join(scene.model_path, f"control_points_applyK.png"))
-            flow = nn.functional.interpolate(flow.permute(2, 0, 1).unsqueeze(0), size=(height, width), mode='bilinear', align_corners=False).permute(0, 2, 3, 1).squeeze(0)
+            flow = nn.functional.interpolate(flow.permute(2, 0, 1).unsqueeze(0), size=(viewpoint_cam.fish_gt_image.shape[1]*2, viewpoint_cam.fish_gt_image.shape[2]*2), mode='bilinear', align_corners=False).permute(0, 2, 3, 1).squeeze(0)
             #torchvision.utils.save_image(image, os.path.join(scene.model_path, f"rendered.png"))
             image = F.grid_sample(
                 image.unsqueeze(0),
@@ -499,7 +499,7 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
                 align_corners=True,
             )
             #torchvision.utils.save_image(image, os.path.join(scene.model_path, f"rendered_fish.png"))
-            image = center_crop(image, int(height/2), int(width/2)).squeeze(0)
+            image = center_crop(image, viewpoint_cam.fish_gt_image.shape[1], viewpoint_cam.fish_gt_image.shape[2]).squeeze(0)
             #torchvision.utils.save_image(image, os.path.join(scene.model_path, f"rendered_fish_crop.png"))
             #torchvision.utils.save_image(viewpoint_cam.fish_gt_image, os.path.join(scene.model_path, f"gt.png"))
 
