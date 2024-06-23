@@ -157,7 +157,8 @@ def center_crop(tensor, target_height, target_width):
 
     return cropped_tensor
 
-def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoint_iterations, checkpoint, debug_from, use_wandb=False, random_init=False, hybrid=False, opt_cam=False, opt_distortion=False, opt_intrinsic=False, r_t_noise=[0., 0.], r_t_lr=[0.001, 0.001], global_alignment_lr=0.001, extra_loss=False, start_opt_lens=1, extend_scale=2., control_point_sample_scale=8., outside_rasterizer=False, abs_grad=False, densi_num=0.0002):
+def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoint_iterations, checkpoint, debug_from, use_wandb=False, random_init=False, hybrid=False, opt_cam=False, opt_distortion=False, opt_intrinsic=False, r_t_noise=[0., 0.], r_t_lr=[0.001, 0.001], global_alignment_lr=0.001, extra_loss=False, start_opt_lens=1, extend_scale=2., control_point_sample_scale=8., outside_rasterizer=False, abs_grad=False, densi_num=0.0002,
+             if_circular_mask=False):
     first_iter = 0
     tb_writer = prepare_output_and_logger(dataset)
     gaussians = GaussianModel(dataset.sh_degree, dataset.asg_degree)
@@ -175,6 +176,17 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
     #lens_net.apply(zero_weights)
     #for param in lens_net.parameters():
     #    print(param)
+
+    height, width = 1440, 1440
+    circular_mask = torch.zeros((height, width), dtype=torch.bool)
+    center_x, center_y = 720, 720
+    radius = 720
+    for y in range(height):
+        for x in range(width):
+            if (x - center_x)**2 + (y - center_y)**2 <= radius**2:
+                circular_mask[y, x] = 1.
+    circular_mask = circular_mask.unsqueeze(0)  # For channel-first, adds a new dimension at the beginning
+    circular_mask = circular_mask.repeat(3, 1, 1).cuda()  # Repeat the mask across the channel dimension
 
     scene = Scene(dataset, gaussians, random_init=random_init, r_t_noise=r_t_noise, r_t_lr=r_t_lr, global_alignment_lr=global_alignment_lr, outside_rasterizer=outside_rasterizer)
     gaussians.training_setup(opt)
@@ -221,16 +233,6 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
     first_iter += 1
     smooth_term = get_linear_noise_func(lr_init=0.1, lr_final=1e-15, lr_delay_mult=0.01, max_steps=20000)
 
-    height, width = 1024, 684
-    mask = torch.zeros((height, width), dtype=torch.bool)
-    center_x, center_y = 342, 512
-    radius = 512  # Example radius
-    for y in range(height):
-        for x in range(width):
-            if (x - center_x)**2 + (y - center_y)**2 <= radius**2:
-                mask[y, x] = 1.
-    mask = mask.unsqueeze(0)  # For channel-first, adds a new dimension at the beginning
-    mask = mask.repeat(3, 1, 1).cuda()  # Repeat the mask across the channel dimension
 
     distortion_params = nn.Parameter(torch.zeros(8).cuda().requires_grad_(True))
     optimizer_distortion = torch.optim.Adam([{'params': distortion_params, 'lr': 0.001}])
@@ -294,7 +296,6 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
             .cuda()
         )
         #plot_points(P_sensor, os.path.join(scene.model_path, f"ref.png"))
-        #import pdb;pdb.set_trace()
         P_sensor_hom = homogenize(P_sensor.reshape((-1, 2)))
         P_view_insidelens_direction_hom = (torch.inverse(K) @ P_sensor_hom.T).T
         P_view_insidelens_direction = dehomogenize(P_view_insidelens_direction_hom)
@@ -327,8 +328,6 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
         ref_points[nan_mask] = 0
         boundary_original_points = P_view_insidelens_direction[-1]
         print(boundary_original_points)
-        #ref_points = nn.Parameter(ref_points.cuda().requires_grad_(True))
-        #optimizer_ref_points = torch.optim.Adam([{'params': ref_points, 'lr': 0.0001}])
 
         width = viewpoint_cam.image_width
         height = viewpoint_cam.image_height
@@ -405,10 +404,8 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
             #sigmoid(np.linspace(-2.398, 2.398, sample_height))*height,
             #sigmoid(np.linspace(-1.61, 1.61, sample_width))*width,
             #sigmoid(np.linspace(-1.61, 1.61, sample_height))*height,
-            #np.linspace(0, width, sample_width),
-            #np.linspace(0, height, sample_height),
-            np.linspace(0 - width/extend_scale, width + width/extend_scale, sample_width),
-            np.linspace(0 - height/extend_scale, height + height/extend_scale, sample_height),
+            np.linspace(0, width, sample_width),
+            np.linspace(0, height, sample_height),
             #np.linspace(0 - width/1, width + width/1, sample_width),
             #np.linspace(0 - height/1, height + height/1, sample_height),
             #np.linspace(0 - width/2, width + width/2, sample_width),
@@ -506,11 +503,24 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
             mask = (~((image[0]==0) & (image[1]==0)).unsqueeze(0)).float()
             #torchvision.utils.save_image(mask*viewpoint_cam.fish_gt_image.cuda(), os.path.join(scene.model_path, f"mask.png"))
 
+            if iteration % 1000 == 1:
+                P_view_outsidelens_direction = lens_net.forward(P_view_insidelens_direction, sensor_to_frustum=True)
+                camera_directions_w_lens = homogenize(P_view_outsidelens_direction)
+                control_points = camera_directions_w_lens.reshape((P_sensor.shape[0], P_sensor.shape[1], 3))[:, :, :2]
+                projection_matrix = viewpoint_cam.projection_matrix
+                flow = control_points @ projection_matrix[:2, :2]
+                plot_points(flow, os.path.join(scene.model_path, f"flow_{iteration}.png"))
+
         # Loss
         if outside_rasterizer:
-            gt_image = viewpoint_cam.fish_gt_image.cuda()
-            Ll1 = l1_loss(image, gt_image*mask)
-            ssim_loss = ssim(image, gt_image*mask)
+            if if_circular_mask:
+                gt_image = viewpoint_cam.fish_gt_image.cuda()
+                Ll1 = l1_loss(image, gt_image*mask*circular_mask)
+                ssim_loss = ssim(image, gt_image*mask*circular_mask)
+            else:
+                gt_image = viewpoint_cam.fish_gt_image.cuda()
+                Ll1 = l1_loss(image, gt_image*mask)
+                ssim_loss = ssim(image, gt_image*mask)
         else:
             gt_image = viewpoint_cam.original_image.cuda()
             Ll1 = l1_loss(image, gt_image)
@@ -702,6 +712,7 @@ def training_report(tb_writer, iteration, Ll1, loss, l1_loss, elapsed, testing_i
                               {'name': 'train', 'cameras' : [scene.getTrainCameras()[idx % len(scene.getTrainCameras())] for idx in range(5, 30, 5)]})
 
         for config in validation_configs:
+            name = config['name']
             if config['cameras'] and len(config['cameras']) > 0:
                 l1_test = 0.0
                 psnr_test = 0.0
@@ -722,6 +733,7 @@ def training_report(tb_writer, iteration, Ll1, loss, l1_loss, elapsed, testing_i
                         projection_matrix = viewpoint.projection_matrix
                         flow = flow @ projection_matrix[:2, :2]
                         flow = nn.functional.interpolate(flow.permute(2, 0, 1).unsqueeze(0), size=(viewpoint.fish_gt_image.shape[1]*2, viewpoint.fish_gt_image.shape[2]*2), mode='bilinear', align_corners=False).permute(0, 2, 3, 1).squeeze(0)
+                        torchvision.utils.save_image(image, os.path.join(scene.model_path, 'training_val/{0:05d}'.format(idx) + "_" + name + "_perspective.png"))
                         image = F.grid_sample(
                             image.unsqueeze(0),
                             flow.unsqueeze(0),
@@ -729,7 +741,6 @@ def training_report(tb_writer, iteration, Ll1, loss, l1_loss, elapsed, testing_i
                             padding_mode="zeros",
                             align_corners=True,
                         )
-                    name = config['name']
                     torchvision.utils.save_image(image, os.path.join(scene.model_path, 'training_val/{0:05d}'.format(idx) + "_" + name + "_before_crop.png"))
                     if outside_rasterizer:
                         image = center_crop(image, viewpoint.fish_gt_image.shape[1], viewpoint.fish_gt_image.shape[2]).squeeze(0)
@@ -738,7 +749,7 @@ def training_report(tb_writer, iteration, Ll1, loss, l1_loss, elapsed, testing_i
                         gt_image = torch.clamp(viewpoint.original_image.to("cuda"), 0.0, 1.0)
 
                     torchvision.utils.save_image(image, os.path.join(scene.model_path, 'training_val/{0:05d}'.format(idx) + "_" + name + ".png"))
-                    torchvision.utils.save_image(gt_image, os.path.join(scene.model_path, 'training_val/gt_{0:05d}'.format(idx) + "_" + name + ".png"))
+                    #torchvision.utils.save_image(gt_image, os.path.join(scene.model_path, 'training_val/gt_{0:05d}'.format(idx) + "_" + name + ".png"))
                     if tb_writer and (idx < 5):
                         tb_writer.add_images(config['name'] + "_view_{}/render".format(viewpoint.image_name), image[None], global_step=iteration)
                         if iteration == testing_iterations[0]:
@@ -849,6 +860,7 @@ if __name__ == "__main__":
     parser.add_argument("--outside_rasterizer", action="store_true", default=False)
     parser.add_argument("--abs_grad", action="store_true", default=False)
     parser.add_argument('--densi_num', type=float, default=0.0002)
+    parser.add_argument("--if_circular_mask", action="store_true", default=False)
 
     args = parser.parse_args(sys.argv[1:])
     args.save_iterations.append(args.iterations)
@@ -873,7 +885,7 @@ if __name__ == "__main__":
     network_gui.init(args.ip, args.port)
     torch.autograd.set_detect_anomaly(args.detect_anomaly)
     training(lp.extract(args), op.extract(args), pp.extract(args), args.test_iterations, args.save_iterations, args.checkpoint_iterations, args.start_checkpoint, args.debug_from, use_wandb=args.wandb, random_init=args.random_init_pc, hybrid=args.hybrid, opt_cam=args.opt_cam, opt_distortion=args.opt_distortion, opt_intrinsic=args.opt_intrinsic, r_t_lr=args.r_t_lr, r_t_noise=args.r_t_noise, global_alignment_lr=args.global_alignment_lr, extra_loss=args.extra_loss,
-             start_opt_lens=args.start_opt_lens, extend_scale=args.extend_scale, control_point_sample_scale=args.control_point_sample_scale, outside_rasterizer=args.outside_rasterizer, abs_grad=args.abs_grad, densi_num=args.densi_num)
+             start_opt_lens=args.start_opt_lens, extend_scale=args.extend_scale, control_point_sample_scale=args.control_point_sample_scale, outside_rasterizer=args.outside_rasterizer, abs_grad=args.abs_grad, densi_num=args.densi_num, if_circular_mask=args.if_circular_mask)
 
     # All done
     print("\nTraining complete.")
