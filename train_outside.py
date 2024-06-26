@@ -158,7 +158,7 @@ def center_crop(tensor, target_height, target_width):
     return cropped_tensor
 
 def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoint_iterations, checkpoint, debug_from, use_wandb=False, random_init=False, hybrid=False, opt_cam=False, opt_distortion=False, opt_intrinsic=False, r_t_noise=[0., 0.], r_t_lr=[0.001, 0.001], global_alignment_lr=0.001, extra_loss=False, start_opt_lens=1, extend_scale=2., control_point_sample_scale=8., outside_rasterizer=False, abs_grad=False, densi_num=0.0002,
-             if_circular_mask=False):
+             if_circular_mask=False, flow_scale=1.):
     first_iter = 0
     tb_writer = prepare_output_and_logger(dataset)
     gaussians = GaussianModel(dataset.sh_degree, dataset.asg_degree)
@@ -234,35 +234,13 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
     smooth_term = get_linear_noise_func(lr_init=0.1, lr_final=1e-15, lr_delay_mult=0.01, max_steps=20000)
 
 
-    distortion_params = nn.Parameter(torch.zeros(8).cuda().requires_grad_(True))
-    optimizer_distortion = torch.optim.Adam([{'params': distortion_params, 'lr': 0.001}])
-
-    #u_init = nn.Parameter(torch.zeros(200, 200).cuda().requires_grad_(True))
-    # check index for bilinear interpolation
-    #u_init[:, 0] = 1
-    #u_init[86, 80] = 1
-    #u_init[86, 81] = 2
-    #u_init[87, 80] = 3
-    #u_init[87, 81] = 4
-    u_distortion = nn.Parameter(torch.zeros(400, 400).cuda().requires_grad_(True))
-    v_distortion = nn.Parameter(torch.zeros(400, 400).cuda().requires_grad_(True))
-    u_radial = nn.Parameter(torch.ones(400, 400).cuda().requires_grad_(True))
-    v_radial = nn.Parameter(torch.ones(400, 400).cuda().requires_grad_(True))
-    radial = nn.Parameter(torch.ones(1000).cuda().requires_grad_(True))
-    #radial = nn.Parameter(torch.zeros(1000, 4).cuda().requires_grad_(True))
-    optimizer_u_distortion = torch.optim.Adam([{'params': u_distortion, 'lr': 0.0001}])
-    optimizer_v_distortion = torch.optim.Adam([{'params': v_distortion, 'lr': 0.0001}])
-    optimizer_u_radial = torch.optim.Adam([{'params': u_radial, 'lr': 0.0001}])
-    optimizer_v_radial = torch.optim.Adam([{'params': v_radial, 'lr': 0.0001}])
-    optimizer_radial = torch.optim.Adam([{'params': radial, 'lr': 0.0001}])
-
     # colmap init
     if outside_rasterizer:
         viewpoint_cam = scene.getTrainCameras().copy()[0]
         width = viewpoint_cam.image_width
         height = viewpoint_cam.image_height
-        sample_width = int(width / 50)
-        sample_height = int(height / 50)
+        sample_width = int(width / 20)
+        sample_height = int(height / 20)
         K = viewpoint_cam.get_K
         width = viewpoint_cam.fish_gt_image.shape[2]
         height = viewpoint_cam.fish_gt_image.shape[1]
@@ -270,22 +248,9 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
         height = int(height * 2)
         K[0, 2] = width / 2
         K[1, 2] = height / 2
-        def sigmoid(x):
-            #return (1 / (1 + np.exp(-x)) - 0.5) * 1.5 + 0.5
-            return (1 / (1 + np.exp(-x)) - 0.5) * 1.2 + 0.5
         i, j = np.meshgrid(
-            #sigmoid(np.linspace(-2.398, 2.398, sample_width))*width,
-            #sigmoid(np.linspace(-2.398, 2.398, sample_height))*height,
-            #sigmoid(np.linspace(-1.61, 1.61, sample_width))*width,#1.5
-            #sigmoid(np.linspace(-1.61, 1.61, sample_height))*height,
-            #np.linspace(0, width, sample_width),
-            #np.linspace(0, height, sample_height),
-            np.linspace(0 - width/extend_scale, width + width/extend_scale, sample_width),
-            np.linspace(0 - height/extend_scale, height + height/extend_scale, sample_height),
-            #np.linspace(0 - width/2, width + width/2, sample_width),
-            #np.linspace(0 - height/2, height + height/2, sample_height),
-            #np.linspace(0 - width/1, width + width/1, sample_width),
-            #np.linspace(0 - height/1, height + height/1, sample_height),
+            np.linspace(0, width, sample_width),
+            np.linspace(0, height, sample_height),
             indexing="ij",
         )
         i = i.T
@@ -331,8 +296,8 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
 
         width = viewpoint_cam.image_width
         height = viewpoint_cam.image_height
-        sample_width = int(width / 50)
-        sample_height = int(height / 50)
+        sample_width = int(width / 20)
+        sample_height = int(height / 20)
         K = viewpoint_cam.get_K
         width = viewpoint_cam.fish_gt_image.shape[2]
         height = viewpoint_cam.fish_gt_image.shape[1]
@@ -341,18 +306,8 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
         K[0, 2] = width / 2
         K[1, 2] = height / 2
         i, j = np.meshgrid(
-            #sigmoid(np.linspace(-2.398, 2.398, sample_width))*width,
-            #sigmoid(np.linspace(-2.398, 2.398, sample_height))*height,
-            #sigmoid(np.linspace(-1.61, 1.61, sample_width))*width,
-            #sigmoid(np.linspace(-1.61, 1.61, sample_height))*height,
-            #np.linspace(0, width, sample_width),
-            #np.linspace(0, height, sample_height),
-            np.linspace(0 - width/extend_scale, width + width/extend_scale, sample_width),
-            np.linspace(0 - height/extend_scale, height + height/extend_scale, sample_height),
-            #np.linspace(0 - width/2, width + width/2, sample_width),
-            #np.linspace(0 - height/2, height + height/2, sample_height),
-            #np.linspace(0 - width/1, width + width/1, sample_width),
-            #np.linspace(0 - height/1, height + height/1, sample_height),
+            np.linspace(0, width, sample_width),
+            np.linspace(0, height, sample_height),
             indexing="ij",
         )
         i = i.T
@@ -365,7 +320,6 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
         P_sensor_hom = homogenize(P_sensor.reshape((-1, 2)))
         P_view_insidelens_direction_hom = (torch.inverse(K) @ P_sensor_hom.T).T
         P_view_insidelens_direction = dehomogenize(P_view_insidelens_direction_hom)
-
 
         progress_bar_ires = tqdm(range(0, 2000), desc="Init Iresnet")
         for i in range(2000):
@@ -386,7 +340,7 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
         progress_bar_ires.close()
 
         for param_group in optimizer_lens_net.param_groups:
-            param_group['lr'] = 1e-6
+            param_group['lr'] = 1e-7
 
         width = viewpoint_cam.image_width
         height = viewpoint_cam.image_height
@@ -395,21 +349,13 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
         K = viewpoint_cam.get_K
         width = viewpoint_cam.fish_gt_image.shape[2]
         height = viewpoint_cam.fish_gt_image.shape[1]
-        width = int(width * 2)
-        height = int(height * 2)
+        width = int(width * flow_scale)
+        height = int(height * flow_scale)
         K[0, 2] = width / 2
         K[1, 2] = height / 2
         i, j = np.meshgrid(
-            #sigmoid(np.linspace(-2.398, 2.398, sample_width))*width,
-            #sigmoid(np.linspace(-2.398, 2.398, sample_height))*height,
-            #sigmoid(np.linspace(-1.61, 1.61, sample_width))*width,
-            #sigmoid(np.linspace(-1.61, 1.61, sample_height))*height,
             np.linspace(0, width, sample_width),
             np.linspace(0, height, sample_height),
-            #np.linspace(0 - width/1, width + width/1, sample_width),
-            #np.linspace(0 - height/1, height + height/1, sample_height),
-            #np.linspace(0 - width/2, width + width/2, sample_width),
-            #np.linspace(0 - height/2, height + height/2, sample_height),
             indexing="ij",
         )
         i = i.T
@@ -426,16 +372,6 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
         camera_directions_w_lens = homogenize(P_view_outsidelens_direction)
         rectangle_points = camera_directions_w_lens.reshape((P_sensor.shape[0], P_sensor.shape[1], 3))[:, :, :2]
 
-    # |1 e c_x|
-    # |d c c_y|
-    # |0 0 1  |
-    # init as e=d=0, c=1, c_x=c_y=0, order [1, e, d, c, c_x, c_y]
-    affine_coeff = nn.Parameter(torch.tensor([1., 0., 0., 1., 0., 0.]).cuda().requires_grad_(True))
-    poly_coeff = nn.Parameter(torch.tensor([0, 0, 0, 0.]).cuda().requires_grad_(True))
-    optimizer_affine = torch.optim.Adam([{'params': affine_coeff, 'lr': 0.0001}])
-    optimizer_poly = torch.optim.Adam([{'params': poly_coeff, 'lr': 0.0001}])
-
-    count_57 = 0
     for iteration in range(first_iter, opt.iterations + 1):
         if network_gui.conn == None:
             network_gui.try_connect()
@@ -474,6 +410,15 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
         N = gaussians.get_xyz.shape[0]
         mlp_color = 0
 
+        #if iteration == 2000:
+        #    viewpoint_cam.reset_intrinsic(
+        #        focal2fov(viewpoint_cam.focal_x, int(2. * 1946)),
+        #        focal2fov(viewpoint_cam.focal_y, int(2. * 675)),
+        #        viewpoint_cam.focal_x,
+        #        viewpoint_cam.focal_y,
+        #        int(1. * viewpoint_cam.original_image.shape[2]),
+        #        int(1. * viewpoint_cam.original_image.shape[1])
+        #    )
         render_pkg = render(viewpoint_cam, gaussians, pipe, background, mlp_color, iteration=iteration, hybrid=hybrid, global_alignment=scene.getGlobalAlignment())
         image, viewspace_point_tensor, visibility_filter, radii = render_pkg["render"], render_pkg["viewspace_points"], render_pkg["visibility_filter"], render_pkg["radii"]
 
@@ -486,7 +431,9 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
             projection_matrix = viewpoint_cam.projection_matrix
             flow = control_points @ projection_matrix[:2, :2]
             #plot_points(flow, os.path.join(scene.model_path, f"control_points_applyK.png"))
-            flow = nn.functional.interpolate(flow.permute(2, 0, 1).unsqueeze(0), size=(viewpoint_cam.fish_gt_image.shape[1]*2, viewpoint_cam.fish_gt_image.shape[2]*2), mode='bilinear', align_corners=False).permute(0, 2, 3, 1).squeeze(0)
+            if iteration % 1000 == 1:
+                plot_points(flow, os.path.join(scene.model_path, f"inverse_flow_{iteration}.png"))
+            flow = nn.functional.interpolate(flow.permute(2, 0, 1).unsqueeze(0), size=(int(viewpoint_cam.fish_gt_image.shape[1]*flow_scale), int(viewpoint_cam.fish_gt_image.shape[2]*flow_scale)), mode='bilinear', align_corners=False).permute(0, 2, 3, 1).squeeze(0)
             #torchvision.utils.save_image(image, os.path.join(scene.model_path, f"rendered.png"))
             image = F.grid_sample(
                 image.unsqueeze(0),
@@ -502,6 +449,20 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
 
             mask = (~((image[0]==0) & (image[1]==0)).unsqueeze(0)).float()
             #torchvision.utils.save_image(mask*viewpoint_cam.fish_gt_image.cuda(), os.path.join(scene.model_path, f"mask.png"))
+
+            #if iteration == 1:
+            #    torchvision.utils.save_image(viewpoint_cam.original_image, os.path.join(scene.model_path, f"pers.png"))
+            #    image = F.grid_sample(
+            #        viewpoint_cam.original_image.cuda().unsqueeze(0),
+            #        flow.unsqueeze(0),
+            #        mode="bilinear",
+            #        padding_mode="zeros",
+            #        align_corners=True,
+            #    )
+            #    torchvision.utils.save_image(image, os.path.join(scene.model_path, f"pers2fish.png"))
+            #    image = center_crop(image, viewpoint_cam.fish_gt_image.shape[1], viewpoint_cam.fish_gt_image.shape[2]).squeeze(0)
+            #    torchvision.utils.save_image(image, os.path.join(scene.model_path, f"pers2fish_crop.png"))
+            #import pdb;pdb.set_trace()
 
             if iteration % 1000 == 1:
                 P_view_outsidelens_direction = lens_net.forward(P_view_insidelens_direction, sensor_to_frustum=True)
@@ -574,7 +535,7 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
             if not outside_rasterizer:
                 P_view_insidelens_direction = None
                 P_sensor = None
-            training_report(tb_writer, iteration, Ll1, loss, l1_loss, iter_start.elapsed_time(iter_end), testing_iterations, scene, render, (pipe, background, mlp_color), lens_net, opt_distortion, P_view_insidelens_direction, P_sensor, outside_rasterizer)
+            training_report(tb_writer, iteration, Ll1, loss, l1_loss, iter_start.elapsed_time(iter_end), testing_iterations, scene, render, (pipe, background, mlp_color), lens_net, opt_distortion, P_view_insidelens_direction, P_sensor, outside_rasterizer, flow_scale)
             if (iteration in saving_iterations):
                 print("\n[ITER {}] Saving Gaussians".format(iteration))
                 scene.save(iteration)
@@ -699,7 +660,7 @@ def prepare_output_and_logger(args):
         print("Tensorboard not available: not logging progress")
     return tb_writer
 
-def training_report(tb_writer, iteration, Ll1, loss, l1_loss, elapsed, testing_iterations, scene : Scene, renderFunc, renderArgs, lens_net, opt_distortion, P_view_insidelens_direction, P_sensor, outside_rasterizer):
+def training_report(tb_writer, iteration, Ll1, loss, l1_loss, elapsed, testing_iterations, scene : Scene, renderFunc, renderArgs, lens_net, opt_distortion, P_view_insidelens_direction, P_sensor, outside_rasterizer, flow_scale):
     if tb_writer:
         tb_writer.add_scalar('train_loss_patches/l1_loss', Ll1.item(), iteration)
         tb_writer.add_scalar('train_loss_patches/total_loss', loss.item(), iteration)
@@ -732,7 +693,7 @@ def training_report(tb_writer, iteration, Ll1, loss, l1_loss, elapsed, testing_i
                         flow = camera_directions_w_lens.reshape((P_sensor.shape[0], P_sensor.shape[1], 3))[:, :, :2]
                         projection_matrix = viewpoint.projection_matrix
                         flow = flow @ projection_matrix[:2, :2]
-                        flow = nn.functional.interpolate(flow.permute(2, 0, 1).unsqueeze(0), size=(viewpoint.fish_gt_image.shape[1]*2, viewpoint.fish_gt_image.shape[2]*2), mode='bilinear', align_corners=False).permute(0, 2, 3, 1).squeeze(0)
+                        flow = nn.functional.interpolate(flow.permute(2, 0, 1).unsqueeze(0), size=(int(viewpoint.fish_gt_image.shape[1]*flow_scale), int(viewpoint.fish_gt_image.shape[2]*flow_scale)), mode='bilinear', align_corners=False).permute(0, 2, 3, 1).squeeze(0)
                         torchvision.utils.save_image(image, os.path.join(scene.model_path, 'training_val/{0:05d}'.format(idx) + "_" + name + "_perspective.png"))
                         image = F.grid_sample(
                             image.unsqueeze(0),
@@ -861,6 +822,7 @@ if __name__ == "__main__":
     parser.add_argument("--abs_grad", action="store_true", default=False)
     parser.add_argument('--densi_num', type=float, default=0.0002)
     parser.add_argument("--if_circular_mask", action="store_true", default=False)
+    parser.add_argument('--flow_scale', type=float, default=1.)
 
     args = parser.parse_args(sys.argv[1:])
     args.save_iterations.append(args.iterations)
@@ -885,7 +847,7 @@ if __name__ == "__main__":
     network_gui.init(args.ip, args.port)
     torch.autograd.set_detect_anomaly(args.detect_anomaly)
     training(lp.extract(args), op.extract(args), pp.extract(args), args.test_iterations, args.save_iterations, args.checkpoint_iterations, args.start_checkpoint, args.debug_from, use_wandb=args.wandb, random_init=args.random_init_pc, hybrid=args.hybrid, opt_cam=args.opt_cam, opt_distortion=args.opt_distortion, opt_intrinsic=args.opt_intrinsic, r_t_lr=args.r_t_lr, r_t_noise=args.r_t_noise, global_alignment_lr=args.global_alignment_lr, extra_loss=args.extra_loss,
-             start_opt_lens=args.start_opt_lens, extend_scale=args.extend_scale, control_point_sample_scale=args.control_point_sample_scale, outside_rasterizer=args.outside_rasterizer, abs_grad=args.abs_grad, densi_num=args.densi_num, if_circular_mask=args.if_circular_mask)
+             start_opt_lens=args.start_opt_lens, extend_scale=args.extend_scale, control_point_sample_scale=args.control_point_sample_scale, outside_rasterizer=args.outside_rasterizer, abs_grad=args.abs_grad, densi_num=args.densi_num, if_circular_mask=args.if_circular_mask, flow_scale=args.flow_scale)
 
     # All done
     print("\nTraining complete.")

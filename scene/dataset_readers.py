@@ -135,7 +135,6 @@ def readColmapCameras(cam_extrinsics, cam_intrinsics, images_folder):
             FovX = focal2fov(focal_length_x, width)
             cx = intr.params[2]
             cy = intr.params[3]
-            #import pdb;pdb.set_trace()
             intrinsic_matrix = np.array([
                 [focal_length_x, 0., width * 0.5],
                 [0., focal_length_x, height * 0.5],
@@ -150,7 +149,7 @@ def readColmapCameras(cam_extrinsics, cam_intrinsics, images_folder):
         # depth = imageio.imread(depth_name)
 
         if focal_length_y != None:
-            cam_info = CameraInfo(uid=uid, R=R, T=T, FovY=FovY, FovX=FovX, focal_length_x=focal_length_x, focal_length_y=focal_length_x, image=image, intrinsic_matrix=intrinsic_matrix,                              image_path=image_path, image_name=image_name, width=width, height=height)
+            cam_info = CameraInfo(uid=uid, R=R, T=T, FovY=FovY, FovX=FovX, focal_length_x=focal_length_x, focal_length_y=focal_length_y, image=image, intrinsic_matrix=intrinsic_matrix,                              image_path=image_path, image_name=image_name, width=width, height=height)
             cam_infos.append(cam_info)
         else:
             cam_info = CameraInfo(uid=uid, R=R, T=T, FovY=FovY, FovX=FovX, focal_length_x=focal_length_x, focal_length_y=focal_length_y, image=image, intrinsic_matrix=intrinsic_matrix,                              image_path=image_path, image_name=image_name, width=width, height=height)

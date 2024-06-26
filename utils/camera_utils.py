@@ -59,7 +59,9 @@ def loadCam(args, id, cam_info, resolution_scale, outside_rasterizer):
         image_name=cam_info.image_name, uid=id,
         data_device=args.data_device, depth=cam_info.depth,
         ori_path=cam_info.image_path,
-        outside_rasterizer=outside_rasterizer
+        outside_rasterizer=outside_rasterizer,
+        orig_fov_w=orig_w,
+        orig_fov_h=orig_h
     )
 
 
