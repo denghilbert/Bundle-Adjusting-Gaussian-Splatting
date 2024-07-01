@@ -118,7 +118,7 @@ class Camera(nn.Module):
             )
 
         if not test_outside_rasterizer:
-            if os.path.exists(ori_path.split('images')[0] + 'fish/images' + ori_path.split('images')[1]):
+            if 'image' in ori_path and os.path.exists(ori_path.split('images')[0] + 'fish/images' + ori_path.split('images')[1]):
                 image = Image.open(ori_path.split('images')[0] + 'fish/images' + ori_path.split('images')[1])
                 orig_w, orig_h = image.size
                 resized_image_rgb = PILtoTorch(image, (orig_w, orig_h))
@@ -128,16 +128,39 @@ class Camera(nn.Module):
                 self.fish_gt_image = self.original_image
 
         if outside_rasterizer:
+            #print(self.FoVx)
+            #print(self.projection_matrix)
+            #print(self.image_width)
             self.reset_intrinsic(
-                #focal2fov(self.focal_x, int(1. * self.original_image.shape[2])),
-                #focal2fov(self.focal_y, int(1. * self.original_image.shape[1])),
-                focal2fov(self.focal_x, int(2. * self.orig_fov_w)),
-                focal2fov(self.focal_y, int(2. * self.orig_fov_h)),
+                #focal2fov(self.focal_x, int(5. * self.orig_fov_w)),
+                #focal2fov(self.focal_y, int(5. * self.orig_fov_h)),
+                focal2fov(self.focal_x, self.fish_gt_image.shape[2]),
+                focal2fov(self.focal_y, self.fish_gt_image.shape[1]),
                 self.focal_x,
                 self.focal_y,
-                int(1. * self.original_image.shape[2]),
-                int(1. * self.original_image.shape[1])
+                int(1. * self.fish_gt_image.shape[2]),
+                int(1. * self.fish_gt_image.shape[1])
             )
+            self.save4flow = self.projection_matrix
+            pix_fov_w = 10 * self.orig_fov_w
+            pix_fov_h = 10 * self.orig_fov_h
+            res_w = int(10. * self.original_image.shape[2])
+            res_h = int(10. * self.original_image.shape[1])
+            #print(self.FoVx)
+            #print(self.projection_matrix)
+            #print(self.image_width)
+            self.reset_intrinsic(
+                focal2fov(self.focal_x, pix_fov_w),
+                focal2fov(self.focal_y, pix_fov_h),
+                self.focal_x,
+                self.focal_y,
+                res_w if res_w < 1600 else 1600,
+                res_h if res_h < 1600 else 1600
+            )
+        #print(self.FoVx)
+        #print(self.projection_matrix)
+        #print(self.image_width)
+        #import pdb;pdb.set_trace()
 
 
     def reset_intrinsic(self, FoVx, FoVy, focal_x, focal_y, width, height):

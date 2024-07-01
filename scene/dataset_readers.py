@@ -190,16 +190,16 @@ def readColmapSceneInfo(path, images, eval, llffhold=8):
         cameras_intrinsic_file = os.path.join(path, "sparse/0", "cameras.bin")
         cam_extrinsics = read_extrinsics_binary(cameras_extrinsic_file)
         cam_intrinsics = read_intrinsics_binary(cameras_intrinsic_file)
-        #cam_intrinsics = read_intrinsics_binary(cameras_intrinsic_file.split('sparse')[0] + 'fish/sparse' + cameras_intrinsic_file.split('sparse')[1])
+        cam_intrinsics_ = read_intrinsics_binary(cameras_intrinsic_file.split('sparse')[0] + 'fish/sparse' + cameras_intrinsic_file.split('sparse')[1])
     except:
         cameras_extrinsic_file = os.path.join(path, "sparse/0", "images.txt")
         cameras_intrinsic_file = os.path.join(path, "sparse/0", "cameras.txt")
         cam_extrinsics = read_extrinsics_text(cameras_extrinsic_file)
         cam_intrinsics = read_intrinsics_text(cameras_intrinsic_file)
 
-    #if len(cam_extrinsics )> 500:
+    #if len(cam_extrinsics) > 100:
     #    items = list(cam_extrinsics.items())
-    #    items = items[:500]
+    #    items = items[:2]
     #    cam_extrinsics = dict(items)
 
     reading_dir = "images" if images == None else images
@@ -294,6 +294,7 @@ def readCamerasFromVRNeRF(path, transformsfile, white_background, extension=".jp
 
         frames = contents['KRT']
 
+        import pdb;pdb.set_trace()
         for idx, frame in enumerate(frames):
             cam_name = os.path.join(path, frame["cameraId"] + '.jpg')
 
@@ -422,6 +423,43 @@ def readMetashapeInfo(path, white_background, eval, extension=".png"):
                            ply_path=ply_path)
     return scene_info
 
+
+def readEyefulInfo(path, white_background, eval, extension=".jpg"):
+    print("Reading Training Transforms")
+    train_cam_infos = readCamerasFromTransforms(path, "transforms_train.json", white_background, extension)
+    print("Reading Test Transforms")
+    test_cam_infos = readCamerasFromTransforms(path, "transforms_test.json", white_background, extension)
+
+    if not eval:
+        train_cam_infos.extend(test_cam_infos)
+        test_cam_infos = []
+
+    nerf_normalization = getNerfppNorm(train_cam_infos)
+
+    ply_path = os.path.join(path, "points3d.ply")
+    if not os.path.exists(ply_path):
+        # Since this data set has no colmap data, we start with random points
+        num_pts = 100_000
+        print(f"Generating random point cloud ({num_pts})...")
+
+        # We create random points inside the bounds of the synthetic Blender scenes
+        xyz = np.random.random((num_pts, 3)) * 2.6 - 1.3
+        shs = np.random.random((num_pts, 3)) / 255.0
+        pcd = BasicPointCloud(points=xyz, colors=SH2RGB(shs), normals=np.zeros((num_pts, 3)))
+
+        storePly(ply_path, xyz, SH2RGB(shs) * 255)
+    try:
+        pcd = fetchPly(ply_path)
+    except:
+        pcd = None
+
+    scene_info = SceneInfo(point_cloud=pcd,
+                           train_cameras=train_cam_infos,
+                           test_cameras=test_cam_infos,
+                           nerf_normalization=nerf_normalization,
+                           ply_path=ply_path)
+    return scene_info
+
 def readNerfSyntheticInfo(path, white_background, eval, extension=".png"):
     print("Reading Training Transforms")
     train_cam_infos = readCamerasFromTransforms(path, "transforms_train.json", white_background, extension)
@@ -497,6 +535,7 @@ def readDiffusion(path, white_background, eval, extension=".jpg"):
 sceneLoadTypeCallbacks = {
     "Colmap": readColmapSceneInfo,
     "Blender" : readNerfSyntheticInfo,
+    "Eyeful" : readEyefulInfo,
     "Metashape" : readMetashapeInfo,
     "Diffusion" : readDiffusion
 }

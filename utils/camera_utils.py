@@ -39,6 +39,8 @@ def loadCam(args, id, cam_info, resolution_scale, outside_rasterizer):
 
         scale = float(global_down) * float(resolution_scale)
         resolution = (int(orig_w / scale), int(orig_h / scale))
+        cam_info.intrinsic_matrix[0, 0] = cam_info.intrinsic_matrix[0, 0] / scale
+        cam_info.intrinsic_matrix[1, 1] = cam_info.intrinsic_matrix[1, 1] / scale
         cam_info.intrinsic_matrix[0, 2] = resolution[0] / 2
         cam_info.intrinsic_matrix[1, 2] = resolution[1] / 2
 
