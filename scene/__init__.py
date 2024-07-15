@@ -44,6 +44,7 @@ def procrustes_analysis(X0,X1): # [N,3]
     U,S,V = (X0cs.t()@X1cs).double().svd(some=True)
     R = (U@V.t()).float()
     if R.det()<0: R[2] *= -1
+    #if np.linalg.det(R.cpu().numpy())<0: R[2] *= -1
     # align X1 to X0: X1to0 = (X1-t1)/s1@R.t()*s0+t0
     sim3 = edict(t0=t0[0],t1=t1[0],s0=s0,s1=s1,R=R)
     return sim3
