@@ -1,0 +1,6 @@
+[submodule "simple-knn"]
+	path = simple-knn
+	url = https://github.com/camenduru/simple-knn
+[submodule "3dgs-pose"]
+	path = 3dgs-pose
+	url = https://github.com/denghilbert/3dgs-pose
