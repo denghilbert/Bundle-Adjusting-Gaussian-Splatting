@@ -53,6 +53,9 @@ visdom -port 8600
 ```
 
 ```shell
+# perturb poses without optimization
+python train_outside.py -s lego -m output/vis_pose --r_t_noise 0.15 0.15 1.0 --test_iterations 7000 15000 30000 --save_iterations 7000 15000 30000 --iterations 30000 --eval --r_t_lr 0.01 0.02 --vis_pose
+# optimize poses
 python train_outside.py -s lego -m output/vis_pose --r_t_noise 0.15 0.15 1.0 --test_iterations 7000 15000 30000 --save_iterations 7000 15000 30000 --iterations 30000 --eval --r_t_lr 0.01 0.02 --opt_cam --vis_pose
 ```
 
@@ -133,5 +136,4 @@ The final directory of a single scene should looks like this where `<location>/f
         ├── points3D.bin
         └── points3D.ply
 ```
-
 
