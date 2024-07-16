@@ -44,6 +44,7 @@ def procrustes_analysis(X0,X1): # [N,3]
     U,S,V = (X0cs.t()@X1cs).double().svd(some=True)
     R = (U@V.t()).float()
     if R.det()<0: R[2] *= -1
+    #if np.linalg.det(R.cpu().numpy())<0: R[2] *= -1
     # align X1 to X0: X1to0 = (X1-t1)/s1@R.t()*s0+t0
     sim3 = edict(t0=t0[0],t1=t1[0],s0=s0,s1=s1,R=R)
     return sim3
@@ -52,7 +53,7 @@ class Scene:
 
     gaussians : GaussianModel
 
-    def __init__(self, args : ModelParams, gaussians : GaussianModel, load_iteration=None, shuffle=True, resolution_scales=[1.0], random_init=False, r_t_noise=[0., 0.], r_t_lr=[0.001, 0.001], global_alignment_lr=0.001):
+    def __init__(self, args : ModelParams, gaussians : GaussianModel, load_iteration=None, shuffle=True, resolution_scales=[1.0], random_init=False, r_t_noise=[0., 0., 1.], r_t_lr=[0.001, 0.001], global_alignment_lr=0.001, outside_rasterizer=False):
         """b
         :param path: Path to colmap scene main folder.
         """
@@ -117,12 +118,12 @@ class Scene:
             print("Loading Training Cameras")
 
             generator = torch.Generator().manual_seed(55)
-            self.unnoisy_train_cameras[resolution_scale] = cameraList_from_camInfos(scene_info.train_cameras, resolution_scale, args)
-            self.debug_cameras[resolution_scale] = cameraList_from_camInfos(scene_info.train_cameras, resolution_scale, args)
+            self.unnoisy_train_cameras[resolution_scale] = cameraList_from_camInfos(scene_info.train_cameras, resolution_scale, args, outside_rasterizer)
+            self.debug_cameras[resolution_scale] = cameraList_from_camInfos(scene_info.train_cameras, resolution_scale, args, outside_rasterizer)
             # simply add noise
             so3_noise = torch.randn((len(scene_info.train_cameras), 3), generator=generator) * r_t_noise[0]
             t_noise = (torch.randn((len(scene_info.train_cameras), 3), generator=generator) * r_t_noise[1]).numpy()
-            fov_noise = np.exp(np.random.normal(0., np.log(1.02), len(scene_info.train_cameras)))
+            fov_noise = np.exp(np.random.normal(0., np.log(r_t_noise[2]), len(scene_info.train_cameras)))
             #so3_noise = torch.randn((len(scene_info.train_cameras), 3)) * r_t_noise[0]
             #t_noise = (torch.randn((len(scene_info.train_cameras), 3)) * r_t_noise[1]).numpy()
 
@@ -141,15 +142,15 @@ class Scene:
                 #tmp_T = so3[index] @ (scene_info.train_cameras[index].T + t_noise[index])
                 tmp_T = scene_info.train_cameras[index].T + t_noise[index]
                 tmp_fovx = scene_info.train_cameras[index].FovX * fov_noise[index]
-                tmp_fovy = scene_info.train_cameras[index].FovX * fov_noise[index]
+                tmp_fovy = scene_info.train_cameras[index].FovY * fov_noise[index]
                 scene_info.train_cameras[index] = scene_info.train_cameras[index]._replace(T=tmp_T, R=tmp_R, FovX=tmp_fovx, FovY=tmp_fovy)
                 #import pdb; pdb.set_trace()
                 #print(scene_info.train_cameras[index])
             #import pdb; pdb.set_trace()
-            self.train_cameras[resolution_scale] = cameraList_from_camInfos(scene_info.train_cameras, resolution_scale, args)
+            self.train_cameras[resolution_scale] = cameraList_from_camInfos(scene_info.train_cameras, resolution_scale, args, outside_rasterizer)
             print("Loading Test Cameras")
-            self.test_cameras[resolution_scale] = cameraList_from_camInfos(scene_info.test_cameras, resolution_scale, args)
-            self.unnoisy_test_cameras[resolution_scale] = cameraList_from_camInfos(scene_info.test_cameras, resolution_scale, args)
+            self.test_cameras[resolution_scale] = cameraList_from_camInfos(scene_info.test_cameras, resolution_scale, args, outside_rasterizer)
+            self.unnoisy_test_cameras[resolution_scale] = cameraList_from_camInfos(scene_info.test_cameras, resolution_scale, args, outside_rasterizer)
 
         if self.loaded_iter:
             self.gaussians.load_ply(os.path.join(self.model_path, "point_cloud", "iteration_" + str(self.loaded_iter), "point_cloud.ply"))

@@ -119,8 +119,23 @@ def pass_neuralens(lens_net, min_w, max_w, min_h, max_h, sample_width, sample_he
 
     return camera_directions_w_lens, P_view_insidelens_direction[-1]
 
+def plot_points(ref_points, path):
+    p1 = ref_points.clone().reshape(-1, 2)
+    import matplotlib.pyplot as plt
+    plt.figure(figsize=(int(ref_points.shape[1]/4), int(ref_points.shape[0]/4)))
+    x = p1[:, 0].detach().cpu().numpy()  # Convert tensor to numpy for plotting
+    y = p1[:, 1].detach().cpu().numpy()
+    plt.scatter(x, y)
+    plt.title('2D Points Plot')
+    plt.xlabel('X axis')
+    plt.ylabel('Y axis')
+    plt.xlim(p1[:, 0].min().item() - 0.1, p1[:, 0].max().item() + 0.1)
+    plt.ylim(p1[:, 1].min().item() - 0.1, p1[:, 1].max().item() + 0.1)
+    plt.grid(True)
+    #plt.show()
+    plt.savefig(path)
 
-def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoint_iterations, checkpoint, debug_from, use_wandb=False, random_init=False, hybrid=False, opt_cam=False, opt_distortion=False, opt_intrinsic=False, r_t_noise=[0., 0.], r_t_lr=[0.001, 0.001], global_alignment_lr=0.001, extra_loss=False, start_opt_lens=1, extend_scale=2., control_point_sample_scale=8.):
+def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoint_iterations, checkpoint, debug_from, use_wandb=False, random_init=False, hybrid=False, opt_cam=False, opt_distortion=False, opt_intrinsic=False, r_t_noise=[0., 0., 1.], r_t_lr=[0.001, 0.001], global_alignment_lr=0.001, extra_loss=False, start_opt_lens=1, extend_scale=2., control_point_sample_scale=8.):
     first_iter = 0
     tb_writer = prepare_output_and_logger(dataset)
     gaussians = GaussianModel(dataset.sh_degree, dataset.asg_degree)
@@ -130,6 +145,7 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
     lens_net = iResNet().cuda()
     l_lens_net = [{'params': lens_net.parameters(), 'lr': 1e-5}]
     optimizer_lens_net = torch.optim.Adam(l_lens_net, eps=1e-15)
+    scheduler_lens_net = torch.optim.lr_scheduler.MultiStepLR(optimizer_lens_net, milestones=[20000, 40000], gamma=0.1)
     def zero_weights(m):
         if isinstance(m, nn.Linear):
             nn.init.constant_(m.weight, 0.)
@@ -219,12 +235,12 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
     optimizer_v_radial = torch.optim.Adam([{'params': v_radial, 'lr': 0.0001}])
     optimizer_radial = torch.optim.Adam([{'params': radial, 'lr': 0.0001}])
 
-    # Control points
+    # iresnet init points
     viewpoint_cam = scene.getTrainCameras().copy()[0]
     width = viewpoint_cam.image_width
     height = viewpoint_cam.image_height
-    sample_width = int(width / 8)
-    sample_height = int(height / 8)
+    sample_width = int(width / 50)
+    sample_height = int(height / 50)
     K = viewpoint_cam.get_K
     i, j = np.meshgrid(
         np.linspace(0 - width/extend_scale, width + width/extend_scale, sample_width),
@@ -264,6 +280,10 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
         ref_points = ref_points * (1 + coeff[0] * r**2 + coeff[1] * r**4 + coeff[2] * r**6)
     else:
         ref_points = ref_points
+    inf_mask = torch.isinf(ref_points)
+    nan_mask = torch.isnan(ref_points)
+    ref_points[inf_mask] = 0
+    ref_points[nan_mask] = 0
     boundary_original_points = P_view_insidelens_direction[-1]
     print(boundary_original_points)
     ref_points = nn.Parameter(ref_points.cuda().requires_grad_(True))
@@ -275,8 +295,8 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
 
     width = viewpoint_cam.image_width
     height = viewpoint_cam.image_height
-    sample_width = int(width / 8)
-    sample_height = int(height / 8)
+    sample_width = int(width / 50)
+    sample_height = int(height / 50)
     K = viewpoint_cam.get_K
     i, j = np.meshgrid(
         np.linspace(0 - width/extend_scale, width + width/extend_scale, sample_width),
@@ -300,6 +320,10 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
         P_view_outsidelens_direction = lens_net.forward(P_view_insidelens_direction)
         control_points = homogenize(P_view_outsidelens_direction)
         control_points = control_points.reshape((P_sensor.shape[0], P_sensor.shape[1], 3))[:, :, :2]
+        inf_mask = torch.isinf(control_points)
+        nan_mask = torch.isnan(control_points)
+        control_points[inf_mask] = 0
+        control_points[nan_mask] = 0
         loss = ((control_points - ref_points)**2).mean()
         progress_bar_ires.set_postfix(loss=loss.item())
         progress_bar_ires.update(1)
@@ -309,7 +333,7 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
     progress_bar_ires.close()
 
     for param_group in optimizer_lens_net.param_groups:
-        param_group['lr'] = 1e-6
+        param_group['lr'] = 1e-7
 
     width = viewpoint_cam.image_width
     height = viewpoint_cam.image_height
@@ -332,8 +356,6 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
     P_view_insidelens_direction_hom = (torch.inverse(K) @ P_sensor_hom.T).T
     P_view_insidelens_direction = dehomogenize(P_view_insidelens_direction_hom)
     P_view_outsidelens_direction = lens_net.forward(P_view_insidelens_direction)
-    control_points = homogenize(P_view_outsidelens_direction)
-    control_points = control_points.reshape((P_sensor.shape[0], P_sensor.shape[1], 3))[:, :, :2]
 
     # |1 e c_x|
     # |d c c_y|
@@ -394,18 +416,17 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
         proj_mat = viewpoint_cam.get_full_proj_transform().t().detach()
         p_proj = (proj_mat @ gaussians_xyz_homo.T).T.cuda().detach()
         p_2d = p_proj[:, :2] / p_proj[:, -1:]
-
-        if opt_distortion and False:
-            undistorted_p_w2c = lens_net.forward(p_w2c[:, :3])
-            undistorted_p_w2c_homo = torch.cat((undistorted_p_w2c, torch.ones(undistorted_p_w2c.size(0), 1).cuda()), dim=1)
-        else:
-            undistorted_p_w2c_homo = p_w2c
+        undistorted_p_w2c_homo = p_w2c
 
         # using iresnet to predict next round control points
         P_view_outsidelens_direction = lens_net.forward(P_view_insidelens_direction)
         camera_directions_w_lens = homogenize(P_view_outsidelens_direction)
         control_points = camera_directions_w_lens.reshape((P_sensor.shape[0], P_sensor.shape[1], 3))[:, :, :2]
         boundary_original_points = P_view_insidelens_direction[-1]
+        if iteration % 1000 == 1:
+            plot_points(control_points, os.path.join(scene.model_path, f"control_points_{iteration}.png"))
+
+
 
         render_pkg = render(viewpoint_cam, gaussians, pipe, background, mlp_color, control_points, boundary_original_points, undistorted_p_w2c_homo, distortion_params, u_distortion, v_distortion, u_radial, v_radial, affine_coeff, poly_coeff, radial, iteration=iteration, hybrid=hybrid, global_alignment=scene.getGlobalAlignment())
         image, viewspace_point_tensor, visibility_filter, radii = render_pkg["render"], render_pkg["viewspace_points"], render_pkg["visibility_filter"], render_pkg["radii"]
@@ -708,7 +729,7 @@ if __name__ == "__main__":
     # learning rate for global alignment
     parser.add_argument('--global_alignment_lr', type=float, default=0.01)
     # noise for rotation and translation
-    parser.add_argument("--r_t_noise", nargs="+", type=float, default=[0., 0.])
+    parser.add_argument("--r_t_noise", nargs="+", type=float, default=[0., 0., 1.])
     # rotation filter for light_glue
     parser.add_argument('--angle_threshold', type=float, default=30.)
     # if optimize camera poses with projection_loss

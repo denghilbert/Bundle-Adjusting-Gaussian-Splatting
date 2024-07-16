@@ -10,28 +10,32 @@
 #
 
 import torch
+import os
 from torch import nn
+from PIL import Image
 import torch.nn.functional as F
 import numpy as np
 from utils.graphics_utils import getWorld2View2, getProjectionMatrix, getWorld2View2_torch_tensor, get_rays, fov2focal, focal2fov
 from utils.camera import Lie
+from utils.general_utils import PILtoTorch
 
 
 class Camera(nn.Module):
-    def __init__(self, colmap_id, R, T, intrinsic_matrix, FoVx, FoVy, image, gt_alpha_mask,
-                 image_name, uid,
-                 trans=np.array([0.0, 0.0, 0.0]), scale=1.0, data_device = "cuda", depth=None):
+    def __init__(self, colmap_id, R, T, intrinsic_matrix, FoVx, FoVy, focal_length_x, focal_length_y, image, gt_alpha_mask, image_name, uid, trans=np.array([0.0, 0.0, 0.0]), scale=1.0, data_device = "cuda", depth=None, ori_path=None, outside_rasterizer=False, test_outside_rasterizer=False, orig_fov_w=0, orig_fov_h=0):
         super(Camera, self).__init__()
+        assert orig_fov_w !=0 and orig_fov_h !=0
+        self.orig_fov_w = orig_fov_w
+        self.orig_fov_h = orig_fov_h
 
         self.uid = uid
         self.colmap_id = colmap_id
-        #self.R = nn.Parameter(torch.tensor(R).float().cuda().requires_grad_(True))
-        #self.T = nn.Parameter(torch.tensor(T).float().cuda().requires_grad_(True))
         self.R = R
         self.T = T
         self.intrinsic_matrix = torch.from_numpy(intrinsic_matrix).cuda()
         self.FoVx = FoVx
         self.FoVy = FoVy
+        self.focal_x = focal_length_x
+        self.focal_y = focal_length_y
         self.image_name = image_name
         self.lie = Lie()
 
@@ -42,14 +46,10 @@ class Camera(nn.Module):
             print(f"[Warning] Custom device {data_device} failed, fallback to default cuda device" )
             self.data_device = torch.device("cuda")
 
-        #self.original_image = image.clamp(0.0, 1.0).to(self.data_device)
         self.original_image = image.clamp(0.0, 1.0)
         self.image_width = self.original_image.shape[2]
         self.image_height = self.original_image.shape[1]
         self.depth = torch.Tensor(depth).to(self.data_device) if depth is not None else None
-
-        #if FoVx / FoVy != self.image_width / self.image_height:
-        #    self.FoVx = (self.image_width / self.image_height) * self.FoVy
 
         if gt_alpha_mask is not None:
             #self.original_image *= gt_alpha_mask.to(self.data_device)
@@ -58,28 +58,17 @@ class Camera(nn.Module):
             #self.original_image *= torch.ones((1, self.image_height, self.image_width), device=self.data_device)
             self.original_image *= torch.ones((1, self.image_height, self.image_width))
 
+
         self.zfar = 100.0
         self.znear = 0.01
 
         self.trans = torch.tensor(trans).cuda()
         self.scale = torch.tensor(scale).cuda()
-        #self.trans = trans
-        #self.scale = scale
-
-        #self.world_view_transform = torch.tensor(getWorld2View2(R, T, trans, scale)).transpose(0, 1).cuda()
-
-        #self.world_view_transform_0 = getWorld2View2_torch_tensor(torch.tensor(R).float().cuda(), torch.tensor(T).float().cuda(), torch.tensor(trans).float().cuda(), torch.tensor(scale).float().cuda()).transpose(0, 1).requires_grad_(True) # We can no use linalg.inv() on parameters (e.g., self.R == nn.Parameters)
-        #self.Rt = nn.Parameter(getWorld2View2_torch_tensor(torch.tensor(R).float().cuda(), torch.tensor(T).float().cuda(), torch.tensor(trans).float().cuda(), torch.tensor(scale).float().cuda()).transpose(0, 1)[:, :3].requires_grad_(True))
 
         # represent translation and rotation with so3
         self.init_translation = torch.tensor(T).float().view(-1, 1).cuda()
-        #self.delta_translation_xy = nn.Parameter(torch.zeros(2, 1).cuda().requires_grad_(True))
-        #self.delta_translation_z = nn.Parameter(torch.zeros(1, 1).cuda().requires_grad_(True))
-        #self.delta_translation = torch.cat((self.delta_translation_xy, self.delta_translation_z))
         self.delta_translation = nn.Parameter(torch.zeros(3, 1).cuda().requires_grad_(True))
         self.translation = self.init_translation + self.delta_translation
-        #self.so3 = nn.Parameter(self.lie.SO3_to_so3(torch.tensor(R).float().t().cuda()).requires_grad_(True))
-        #self.rotation = self.lie.so3_to_SO3(self.so3) # we have error right here, but it doesn't matter
         self.init_quaternion = rotation_matrix_to_quaternion(torch.tensor(R).float().t().cuda())
         self.delta_quaternion = nn.Parameter(torch.zeros(4).cuda().requires_grad_(True))
         self.quaternion = self.init_quaternion + self.delta_quaternion
@@ -90,27 +79,56 @@ class Camera(nn.Module):
         self.world_view_transform = torch.cat((self.Rt, self.last_row), dim=0).t()
         self.learnable_fovx = nn.Parameter(torch.tensor(self.FoVx).cuda().requires_grad_(True))
         self.learnable_fovy = nn.Parameter(torch.tensor(self.FoVy).cuda().requires_grad_(True))
-        #self.projection_matrix = getProjectionMatrix(znear=self.znear, zfar=self.zfar, fovX=self.FoVx, fovY=self.FoVy).transpose(0,1).cuda()
         self.projection_matrix = getProjectionMatrix(znear=self.znear, zfar=self.zfar, fovX=self.learnable_fovx, fovY=self.learnable_fovy).transpose(0,1).cuda()
-        #print(self.projection_matrix)
-        #print(self.intrinsic_matrix)
-        #import pdb;pdb.set_trace()
         self.full_proj_transform = (self.world_view_transform.unsqueeze(0).bmm(self.projection_matrix.unsqueeze(0))).squeeze(0)
         self.camera_center = self.world_view_transform.inverse()[3, :3]
 
-    def reset_intrinsic(self, FoVx, FoVy, scale_pix=1.):
-        #self.projection_matrix = getProjectionMatrix(znear=self.znear, zfar=self.zfar, fovX=FoVx, fovY=FoVy).transpose(0,1).cuda()
+        if test_outside_rasterizer:
+            self.reset_intrinsic(
+                focal2fov(self.focal_x, int(2. * self.orig_fov_w)),
+                focal2fov(self.focal_y, int(2. * self.orig_fov_h)),
+                self.focal_x,
+                self.focal_y,
+                int(2. * self.original_image.shape[2]),
+                int(2. * self.original_image.shape[1])
+            )
+
+        if not test_outside_rasterizer:
+            if 'image' in ori_path:
+                if os.path.exists(ori_path.split('images')[0] + 'fish/images' + ori_path.split('images')[1]):
+                    image = Image.open(ori_path.split('images')[0] + 'fish/images' + ori_path.split('images')[1])
+                    orig_w, orig_h = image.size
+                    resized_image_rgb = PILtoTorch(image, (orig_w, orig_h))
+                    gt_image = resized_image_rgb[:3, ...]
+                    self.fish_gt_image = gt_image.clamp(0.0, 1.0)
+            else:
+                self.fish_gt_image = self.original_image
+
+        if outside_rasterizer:
+            self.reset_intrinsic(
+                focal2fov(self.focal_x, int(2. * self.orig_fov_w)),
+                focal2fov(self.focal_y, int(2. * self.orig_fov_h)),
+                self.focal_x,
+                self.focal_y,
+                int(1. * self.original_image.shape[2]),
+                int(1. * self.original_image.shape[1])
+            )
+
+
+    def reset_intrinsic(self, FoVx, FoVy, focal_x, focal_y, width, height):
+        self.FoVx = FoVx
+        self.FoVy = FoVy
         self.learnable_fovx = nn.Parameter(torch.tensor(FoVx).cuda().requires_grad_(True))
         self.learnable_fovy = nn.Parameter(torch.tensor(FoVy).cuda().requires_grad_(True))
         self.projection_matrix = getProjectionMatrix(znear=self.znear, zfar=self.zfar, fovX=self.learnable_fovx, fovY=self.learnable_fovy).transpose(0,1).cuda()
         self.full_proj_transform = (self.world_view_transform.unsqueeze(0).bmm(self.projection_matrix.unsqueeze(0))).squeeze(0)
 
-        self.image_width = scale_pix * self.image_width
-        self.image_height = scale_pix * self.image_height
-        self.intrinsic_matrix[0][0] = fov2focal(FoVx, self.image_width)
-        self.intrinsic_matrix[1][1] = fov2focal(FoVy, self.image_height)
-        self.intrinsic_matrix[0][2] = self.intrinsic_matrix[0][2] * scale_pix
-        self.intrinsic_matrix[1][2] = self.intrinsic_matrix[1][2] * scale_pix
+        self.image_width = width
+        self.image_height = height
+        self.intrinsic_matrix[0][0] = focal_x
+        self.intrinsic_matrix[1][1] = focal_y
+        self.intrinsic_matrix[0][2] = width / 2
+        self.intrinsic_matrix[1][2] = height / 2
 
     def perturb_fov(self, scale):
         self.learnable_fovx *= scale
@@ -130,7 +148,6 @@ class Camera(nn.Module):
         self.last_row = torch.tensor([[0., 0., 0., 1.]]).cuda()
         self.Rt = torch.cat((self.rotation, self.translation), dim=1)
         self.world_view_transform = torch.cat((self.Rt, self.last_row), dim=0).t()
-        #self.projection_matrix = getProjectionMatrix(znear=self.znear, zfar=self.zfar, fovX=self.FoVx, fovY=self.FoVy).transpose(0,1).cuda()
         self.projection_matrix = getProjectionMatrix(znear=self.znear, zfar=self.zfar, fovX=self.learnable_fovx, fovY=self.learnable_fovy).transpose(0,1).cuda()
         self.full_proj_transform = (self.world_view_transform.unsqueeze(0).bmm(self.projection_matrix.unsqueeze(0))).squeeze(0)
         self.camera_center = self.world_view_transform.inverse()[3, :3]
@@ -182,10 +199,6 @@ class Camera(nn.Module):
     @property
     def get_rays(self, noise_d=None, noise_o=None):
         rays_o, rays_d = get_rays(self.image_height, self.image_width, self.intrinsic_matrix, self.world_view_transform.transpose(0, 1).inverse())
-        #if noise_o:
-        #    rays_o = rays_o + noise_o
-        #if noise_d:
-        #    rays_d = rays_d + noise_d
         return rays_o, rays_d
 
     @property
@@ -212,17 +225,14 @@ class Camera(nn.Module):
         return self.projection_matrix
 
     def get_world_view_transform(self, global_rotation=torch.tensor([[1., 0, 0], [0, 1., 0], [0, 0, 1.]], device='cuda'), global_translation_scale=torch.tensor([1.], device='cuda')):
-        #self.rotation = self.lie.so3_to_SO3(self.so3) # we have error right here, but it doesn't matter
         self.quaternion = self.init_quaternion + self.delta_quaternion
         self.rotation = global_rotation @ quaternion_to_rotation_matrix(self.quaternion)
-        #self.delta_translation = torch.cat((self.delta_translation_xy, self.delta_translation_z))
         self.translation = self.init_translation + self.delta_translation
         self.Rt = torch.cat((self.rotation, self.translation), dim=1)
         self.world_view_transform = torch.cat((self.Rt, self.last_row), dim=0).t()
 
         # scaling far/close to the center
         c2w = self.world_view_transform.inverse()
-        #c2w[3, :3] = global_translation_scale * c2w[3, :3]
         mask = torch.ones_like(c2w)
         mask[3, :3] = global_translation_scale
         self.world_view_transform = (c2w * mask).inverse()

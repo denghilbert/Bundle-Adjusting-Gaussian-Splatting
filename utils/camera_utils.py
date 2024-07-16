@@ -18,7 +18,7 @@ import json
 WARNED = False
 
 
-def loadCam(args, id, cam_info, resolution_scale):
+def loadCam(args, id, cam_info, resolution_scale, outside_rasterizer):
     orig_w, orig_h = cam_info.image.size
 
     if args.resolution in [1, 2, 4, 8]:
@@ -39,6 +39,8 @@ def loadCam(args, id, cam_info, resolution_scale):
 
         scale = float(global_down) * float(resolution_scale)
         resolution = (int(orig_w / scale), int(orig_h / scale))
+        cam_info.intrinsic_matrix[0, 2] = resolution[0] / 2
+        cam_info.intrinsic_matrix[1, 2] = resolution[1] / 2
 
     resized_image_rgb = PILtoTorch(cam_info.image, resolution)
 
@@ -48,18 +50,26 @@ def loadCam(args, id, cam_info, resolution_scale):
     if resized_image_rgb.shape[1] == 4:
         loaded_mask = resized_image_rgb[3:4, ...]
 
-    return Camera(colmap_id=cam_info.uid, R=cam_info.R, T=cam_info.T, intrinsic_matrix=cam_info.intrinsic_matrix,
-                  FoVx=cam_info.FovX, FoVy=cam_info.FovY,
-                  image=gt_image, gt_alpha_mask=loaded_mask,
-                  image_name=cam_info.image_name, uid=id,
-                  data_device=args.data_device, depth=cam_info.depth)
+    return Camera(
+        colmap_id=cam_info.uid, R=cam_info.R, T=cam_info.T,
+        intrinsic_matrix=cam_info.intrinsic_matrix,
+        FoVx=cam_info.FovX, FoVy=cam_info.FovY,
+        focal_length_x=cam_info.focal_length_x, focal_length_y=cam_info.focal_length_y,
+        image=gt_image, gt_alpha_mask=loaded_mask,
+        image_name=cam_info.image_name, uid=id,
+        data_device=args.data_device, depth=cam_info.depth,
+        ori_path=cam_info.image_path,
+        outside_rasterizer=outside_rasterizer,
+        orig_fov_w=orig_w,
+        orig_fov_h=orig_h
+    )
 
 
-def cameraList_from_camInfos(cam_infos, resolution_scale, args):
+def cameraList_from_camInfos(cam_infos, resolution_scale, args, outside_rasterizer):
     camera_list = []
 
     for id, c in enumerate(cam_infos):
-        camera_list.append(loadCam(args, id, c, resolution_scale))
+        camera_list.append(loadCam(args, id, c, resolution_scale, outside_rasterizer))
 
     return camera_list
 
