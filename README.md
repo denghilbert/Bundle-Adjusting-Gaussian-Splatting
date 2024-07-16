@@ -29,6 +29,7 @@ Our method is based on Conda package and environment management:
 
 ```shell
 conda env create --file environment.yml
+conda activate bags
 ```
 
 Any change of submodule can be re-installed with:
