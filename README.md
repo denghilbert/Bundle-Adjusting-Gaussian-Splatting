@@ -32,11 +32,11 @@ conda env create --file environment.yml
 conda activate bags
 ```
 
-Any change of submodule can be re-installed with:
+Any change of submodule can be re-installed. Say you make some changes in 3dgs-pose, you can re-install with:
 
 ```shell
-pip install 3dgs-pose
-pip install simple-knn
+cd 3dgs-pose
+pip install .
 ```
 
 ***
