@@ -21,7 +21,7 @@ from utils.general_utils import PILtoTorch
 
 
 class Camera(nn.Module):
-    def __init__(self, colmap_id, R, T, intrinsic_matrix, FoVx, FoVy, focal_length_x, focal_length_y, image, gt_alpha_mask, image_name, uid, trans=np.array([0.0, 0.0, 0.0]), scale=1.0, data_device = "cuda", depth=None, ori_path=None, outside_rasterizer=False, test_outside_rasterizer=False, orig_fov_w=0, orig_fov_h=0):
+    def __init__(self, colmap_id, R, T, intrinsic_matrix, FoVx, FoVy, focal_length_x, focal_length_y, image, gt_alpha_mask, image_name, uid, trans=np.array([0.0, 0.0, 0.0]), scale=1.0, data_device = "cuda", depth=None, ori_path=None, outside_rasterizer=False, test_outside_rasterizer=False, orig_fov_w=0, orig_fov_h=0, flow_scale=1.):
         super(Camera, self).__init__()
         assert orig_fov_w !=0 and orig_fov_h !=0
         self.orig_fov_w = orig_fov_w
@@ -142,10 +142,14 @@ class Camera(nn.Module):
                 int(1. * self.fish_gt_image.shape[1])
             )
             self.save4flow = self.projection_matrix
-            pix_fov_w = 10 * self.orig_fov_w
-            pix_fov_h = 10 * self.orig_fov_h
-            res_w = int(10. * self.original_image.shape[2])
-            res_h = int(10. * self.original_image.shape[1])
+            #pix_fov_w = 7.5 * self.orig_fov_w
+            #pix_fov_h = 7.5 * self.orig_fov_h
+            pix_fov_w = int(self.fish_gt_image.shape[2] * flow_scale)
+            pix_fov_h = int(self.fish_gt_image.shape[1] * flow_scale)
+            #res_w = int(5. * self.original_image.shape[2])
+            #res_h = int(5. * self.original_image.shape[1])
+            res_w = int(self.fish_gt_image.shape[2] * flow_scale)
+            res_h = int(self.fish_gt_image.shape[1] * flow_scale)
             #print(self.FoVx)
             #print(self.projection_matrix)
             #print(self.image_width)
@@ -154,8 +158,10 @@ class Camera(nn.Module):
                 focal2fov(self.focal_y, pix_fov_h),
                 self.focal_x,
                 self.focal_y,
-                res_w if res_w < 1600 else 1600,
-                res_h if res_h < 1600 else 1600
+                res_w,
+                res_h
+                #res_w if res_w < 1600 else 1600,
+                #res_h if res_h < 1600 else 1600
             )
         #print(self.FoVx)
         #print(self.projection_matrix)
