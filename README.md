@@ -31,7 +31,7 @@ Our method is based on Conda package and environment management:
 conda create -n bags python=3.10
 conda activate bags
 pip install torch==2.0.0 torchvision==0.15.1 torchaudio==2.0.1 --index-url https://download.pytorch.org/whl/cu118
-pip install tqdm plyfile imageio easydict FrEIA wandb matplotlib ipdb termcolor visdom selenium
+pip install tqdm plyfile imageio easydict FrEIA wandb matplotlib ipdb termcolor visdom selenium pywavefront
 
 cd 3dgs-pose
 pip install .
