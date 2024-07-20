@@ -28,15 +28,17 @@ The installation of SIBR viewers can follow [original 3dgs repo](https://github.
 Our method is based on Conda package and environment management:
 
 ```shell
-conda env create --file environment.yml
-conda activate bags
-```
+conda create -n bund python=3.10
+conda activate bund
+pip install torch==2.0.0 torchvision==0.15.1 torchaudio==2.0.1 --index-url https://download.pytorch.org/whl/cu118
+pip install tqdm plyfile imageio easydict FrEIA wandb matplotlib ipdb termcolor visdom selenium
 
-Any change of submodule can be re-installed. Say you make some changes in 3dgs-pose, you can re-install with:
-
-```shell
 cd 3dgs-pose
 pip install .
+cd ..
+cd simple-knn
+pip install simple-knn
+cd ..
 ```
 
 ***
