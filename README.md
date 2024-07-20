@@ -28,8 +28,8 @@ The installation of SIBR viewers can follow [original 3dgs repo](https://github.
 Our method is based on Conda package and environment management:
 
 ```shell
-conda create -n bund python=3.10
-conda activate bund
+conda create -n bags python=3.10
+conda activate bags
 pip install torch==2.0.0 torchvision==0.15.1 torchaudio==2.0.1 --index-url https://download.pytorch.org/whl/cu118
 pip install tqdm plyfile imageio easydict FrEIA wandb matplotlib ipdb termcolor visdom selenium
 
