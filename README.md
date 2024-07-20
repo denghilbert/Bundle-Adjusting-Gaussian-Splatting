@@ -37,7 +37,7 @@ cd 3dgs-pose
 pip install .
 cd ..
 cd simple-knn
-pip install simple-knn
+pip install .
 cd ..
 ```
 
