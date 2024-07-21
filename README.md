@@ -43,6 +43,8 @@ cd ..
 
 ***
 
+For quick start, we provide [example datasets](https://drive.google.com/file/d/118bDUMFfdths00UWQL-Xs5q-BpdVVsxA/view?usp=sharing).
+
 ## Running
 
 ### Intrinsic and Extrinsic Optimization
