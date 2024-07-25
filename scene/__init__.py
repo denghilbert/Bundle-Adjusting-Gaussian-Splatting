@@ -81,12 +81,12 @@ class Scene:
 
         if os.path.exists(os.path.join(args.source_path, "sparse")):
             scene_info = sceneLoadTypeCallbacks["Colmap"](args.source_path, args.images, args.eval)
-        elif os.path.exists(os.path.join(args.source_path, "transforms_train.json")):
-            print("Found transforms_train.json file, assuming Blender data set!")
-            scene_info = sceneLoadTypeCallbacks["Blender"](args.source_path, args.white_background, args.eval)
         elif os.path.exists(os.path.join(args.source_path, "cameras.json")):
             print("Found cameras.json file, assuming Metashape data set!")
             scene_info = sceneLoadTypeCallbacks["Metashape"](args.source_path, args.white_background, args.eval)
+        elif os.path.exists(os.path.join(args.source_path, "transforms_train.json")):
+            print("Found transforms_train.json file, assuming Blender data set!")
+            scene_info = sceneLoadTypeCallbacks["Blender"](args.source_path, args.white_background, args.eval)
         elif os.path.exists(os.path.join(args.source_path, "transforms_train_diffusion.json")):
             print("Found transforms_train_diffusion.json file!")
             scene_info = sceneLoadTypeCallbacks["Diffusion"](args.source_path, args.white_background, args.eval, extension=".jpg")

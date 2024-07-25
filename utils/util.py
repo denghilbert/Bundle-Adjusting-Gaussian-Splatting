@@ -10,6 +10,12 @@ import termcolor
 import socket
 import contextlib
 from easydict import EasyDict as edict
+from argparse import ArgumentParser, Namespace
+try:
+    from torch.utils.tensorboard import SummaryWriter
+    TENSORBOARD_FOUND = True
+except ImportError:
+    TENSORBOARD_FOUND = False
 
 # convert to colored strings
 def red(message,**kwargs): return termcolor.colored(str(message),color="red",attrs=[k for k,v in kwargs.items() if v is True])
@@ -188,3 +194,68 @@ def colorcode_to_number(code):
     ords = [n-48 if n<58 else n-87 for n in ords]
     rgb = (ords[0]*16+ords[1],ords[2]*16+ords[3],ords[4]*16+ords[5])
     return rgb
+
+
+def prepare_output_and_logger(args):
+    if not args.model_path:
+        if os.getenv('OAR_JOB_ID'):
+            unique_str=os.getenv('OAR_JOB_ID')
+        else:
+            unique_str = str(uuid.uuid4())
+        args.model_path = os.path.join("./output/", unique_str[0:10])
+
+    # Set up output folder
+    print("Output folder: {}".format(args.model_path))
+    os.makedirs(args.model_path, exist_ok = True)
+    with open(os.path.join(args.model_path, "cfg_args"), 'w') as cfg_log_f:
+        cfg_log_f.write(str(Namespace(**vars(args))))
+
+    # Create Tensorboard writer
+    tb_writer = None
+    if TENSORBOARD_FOUND:
+        tb_writer = SummaryWriter(args.model_path)
+    else:
+        print("Tensorboard not available: not logging progress")
+    return tb_writer
+
+
+def init_wandb(cfg, wandb_id=None, project="", run_name=None, mode="online", resume=False, use_group=False, set_group=None):
+    r"""Initialize Weights & Biases (wandb) logger.
+
+    Args:
+        cfg (obj): Global configuration.
+        wandb_id (str): A unique ID for this run, used for resuming.
+        project (str): The name of the project where you're sending the new run.
+            If the project is not specified, the run is put in an "Uncategorized" project.
+        run_name (str): name for each wandb run (useful for logging changes)
+        mode (str): online/offline/disabled
+    """
+    print('Initialize wandb')
+    if not wandb_id:
+        wandb_path = os.path.join(cfg.model_path, "wandb_id.txt")
+        if resume and os.path.exists(wandb_path):
+            with open(wandb_path, "r") as f:
+                wandb_id = f.read()
+        else:
+            wandb_id = wandb.util.generate_id()
+            with open(wandb_path, "w+") as f:
+                f.write(wandb_id)
+    if use_group:
+        group, name = cfg.model_path.split("/")[-2:]
+        group = set_group
+    else:
+        group, name = None, os.path.basename(cfg.model_path)
+        group = set_group
+
+    if run_name is not None:
+        name = run_name
+    wandb.init(id=wandb_id,
+               project=project,
+               config=vars(cfg),
+               group=group,
+               name=name,
+               dir=cfg.model_path,
+               resume=resume,
+               settings=wandb.Settings(start_method="fork"),
+               mode=mode)
+    wandb.config.update({'dataset': cfg.source_path})

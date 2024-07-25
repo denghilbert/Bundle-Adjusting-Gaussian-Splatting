@@ -5,6 +5,8 @@ import numpy as np
 import os
 from scene.dataset_readers import read_intrinsics_binary
 from tqdm import tqdm
+import matplotlib.pyplot as plt
+import json
 
 def zero_weights(m):
     if isinstance(m, nn.Linear):
@@ -74,7 +76,7 @@ def center_crop(tensor, target_height, target_width):
 
     return cropped_tensor
 
-def init_from_colmap(scene, dataset, optimizer_lens_net, lens_net, scheduler_lens_net, control_point_sample_scale, flow_scale):
+def init_from_colmap(scene, dataset, optimizer_lens_net, lens_net, scheduler_lens_net, control_point_sample_scale, flow_scale, resume_training=None):
     viewpoint_cam = scene.getTrainCameras().copy()[0]
     width = viewpoint_cam.image_width
     height = viewpoint_cam.image_height
@@ -83,8 +85,8 @@ def init_from_colmap(scene, dataset, optimizer_lens_net, lens_net, scheduler_len
     K = viewpoint_cam.get_K
     width = viewpoint_cam.fish_gt_image.shape[2]
     height = viewpoint_cam.fish_gt_image.shape[1]
-    width = int(width * 2)
-    height = int(height * 2)
+    width = int(width * 4)
+    height = int(height * 4)
     K[0, 2] = width / 2
     K[1, 2] = height / 2
     i, j = np.meshgrid(
@@ -118,12 +120,26 @@ def init_from_colmap(scene, dataset, optimizer_lens_net, lens_net, scheduler_len
             if 'FISHEYE' in cam_intrinsics[key].model:
                 coeff = cam_intrinsics[key].params[-4:].tolist()
                 break
+    elif os.path.exists(os.path.join(dataset.source_path, 'cameras.json')):
+        with open(os.path.join(dataset.source_path, 'cameras.json')) as json_file:
+            contents = json.load(json_file)
+            coeff = contents['KRT'][-1]['distortion']
     if len(coeff) == 4:
         ref_points = ref_points * (inv_r * (theta + coeff[0] * theta**3 + coeff[1] * theta**5 + coeff[2] * theta**7 + coeff[3] * theta**9))
     elif len(coeff) == 2:
         ref_points = ref_points * (1 + coeff[0] * r**2 + coeff[1] * r**4)
     elif len(coeff) == 3:
         ref_points = ref_points * (1 + coeff[0] * r**2 + coeff[1] * r**4 + coeff[2] * r**6)
+    elif len(coeff) == 8:
+        x_n, y_n = ref_points[..., 0], ref_points[..., 1]
+        p1, p2 = coeff[5], coeff[6]
+        r_squared = x_n**2 + y_n**2
+        tangential_distortion = torch.stack([
+            2 * p1 * x_n * y_n + p2 * (r_squared + 2 * x_n**2),
+            p1 * (r_squared + 2 * y_n**2) + 2 * p2 * x_n * y_n
+        ], dim=-1)
+        #ref_points = ref_points * (inv_r * (theta + coeff[0] * theta**3 + coeff[1] * theta**5 + coeff[2] * theta**7)) + tangential_distortion
+        ref_points = ref_points * (inv_r * (theta + coeff[0] * theta**3 + coeff[1] * theta**5 + coeff[2] * theta**7))
     else:
         ref_points = ref_points
     inf_mask = torch.isinf(ref_points)
@@ -140,8 +156,8 @@ def init_from_colmap(scene, dataset, optimizer_lens_net, lens_net, scheduler_len
     K = viewpoint_cam.get_K
     width = viewpoint_cam.fish_gt_image.shape[2]
     height = viewpoint_cam.fish_gt_image.shape[1]
-    width = int(width * 2)
-    height = int(height * 2)
+    width = int(width * 4)
+    height = int(height * 4)
     K[0, 2] = width / 2
     K[1, 2] = height / 2
     i, j = np.meshgrid(
@@ -160,26 +176,39 @@ def init_from_colmap(scene, dataset, optimizer_lens_net, lens_net, scheduler_len
     P_view_insidelens_direction_hom = (torch.inverse(K) @ P_sensor_hom.T).T
     P_view_insidelens_direction = dehomogenize(P_view_insidelens_direction_hom)
 
-    progress_bar_ires = tqdm(range(0, 2000), desc="Init Iresnet")
-    for i in range(2000):
-        P_view_outsidelens_direction = lens_net.forward(P_view_insidelens_direction, sensor_to_frustum=True)
-        control_points = homogenize(P_view_outsidelens_direction)
-        control_points = control_points.reshape((P_sensor.shape[0], P_sensor.shape[1], 3))[:, :, :2]
-        inf_mask = torch.isinf(control_points)
-        nan_mask = torch.isnan(control_points)
-        control_points[inf_mask] = 0
-        control_points[nan_mask] = 0
-        loss = ((control_points - ref_points)**2).mean()
-        progress_bar_ires.set_postfix(loss=loss.item())
-        progress_bar_ires.update(1)
-        loss.backward()
-        optimizer_lens_net.step()
-        optimizer_lens_net.zero_grad(set_to_none = True)
-        scheduler_lens_net.step()
-    progress_bar_ires.close()
+    if resume_training == None:
+        progress_bar_ires = tqdm(range(0, 20000), desc="Init Iresnet")
+        for i in range(20000):
+            P_view_outsidelens_direction = lens_net.forward(P_view_insidelens_direction, sensor_to_frustum=True)
+            control_points = homogenize(P_view_outsidelens_direction)
+            control_points = control_points.reshape((P_sensor.shape[0], P_sensor.shape[1], 3))[:, :, :2]
+            inf_mask = torch.isinf(control_points)
+            nan_mask = torch.isnan(control_points)
+            control_points[inf_mask] = 0
+            control_points[nan_mask] = 0
+            loss = ((control_points - ref_points)**2).mean()
+            progress_bar_ires.set_postfix(loss=loss.item())
+            progress_bar_ires.update(1)
+            loss.backward()
+            optimizer_lens_net.step()
+            optimizer_lens_net.zero_grad(set_to_none = True)
+            scheduler_lens_net.step()
+
+            if i % 4999 == 0:
+                control_points_np = control_points.cpu().detach().numpy()
+                ref_points_np = ref_points.cpu().detach().numpy()
+                plt.figure(figsize=(10, 6))
+                for s in range(control_points_np.shape[0]):
+                    plt.scatter(control_points_np[s, :, 0], control_points_np[s, :, 1], color='blue', label='Control Points' if s == 0 else "")
+                    plt.scatter(ref_points_np[s, :, 0], ref_points_np[s, :, 1], color='red', label='Reference Points' if s == 0 else "")
+                plt.savefig(f'/home/yd428/playaround_gaussian_platting/output/test/loss_{i}.png')
+                plt.close()
+
+        progress_bar_ires.close()
 
     for param_group in optimizer_lens_net.param_groups:
-        param_group['lr'] = 1e-6
+        param_group['lr'] = 1e-7
+    print(param_group['lr'])
 
     width = viewpoint_cam.image_width
     height = viewpoint_cam.image_height
@@ -209,3 +238,39 @@ def init_from_colmap(scene, dataset, optimizer_lens_net, lens_net, scheduler_len
     P_view_insidelens_direction = dehomogenize(P_view_insidelens_direction_hom)
 
     return P_sensor, P_view_insidelens_direction
+
+def apply_distortion(lens_net, P_view_insidelens_direction, P_sensor, viewpoint_cam, image, apply2gt=False, flow_scale=None):
+    P_view_outsidelens_direction = lens_net.forward(P_view_insidelens_direction, sensor_to_frustum=apply2gt)
+    camera_directions_w_lens = homogenize(P_view_outsidelens_direction)
+    control_points = camera_directions_w_lens.reshape((P_sensor.shape[0], P_sensor.shape[1], 3))[:, :, :2]
+    if apply2gt:
+        projection_matrix = viewpoint_cam.flow4gt
+    else:
+        projection_matrix = viewpoint_cam.projection_matrix
+    flow = control_points @ projection_matrix[:2, :2]
+
+    if apply2gt:
+        flow = nn.functional.interpolate(flow.permute(2, 0, 1).unsqueeze(0), size=(viewpoint_cam.image_height, viewpoint_cam.image_width), mode='bilinear', align_corners=False).permute(0, 2, 3, 1).squeeze(0)
+        gt_image = F.grid_sample(
+            viewpoint_cam.fish_gt_image.cuda().unsqueeze(0),
+            flow.unsqueeze(0),
+            mode="bilinear",
+            padding_mode="zeros",
+            align_corners=True,
+        ).squeeze(0)
+        mask = (~((image[0]==0.0000) & (image[1]==0.0000)).unsqueeze(0)).float()
+        return gt_image, mask, flow
+    else:
+        flow = nn.functional.interpolate(flow.permute(2, 0, 1).unsqueeze(0), size=(int(viewpoint_cam.fish_gt_image.shape[1]*flow_scale), int(viewpoint_cam.fish_gt_image.shape[2]*flow_scale)), mode='bilinear', align_corners=False).permute(0, 2, 3, 1).squeeze(0)
+        image = F.grid_sample(
+            image.unsqueeze(0),
+            flow.unsqueeze(0),
+            mode="bilinear",
+            padding_mode="zeros",
+            align_corners=True,
+        )
+        image = center_crop(image, viewpoint_cam.fish_gt_image.shape[1], viewpoint_cam.fish_gt_image.shape[2]).squeeze(0)
+        mask = (~((image[0]==0.0000) & (image[1]==0.0000)).unsqueeze(0)).float()
+        return image, mask, flow
+
+

@@ -106,8 +106,17 @@ class Camera(nn.Module):
 
         if outside_rasterizer:
             self.reset_intrinsic(
-                focal2fov(self.focal_x, int(2. * self.orig_fov_w)),
-                focal2fov(self.focal_y, int(2. * self.orig_fov_h)),
+                focal2fov(self.focal_x, self.fish_gt_image.shape[2]),
+                focal2fov(self.focal_y, self.fish_gt_image.shape[1]),
+                self.focal_x,
+                self.focal_y,
+                int(1. * self.fish_gt_image.shape[2]),
+                int(1. * self.fish_gt_image.shape[1])
+            )
+            self.flow4gt = self.projection_matrix
+            self.reset_intrinsic(
+                focal2fov(self.focal_x, int(1.5 * self.orig_fov_w)),
+                focal2fov(self.focal_y, int(1.5 * self.orig_fov_h)),
                 self.focal_x,
                 self.focal_y,
                 int(1. * self.original_image.shape[2]),

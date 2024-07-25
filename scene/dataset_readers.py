@@ -24,6 +24,38 @@ from pathlib import Path
 from plyfile import PlyData, PlyElement
 from utils.sh_utils import SH2RGB
 from scene.gaussian_model import BasicPointCloud
+import trimesh
+
+def load_mesh(path2obj, path2mtl, path2texture):
+    Image.MAX_IMAGE_PIXELS = None
+    # Load the mesh using trimesh
+    mesh = trimesh.load(path2obj, force='mesh')
+
+    # Extract vertices
+    vertices = mesh.vertices
+
+    # Extract texture coordinates
+    texture_coords = mesh.visual.uv
+
+    # Load the texture image
+    texture_image = Image.open(path2texture)
+    texture_pixels = np.array(texture_image)
+
+    def get_rgb_from_uv(uv):
+        u, v = uv
+        h, w, _ = texture_pixels.shape
+        x = int(u * (w - 1))
+        y = int((1 - v) * (h - 1))
+        return texture_pixels[y, x]
+
+    # Map RGB values to vertices using texture coordinates
+    vertex_colors = np.array([get_rgb_from_uv(uv) for uv in texture_coords])
+
+    # Separate XYZ coordinates and RGB values
+    xyz = vertices
+    rgb = vertex_colors
+
+    return xyz, rgb
 
 class CameraInfo(NamedTuple):
     uid: int
@@ -323,10 +355,10 @@ def readCamerasFromVRNeRF(path, transformsfile, white_background, extension=".jp
                 [0., fov2focal(FovY, image.size[1]), image.size[1] * 0.5],
                 [0., 0., 1.]
             ], dtype=np.float32)
-            #import pdb;pdb.set_trace()
+            focal_length_x = intrinsic_matrix[0][0].astype(np.float64)
+            focal_length_y = intrinsic_matrix[1][1].astype(np.float64)
 
-            cam_infos.append(CameraInfo(uid=idx, R=R, T=T, FovY=FovY, FovX=FovX, image=image, intrinsic_matrix=intrinsic_matrix,
-                            image_path=image_path, image_name=image_name, width=image.size[0], height=image.size[1]))
+            cam_infos.append(CameraInfo(uid=idx, R=R, T=T, FovY=FovY, FovX=FovX, image=image, intrinsic_matrix=intrinsic_matrix, focal_length_x=focal_length_x, focal_length_y=focal_length_y, image_path=image_path, image_name=image_name, width=image.size[0], height=image.size[1]))
 
     return cam_infos
 
@@ -389,8 +421,11 @@ def readCamerasFromTransforms(path, transformsfile, white_background, extension=
 def readMetashapeInfo(path, white_background, eval, extension=".png"):
     print("Reading Training Transforms")
     train_cam_infos = readCamerasFromVRNeRF(path, "cameras.json", white_background, extension)
+    print(f"Numer of training cameras: {len(train_cam_infos)}")
     print("Reading Test Transforms")
-    test_cam_infos = readCamerasFromVRNeRF(path, "cameras.json", white_background, extension)[:20]
+    test_cam_infos = train_cam_infos.copy()
+    random.shuffle(test_cam_infos)
+    test_cam_infos = test_cam_infos[:40]
 
     if not eval:
         train_cam_infos.extend(test_cam_infos)
@@ -405,11 +440,13 @@ def readMetashapeInfo(path, white_background, eval, extension=".png"):
         print(f"Generating random point cloud ({num_pts})...")
 
         # We create random points inside the bounds of the synthetic Blender scenes
-        xyz = np.random.random((num_pts, 3)) * 2.6 - 1.3
-        shs = np.random.random((num_pts, 3)) / 255.0
-        pcd = BasicPointCloud(points=xyz, colors=SH2RGB(shs), normals=np.zeros((num_pts, 3)))
-
-        storePly(ply_path, xyz, SH2RGB(shs) * 255)
+        #xyz = np.random.random((num_pts, 3)) * 2.6 - 1.3
+        #shs = np.random.random((num_pts, 3)) / 255.0
+        #pcd = BasicPointCloud(points=xyz, colors=SH2RGB(shs), normals=np.zeros((num_pts, 3)))
+        #storePly(ply_path, xyz, SH2RGB(shs) * 255)
+        xyz, rgb = load_mesh(os.path.join(path, 'mesh.obj'), os.path.join(path, 'mesh.mtl'), os.path.join(path, 'mesh.jpg'))
+        pcd = BasicPointCloud(points=xyz, colors=rgb, normals=np.zeros((num_pts, 3)))
+        storePly(ply_path, xyz, rgb)
     try:
         pcd = fetchPly(ply_path)
     except:
