@@ -142,6 +142,7 @@ def init_from_colmap(scene, dataset, optimizer_lens_net, lens_net, scheduler_len
         ref_points = ref_points * (inv_r * (theta + coeff[0] * theta**3 + coeff[1] * theta**5 + coeff[2] * theta**7))
     else:
         ref_points = ref_points
+    print(f"using coeff: {coeff}")
     inf_mask = torch.isinf(ref_points)
     nan_mask = torch.isnan(ref_points)
     ref_points[inf_mask] = 0
@@ -177,8 +178,8 @@ def init_from_colmap(scene, dataset, optimizer_lens_net, lens_net, scheduler_len
     P_view_insidelens_direction = dehomogenize(P_view_insidelens_direction_hom)
 
     if resume_training == None:
-        progress_bar_ires = tqdm(range(0, 20000), desc="Init Iresnet")
-        for i in range(20000):
+        progress_bar_ires = tqdm(range(0, 10000), desc="Init Iresnet")
+        for i in range(10000):
             P_view_outsidelens_direction = lens_net.forward(P_view_insidelens_direction, sensor_to_frustum=True)
             control_points = homogenize(P_view_outsidelens_direction)
             control_points = control_points.reshape((P_sensor.shape[0], P_sensor.shape[1], 3))[:, :, :2]
@@ -258,7 +259,7 @@ def apply_distortion(lens_net, P_view_insidelens_direction, P_sensor, viewpoint_
             padding_mode="zeros",
             align_corners=True,
         ).squeeze(0)
-        mask = (~((image[0]==0.0000) & (image[1]==0.0000)).unsqueeze(0)).float()
+        mask = (~((gt_image[0]<0.00001) & (gt_image[1]<0.00001)).unsqueeze(0)).float()
         return gt_image, mask, flow
     else:
         flow = nn.functional.interpolate(flow.permute(2, 0, 1).unsqueeze(0), size=(int(viewpoint_cam.fish_gt_image.shape[1]*flow_scale), int(viewpoint_cam.fish_gt_image.shape[2]*flow_scale)), mode='bilinear', align_corners=False).permute(0, 2, 3, 1).squeeze(0)

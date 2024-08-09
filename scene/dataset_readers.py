@@ -326,8 +326,11 @@ def readCamerasFromVRNeRF(path, transformsfile, white_background, extension=".jp
 
         frames = contents['KRT']
 
+        #random.shuffle(frames)
+        #frames = frames[:10]
         for idx, frame in enumerate(frames):
             cam_name = os.path.join(path, frame["cameraId"] + '.jpg')
+            if '0_DSC' in cam_name or '0_REN' in cam_name: continue
 
             intrinsic_matrix = np.array(frame['K']).transpose()
             FovX = focal2fov(intrinsic_matrix[0][0], intrinsic_matrix[0][2] * 2)
@@ -445,7 +448,10 @@ def readMetashapeInfo(path, white_background, eval, extension=".png"):
         #pcd = BasicPointCloud(points=xyz, colors=SH2RGB(shs), normals=np.zeros((num_pts, 3)))
         #storePly(ply_path, xyz, SH2RGB(shs) * 255)
         xyz, rgb = load_mesh(os.path.join(path, 'mesh.obj'), os.path.join(path, 'mesh.mtl'), os.path.join(path, 'mesh.jpg'))
-        pcd = BasicPointCloud(points=xyz, colors=rgb, normals=np.zeros((num_pts, 3)))
+        #indices = np.random.choice(xyz.shape[0], size=100000, replace=False)
+        #xyz = xyz[indices]
+        #rgb = rgb[indices]
+        pcd = BasicPointCloud(points=xyz, colors=rgb, normals=np.zeros((len(xyz), 3)))
         storePly(ply_path, xyz, rgb)
     try:
         pcd = fetchPly(ply_path)
