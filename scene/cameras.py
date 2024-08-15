@@ -94,13 +94,19 @@ class Camera(nn.Module):
             )
 
         if not test_outside_rasterizer:
-            if 'image' in ori_path:
+            if 'image' in ori_path and 'indoor' not in ori_path:
                 if os.path.exists(ori_path.split('images')[0] + 'fish/images' + ori_path.split('images')[1]):
                     image = Image.open(ori_path.split('images')[0] + 'fish/images' + ori_path.split('images')[1])
                     orig_w, orig_h = image.size
                     resized_image_rgb = PILtoTorch(image, (orig_w, orig_h))
                     gt_image = resized_image_rgb[:3, ...]
                     self.fish_gt_image = gt_image.clamp(0.0, 1.0)
+            elif 'indoor' in ori_path:
+                image = Image.open(ori_path.split('images')[0] + 'fish/images/' + ori_path.split('images')[1].split('indoor_')[1])
+                orig_w, orig_h = image.size
+                resized_image_rgb = PILtoTorch(image, (orig_w, orig_h))
+                gt_image = resized_image_rgb[:3, ...]
+                self.fish_gt_image = gt_image.clamp(0.0, 1.0)
             else:
                 self.fish_gt_image = self.original_image
 

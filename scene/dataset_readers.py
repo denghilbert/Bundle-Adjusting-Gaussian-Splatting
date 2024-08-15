@@ -229,10 +229,9 @@ def readColmapSceneInfo(path, images, eval, llffhold=8):
         cam_extrinsics = read_extrinsics_text(cameras_extrinsic_file)
         cam_intrinsics = read_intrinsics_text(cameras_intrinsic_file)
 
-    #if len(cam_extrinsics )> 500:
-    #    items = list(cam_extrinsics.items())
-    #    items = items[:500]
-    #    cam_extrinsics = dict(items)
+    #items = list(cam_extrinsics.items())
+    #items = items[:10]
+    #cam_extrinsics = dict(items)
 
     reading_dir = "images" if images == None else images
     cam_infos_unsorted = readColmapCameras(cam_extrinsics=cam_extrinsics, cam_intrinsics=cam_intrinsics, images_folder=os.path.join(path, reading_dir))
@@ -326,10 +325,16 @@ def readCamerasFromVRNeRF(path, transformsfile, white_background, extension=".jp
 
         frames = contents['KRT']
 
+        #random.shuffle(frames)
+        #frames = frames[:40]
         for idx, frame in enumerate(frames):
             cam_name = os.path.join(path, frame["cameraId"] + '.jpg')
+            #if '0_REN' in cam_name: continue
 
             intrinsic_matrix = np.array(frame['K']).transpose()
+            #if '2_REN' in cam_name:
+            #    intrinsic_matrix[0][0] = 2877.69784173
+            #    intrinsic_matrix[1][1] = 2877.69784173
             FovX = focal2fov(intrinsic_matrix[0][0], intrinsic_matrix[0][2] * 2)
             FovY = focal2fov(intrinsic_matrix[1][1], intrinsic_matrix[1][2] * 2)
             w2c = np.array(frame['T']).transpose()
@@ -425,7 +430,7 @@ def readMetashapeInfo(path, white_background, eval, extension=".png"):
     print("Reading Test Transforms")
     test_cam_infos = train_cam_infos.copy()
     random.shuffle(test_cam_infos)
-    test_cam_infos = test_cam_infos[:40]
+    test_cam_infos = test_cam_infos[:50]
 
     if not eval:
         train_cam_infos.extend(test_cam_infos)
@@ -445,7 +450,10 @@ def readMetashapeInfo(path, white_background, eval, extension=".png"):
         #pcd = BasicPointCloud(points=xyz, colors=SH2RGB(shs), normals=np.zeros((num_pts, 3)))
         #storePly(ply_path, xyz, SH2RGB(shs) * 255)
         xyz, rgb = load_mesh(os.path.join(path, 'mesh.obj'), os.path.join(path, 'mesh.mtl'), os.path.join(path, 'mesh.jpg'))
-        pcd = BasicPointCloud(points=xyz, colors=rgb, normals=np.zeros((num_pts, 3)))
+        #indices = np.random.choice(xyz.shape[0], size=100000, replace=False)
+        #xyz = xyz[indices]
+        #rgb = rgb[indices]
+        pcd = BasicPointCloud(points=xyz, colors=rgb, normals=np.zeros((len(xyz), 3)))
         storePly(ply_path, xyz, rgb)
     try:
         pcd = fetchPly(ply_path)
