@@ -215,6 +215,7 @@ def apply_distortion(lens_net, P_view_insidelens_direction, P_sensor, viewpoint_
     P_view_outsidelens_direction = lens_net.forward(P_view_insidelens_direction, sensor_to_frustum=apply2gt)
     camera_directions_w_lens = homogenize(P_view_outsidelens_direction)
     control_points = camera_directions_w_lens.reshape((P_sensor.shape[0], P_sensor.shape[1], 3))[:, :, :2]
+
     if apply2gt:
         projection_matrix = viewpoint_cam.flow4gt
     else:
@@ -233,7 +234,7 @@ def apply_distortion(lens_net, P_view_insidelens_direction, P_sensor, viewpoint_
         mask = (~((gt_image[0]<0.00001) & (gt_image[1]<0.00001)).unsqueeze(0)).float()
         return gt_image, mask, flow
     else:
-        flow = nn.functional.interpolate(flow.permute(2, 0, 1).unsqueeze(0), size=(int(viewpoint_cam.fish_gt_image.shape[1]*flow_scale), int(viewpoint_cam.fish_gt_image.shape[2]*flow_scale)), mode='bilinear', align_corners=False).permute(0, 2, 3, 1).squeeze(0)
+        flow = nn.functional.interpolate(flow.permute(2, 0, 1).unsqueeze(0), size=(int(viewpoint_cam.fish_gt_image.shape[1]*flow_scale[0]), int(viewpoint_cam.fish_gt_image.shape[2]*flow_scale[1])), mode='bilinear', align_corners=False).permute(0, 2, 3, 1).squeeze(0)
         image = F.grid_sample(
             image.unsqueeze(0),
             flow.unsqueeze(0),
@@ -254,8 +255,8 @@ def generate_control_pts(viewpoint_cam, control_point_sample_scale, flow_scale):
     K = viewpoint_cam.get_K
     width = viewpoint_cam.fish_gt_image.shape[2]
     height = viewpoint_cam.fish_gt_image.shape[1]
-    width = int(width * flow_scale)
-    height = int(height * flow_scale)
+    width = int(width * flow_scale[0])
+    height = int(height * flow_scale[1])
     K[0, 2] = width / 2
     K[1, 2] = height / 2
     i, j = np.meshgrid(

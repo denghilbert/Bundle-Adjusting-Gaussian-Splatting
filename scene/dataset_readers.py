@@ -230,7 +230,7 @@ def readColmapSceneInfo(path, images, eval, llffhold=8):
         cam_intrinsics = read_intrinsics_text(cameras_intrinsic_file)
 
     #items = list(cam_extrinsics.items())
-    #items = items[:10]
+    #items = items[:2]
     #cam_extrinsics = dict(items)
 
     reading_dir = "images" if images == None else images
@@ -326,7 +326,7 @@ def readCamerasFromVRNeRF(path, transformsfile, white_background, extension=".jp
         frames = contents['KRT']
 
         #random.shuffle(frames)
-        #frames = frames[:40]
+        #frames = frames[:5]
         for idx, frame in enumerate(frames):
             cam_name = os.path.join(path, frame["cameraId"] + '.jpg')
             #if '0_REN' in cam_name: continue
@@ -430,7 +430,7 @@ def readMetashapeInfo(path, white_background, eval, extension=".png"):
     print("Reading Test Transforms")
     test_cam_infos = train_cam_infos.copy()
     random.shuffle(test_cam_infos)
-    test_cam_infos = test_cam_infos[:50]
+    test_cam_infos = test_cam_infos[:5]
 
     if not eval:
         train_cam_infos.extend(test_cam_infos)
