@@ -124,6 +124,7 @@ def init_from_colmap(scene, dataset, optimizer_lens_net, lens_net, scheduler_len
         with open(os.path.join(dataset.source_path, 'cameras.json')) as json_file:
             contents = json.load(json_file)
             coeff = contents['KRT'][-1]['distortion']
+    #coeff = [0., 0, 0, 0]
     if len(coeff) == 4:
         ref_points = ref_points * (inv_r * (theta + coeff[0] * theta**3 + coeff[1] * theta**5 + coeff[2] * theta**7 + coeff[3] * theta**9))
     elif len(coeff) == 2:

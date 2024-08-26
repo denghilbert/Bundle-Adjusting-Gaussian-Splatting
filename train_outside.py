@@ -54,9 +54,9 @@ if torch.cuda.is_available():
 np.random.seed(seed_value)
 random.seed(seed_value)
 
-def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoint_iterations, checkpoint, debug_from, use_wandb=False, random_init=False, hybrid=False, opt_cam=False, opt_distortion=False, opt_intrinsic=False, r_t_noise=[0., 0.], r_t_lr=[0.001, 0.001], global_alignment_lr=0.001, extra_loss=False, start_opt_lens=1, extend_scale=2., control_point_sample_scale=8., outside_rasterizer=False, abs_grad=False, densi_num=0.0002, if_circular_mask=False, flow_scale=[1., 1.], apply2gt=False, iresnet_lr=1e-7, opacity_threshold=0.005):
+
+def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoint_iterations, checkpoint, debug_from, use_wandb=False, random_init=False, hybrid=False, opt_cam=False, opt_distortion=False, start_vignetting=10000000000, opt_intrinsic=False, r_t_noise=[0., 0.], r_t_lr=[0.001, 0.001], global_alignment_lr=0.001, extra_loss=False, start_opt_lens=1, extend_scale=2., control_point_sample_scale=8., outside_rasterizer=False, abs_grad=False, densi_num=0.0002, if_circular_mask=False, flow_scale=[1., 1.], apply2gt=False, iresnet_lr=1e-7, opacity_threshold=0.005):
     first_iter = 0
-    tb_writer = prepare_output_and_logger(dataset)
     gaussians = GaussianModel(dataset.sh_degree, dataset.asg_degree)
     if hybrid:
         specular_mlp = SpecularModel()
@@ -69,7 +69,8 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
     #for param in lens_net.parameters():
     #    print(param)
 
-    scene = Scene(dataset, gaussians, random_init=random_init, r_t_noise=r_t_noise, r_t_lr=r_t_lr, global_alignment_lr=global_alignment_lr, outside_rasterizer=outside_rasterizer, flow_scale=flow_scale)
+
+    scene = Scene(dataset, gaussians, random_init=random_init, r_t_noise=r_t_noise, r_t_lr=r_t_lr, global_alignment_lr=global_alignment_lr, outside_rasterizer=outside_rasterizer, flow_scale=flow_scale, apply2gt=apply2gt, vis_pose=args.vis_pose)
 
     #pose_GT, pose_aligned = scene.loadAlignCameras(if_vis_train=True, path=scene.model_path)
     #torch.save(pose_GT, os.path.join(scene.model_path, 'gt.pt'))
@@ -193,6 +194,7 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
             #    flow = control_points @ projection_matrix[:2, :2]
             #    plot_points(flow, os.path.join(scene.model_path, f"flow_{iteration}.png"))
 
+
         # Loss
         if outside_rasterizer and not apply2gt:
             gt_image = viewpoint_cam.fish_gt_image.cuda()
@@ -211,16 +213,6 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
 
         loss = (1.0 - opt.lambda_dssim) * Ll1 + opt.lambda_dssim * (1.0 - ssim_loss)# + 0.1 * (loss_projection / len(camera_pairs[viewpoint_cam.uid]))
         loss.backward(retain_graph=True)
-
-
-        if iteration % 10 == 0:
-            scalars = {
-                f"loss/l1_loss": Ll1,
-                f"loss/ssim": ssim_loss,
-                f"loss/overall_loss": loss,
-            }
-            if use_wandb:
-                wandb.log(scalars, step=iteration)
 
         iter_end.record()
         torch.cuda.synchronize()
@@ -242,7 +234,7 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
             if not outside_rasterizer:
                 P_view_insidelens_direction = None
                 P_sensor = None
-            training_report(tb_writer, iteration, Ll1, loss, l1_loss, iter_start.elapsed_time(iter_end), testing_iterations, scene, render, (pipe, background, mlp_color), lens_net, opt_distortion, outside_rasterizer, flow_scale, control_point_sample_scale, flow_apply2_gt_or_img, apply2gt)
+            training_report(use_wandb, iteration, Ll1, ssim_loss, loss, l1_loss, iter_start.elapsed_time(iter_end), testing_iterations, scene, render, (pipe, background, mlp_color), lens_net, opt_distortion, outside_rasterizer, flow_scale, control_point_sample_scale, flow_apply2_gt_or_img, apply2gt)
             if (iteration in saving_iterations):
                 print("\n[ITER {}] Saving Gaussians".format(iteration))
                 scene.save(iteration)
@@ -257,12 +249,11 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
 
                 viewspace_point_tensor_densify = render_pkg["viewspace_points_densify"]
                 gaussians.add_densification_stats(viewspace_point_tensor, viewspace_point_tensor_densify, visibility_filter, abs_grad)
-                if iteration % 10 == 0:
+                if use_wandb and iteration % 10 == 0:
                     scalars = {
                         f"gradient/2d_gradient": viewspace_point_tensor.grad.mean(),
                     }
-                    if use_wandb:
-                        wandb.log(scalars, step=iteration)
+                    wandb.log(scalars, step=iteration)
 
                 if iteration > opt.densify_from_iter and iteration % opt.densification_interval == 0:
                     size_threshold = 20 if iteration > opt.opacity_reset_interval else None
@@ -308,11 +299,14 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
                     torch.save(scene.unnoisy_train_cameras, os.path.join(scene.model_path, 'gt_cams.pt'))
                     torch.save(scene.train_cameras, os.path.join(scene.model_path, f'cams_train{iteration}.pt'))
 
-def training_report(tb_writer, iteration, Ll1, loss, l1_loss, elapsed, testing_iterations, scene : Scene, renderFunc, renderArgs, lens_net, opt_distortion, outside_rasterizer, flow_scale, control_point_sample_scale, flow_apply2_gt_or_img, apply2gt):
-    if tb_writer:
-        tb_writer.add_scalar('train_loss_patches/l1_loss', Ll1.item(), iteration)
-        tb_writer.add_scalar('train_loss_patches/total_loss', loss.item(), iteration)
-        tb_writer.add_scalar('iter_time', elapsed, iteration)
+def training_report(use_wandb, iteration, Ll1, ssim_loss, loss, l1_loss, elapsed, testing_iterations, scene : Scene, renderFunc, renderArgs, lens_net, opt_distortion, outside_rasterizer, flow_scale, control_point_sample_scale, flow_apply2_gt_or_img, apply2gt):
+    if use_wandb and iteration % 10 == 0:
+        scalars = {
+            f"loss/l1_loss": Ll1,
+            f"loss/ssim": ssim_loss,
+            f"loss/overall_loss": loss,
+        }
+        wandb.log(scalars, step=iteration)
 
     # Report test and samples of training set
     if iteration in testing_iterations:
@@ -349,29 +343,33 @@ def training_report(tb_writer, iteration, Ll1, loss, l1_loss, elapsed, testing_i
                                 gt_image = mask * viewpoint.fish_gt_image.cuda()
                                 torchvision.utils.save_image(gt_image.cpu(), os.path.join(scene.model_path, 'training_val_{}/gt/masked_{}'.format(iteration, idx) + "_" + name + ".png"))
                                 torchvision.utils.save_image(image, os.path.join(scene.model_path, 'training_val_{}/renderred/distorted_{}'.format(iteration, idx) + "_" + name + ".png"))
+                                if use_wandb and name == 'train':
+                                    img_tensor = torch.cat((image.cpu(), gt_image.cpu()), dim=2)
+                                    img_tensor = img_tensor.permute(1, 2, 0)
+                                    img_numpy = img_tensor.cpu().numpy()
+                                    wandb.log({f"images/gt_rendering_{viewpoint.image_name}": wandb.Image(img_numpy)})
                             elif apply2gt:
                                 P_sensor, P_view_insidelens_direction = generate_control_pts(viewpoint, control_point_sample_scale, flow_scale)
                                 gt_image, mask, flow_apply2_gt_or_img = apply_distortion(lens_net, P_view_insidelens_direction, P_sensor, viewpoint, image, apply2gt=apply2gt)
-                                #gt_image = F.grid_sample(
-                                #    viewpoint.fish_gt_image.cuda().unsqueeze(0),
-                                #    flow_apply2_gt_or_img.unsqueeze(0),
-                                #    mode="bilinear",
-                                #    padding_mode="zeros",
-                                #    align_corners=True,
-                                #).squeeze(0)
+                                image = image * mask
                                 torchvision.utils.save_image(gt_image, os.path.join(scene.model_path, 'training_val_{}/gt/{}_perspective'.format(iteration, viewpoint.image_name) + "_" + name + ".png"))
                                 torchvision.utils.save_image(viewpoint.fish_gt_image, os.path.join(scene.model_path, 'training_val_{}/gt/{}_fish'.format(iteration, viewpoint.image_name) + "_" + name + ".png"))
                                 torchvision.utils.save_image(viewpoint.original_image, os.path.join(scene.model_path, 'training_val_{}/gt/{}_undis'.format(iteration, viewpoint.image_name) + "_" + name + ".png"))
                                 torchvision.utils.save_image(image*mask, os.path.join(scene.model_path, 'training_val_{}/renderred/{}_masked'.format(iteration, viewpoint.image_name) + "_" + name + ".png"))
-                        #torchvision.utils.save_image(viewpoint.fish_gt_image, os.path.join(scene.model_path, 'training_val_{}/gt/{}'.format(iteration, viewpoint.image_name) + "_" + name + ".png"))
+                                if use_wandb and name == 'train':
+                                    img_tensor = torch.cat(((image*mask).cpu(), gt_image.cpu()), dim=2)
+                                    img_tensor = img_tensor.permute(1, 2, 0)
+                                    img_numpy = img_tensor.cpu().numpy()
+                                    wandb.log({f"images/gt_rendering_{viewpoint.image_name}": wandb.Image(img_numpy)})
                         else:
                             gt_image = viewpoint.original_image.cuda()
                             torchvision.utils.save_image(gt_image, os.path.join(scene.model_path, 'training_val_{}/gt/{}_perspective'.format(iteration, viewpoint.image_name) + "_" + name + ".png"))
+                            if use_wandb and name == 'train':
+                                img_tensor = torch.cat((image.cpu(), gt_image.cpu()), dim=2)
+                                img_tensor = img_tensor.permute(1, 2, 0)
+                                img_numpy = img_tensor.cpu().numpy()
+                                wandb.log({f"images/gt_rendering_{viewpoint.image_name}": wandb.Image(img_numpy)})
 
-                        if tb_writer and (idx < 5):
-                            tb_writer.add_images(config['name'] + "_view_{}/render".format(viewpoint.image_name), image[None], global_step=iteration)
-                            if iteration == testing_iterations[0]:
-                                tb_writer.add_images(config['name'] + "_view_{}/ground_truth".format(viewpoint.image_name), gt_image[None], global_step=iteration)
                         l1_test += l1_loss(image, gt_image).mean().double()
                         psnr_test += psnr(image, gt_image).mean().double()
                         ssims.append(ssim(image, gt_image))
@@ -385,14 +383,24 @@ def training_report(tb_writer, iteration, Ll1, loss, l1_loss, elapsed, testing_i
                     f.write("\n[ITER {}] Evaluating {}: L1 {} PSNR {}".format(iteration, config['name'], l1_test, psnr_test))
                     f.write("\nSSIM : {:>12.7f}".format(torch.tensor(ssims).mean(), ".5"))
                     f.write("\nLPIPS: {:>12.7f}".format(torch.tensor(lpipss).mean(), ".5"))
-                    if tb_writer:
-                        tb_writer.add_scalar(config['name'] + '/loss_viewpoint - l1_loss', l1_test, iteration)
-                        tb_writer.add_scalar(config['name'] + '/loss_viewpoint - psnr', psnr_test, iteration)
 
-        if tb_writer:
-            tb_writer.add_histogram("scene/opacity_histogram", scene.gaussians.get_opacity, iteration)
-            tb_writer.add_scalar('total_points', scene.gaussians.get_xyz.shape[0], iteration)
+
+                    if use_wandb and name == 'test':
+                        scalars = {
+                            f"validation/l1_loss": l1_test,
+                            f"validation/psnr": psnr_test,
+                            f"validation/ssim": torch.tensor(ssims).mean().item(),
+                            f"validation/lpips": torch.tensor(lpipss).mean().item(),
+                        }
+                        wandb.log(scalars, step=iteration)
+
         torch.cuda.empty_cache()
+
+    if use_wandb and iteration % 10 == 0:
+        wandb.log({"stats/gs_num": scene.gaussians.get_xyz.shape[0]}, step=iteration)
+        #opacity_numpy = scene.gaussians.get_opacity.view(-1).cpu().numpy()
+        #wandb.log({"stats/opacity_histogram": wandb.Histogram(opacity_numpy)})
+
 
 if __name__ == "__main__":
     # Set up command line argument parser
@@ -410,7 +418,6 @@ if __name__ == "__main__":
     parser.add_argument("--checkpoint_iterations", nargs="+", type=int, default=[7_000, 15_000, 30_000])
     parser.add_argument("--start_checkpoint", type=str, default = None)
     # wandb setting
-    parser.add_argument("--wandb", action="store_true", default=False)
     parser.add_argument("--wandb_project_name", type=str, default = None)
     parser.add_argument("--wandb_group_name", type=str, default = None)
     parser.add_argument("--wandb_mode", type=str, default = "online")
@@ -437,6 +444,7 @@ if __name__ == "__main__":
     parser.add_argument("--vis_pose", action="store_true", default=False)
     # optimize distortion
     parser.add_argument("--opt_distortion", action="store_true", default=False)
+    parser.add_argument('--start_vignetting', type=int, default=10000000000)
     parser.add_argument("--extra_loss", action="store_true", default=False)
     parser.add_argument('--start_opt_lens', type=int, default=1)
     parser.add_argument('--extend_scale', type=float, default=2.)
@@ -457,7 +465,7 @@ if __name__ == "__main__":
 
     # Initialize wandb
     os.makedirs(args.model_path, exist_ok=True)
-    if args.wandb:
+    if args.wandb_project_name != None:
         wandb.login()
         wandb_run = init_wandb(args,
                                project=args.wandb_project_name,
@@ -473,7 +481,7 @@ if __name__ == "__main__":
     # Start GUI server, configure and run training
     network_gui.init(args.ip, args.port)
     torch.autograd.set_detect_anomaly(args.detect_anomaly)
-    training(lp.extract(args), op.extract(args), pp.extract(args), args.test_iterations, args.save_iterations, args.checkpoint_iterations, args.start_checkpoint, args.debug_from, use_wandb=args.wandb, random_init=args.random_init_pc, hybrid=args.hybrid, opt_cam=args.opt_cam, opt_distortion=args.opt_distortion, opt_intrinsic=args.opt_intrinsic, r_t_lr=args.r_t_lr, r_t_noise=args.r_t_noise, global_alignment_lr=args.global_alignment_lr, extra_loss=args.extra_loss,
+    training(lp.extract(args), op.extract(args), pp.extract(args), args.test_iterations, args.save_iterations, args.checkpoint_iterations, args.start_checkpoint, args.debug_from, use_wandb=(args.wandb_project_name!=None), random_init=args.random_init_pc, hybrid=args.hybrid, opt_cam=args.opt_cam, opt_distortion=args.opt_distortion, start_vignetting=args.start_vignetting, opt_intrinsic=args.opt_intrinsic, r_t_lr=args.r_t_lr, r_t_noise=args.r_t_noise, global_alignment_lr=args.global_alignment_lr, extra_loss=args.extra_loss,
              start_opt_lens=args.start_opt_lens, extend_scale=args.extend_scale, control_point_sample_scale=args.control_point_sample_scale, outside_rasterizer=args.outside_rasterizer, abs_grad=args.abs_grad, densi_num=args.densi_num, if_circular_mask=args.if_circular_mask, flow_scale=args.flow_scale, apply2gt=args.apply2gt, iresnet_lr=args.iresnet_lr, opacity_threshold=args.opacity_threshold)
 
     # All done

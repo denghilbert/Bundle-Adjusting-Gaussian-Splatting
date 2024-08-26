@@ -11,6 +11,7 @@ import socket
 import contextlib
 from easydict import EasyDict as edict
 from argparse import ArgumentParser, Namespace
+import wandb
 try:
     from torch.utils.tensorboard import SummaryWriter
     TENSORBOARD_FOUND = True

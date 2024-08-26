@@ -21,7 +21,7 @@ from utils.general_utils import PILtoTorch
 
 
 class Camera(nn.Module):
-    def __init__(self, colmap_id, R, T, intrinsic_matrix, FoVx, FoVy, focal_length_x, focal_length_y, image, gt_alpha_mask, image_name, uid, trans=np.array([0.0, 0.0, 0.0]), scale=1.0, data_device = "cuda", depth=None, ori_path=None, outside_rasterizer=False, test_outside_rasterizer=False, orig_fov_w=0, orig_fov_h=0, flow_scale=[1., 1.]):
+    def __init__(self, colmap_id, R, T, intrinsic_matrix, FoVx, FoVy, focal_length_x, focal_length_y, image, gt_alpha_mask, image_name, uid, trans=np.array([0.0, 0.0, 0.0]), scale=1.0, data_device = "cuda", depth=None, ori_path=None, outside_rasterizer=False, test_outside_rasterizer=False, orig_fov_w=0, orig_fov_h=0, flow_scale=[1., 1.], apply2gt=False):
         super(Camera, self).__init__()
         assert orig_fov_w !=0 and orig_fov_h !=0
         self.orig_fov_w = orig_fov_w
@@ -120,15 +120,16 @@ class Camera(nn.Module):
                 int(1. * self.fish_gt_image.shape[2]),
                 int(1. * self.fish_gt_image.shape[1])
             )
-            # smerf the reason for 2 is we are using resample_2
-            #self.reset_intrinsic(
-            #    focal2fov(self.focal_x, 2. * self.fish_gt_image.shape[2]),
-            #    focal2fov(self.focal_y, 2. * self.fish_gt_image.shape[1]),
-            #    self.focal_x,
-            #    self.focal_y,
-            #    int(1. * self.fish_gt_image.shape[2]),
-            #    int(1. * self.fish_gt_image.shape[1])
-            #)
+            if 'smerf' in ori_path:
+                # smerf the reason for 2 is we are using resample_2
+                self.reset_intrinsic(
+                    focal2fov(self.focal_x, 2. * self.fish_gt_image.shape[2]),
+                    focal2fov(self.focal_y, 2. * self.fish_gt_image.shape[1]),
+                    self.focal_x,
+                    self.focal_y,
+                    int(1. * self.fish_gt_image.shape[2]),
+                    int(1. * self.fish_gt_image.shape[1])
+                )
 
             self.flow4gt = self.projection_matrix
 
@@ -136,27 +137,29 @@ class Camera(nn.Module):
             ## eyeful: inside outside only fisheye images
             ## fisheyenerf: inside
             ## smerf: inside outside
-            #self.reset_intrinsic(
-            #    focal2fov(self.focal_x, int(flow_scale[0] * self.orig_fov_w)),
-            #    focal2fov(self.focal_y, int(flow_scale[1] * self.orig_fov_h)),
-            #    self.focal_x,
-            #    self.focal_y,
-            #    int(1. * self.original_image.shape[2]),
-            #    int(1. * self.original_image.shape[1])
-            #)
+            if not apply2gt:
+                self.reset_intrinsic(
+                    focal2fov(self.focal_x, int(flow_scale[0] * self.orig_fov_w)),
+                    focal2fov(self.focal_y, int(flow_scale[1] * self.orig_fov_h)),
+                    self.focal_x,
+                    self.focal_y,
+                    int(1. * self.original_image.shape[2]),
+                    int(1. * self.original_image.shape[1])
+                )
 
             # b
             ## eyeful: inside outside only fisheye images
             ## fisheyenerf: inside outside
             ## smerf: inside outside
-            self.reset_intrinsic(
-                focal2fov(self.focal_x, int(flow_scale[0] * self.fish_gt_image.shape[2])),
-                focal2fov(self.focal_y, int(flow_scale[1] * self.fish_gt_image.shape[1])),
-                self.focal_x,
-                self.focal_y,
-                int(1. * self.fish_gt_image.shape[2]),
-                int(1. * self.fish_gt_image.shape[1])
-            )
+            if apply2gt:
+                self.reset_intrinsic(
+                    focal2fov(self.focal_x, int(flow_scale[0] * self.fish_gt_image.shape[2])),
+                    focal2fov(self.focal_y, int(flow_scale[1] * self.fish_gt_image.shape[1])),
+                    self.focal_x,
+                    self.focal_y,
+                    int(1. * self.fish_gt_image.shape[2]),
+                    int(1. * self.fish_gt_image.shape[1])
+                )
 
 
     def reset_intrinsic(self, FoVx, FoVy, focal_x, focal_y, width, height):
