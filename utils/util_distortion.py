@@ -76,17 +76,17 @@ def center_crop(tensor, target_height, target_width):
 
     return cropped_tensor
 
-def init_from_colmap(scene, dataset, optimizer_lens_net, lens_net, scheduler_lens_net, resume_training=None, iresnet_lr=1e-7):
+def generate_pts(scene, boundary_scale=4, sample_resolution=20):
     viewpoint_cam = scene.getTrainCameras().copy()[0]
     width = viewpoint_cam.image_width
     height = viewpoint_cam.image_height
-    sample_width = int(width / 20)
-    sample_height = int(height / 20)
+    sample_width = int(width / sample_resolution)
+    sample_height = int(height / sample_resolution)
     K = viewpoint_cam.get_K
     width = viewpoint_cam.fish_gt_image.shape[2]
     height = viewpoint_cam.fish_gt_image.shape[1]
-    width = int(width * 4)
-    height = int(height * 4)
+    width = int(width * boundary_scale)
+    height = int(height * boundary_scale)
     K[0, 2] = width / 2
     K[1, 2] = height / 2
     i, j = np.meshgrid(
@@ -96,22 +96,22 @@ def init_from_colmap(scene, dataset, optimizer_lens_net, lens_net, scheduler_len
     )
     i = i.T
     j = j.T
+
     P_sensor = (
         torch.from_numpy(np.stack((i, j), axis=-1))
         .to(torch.float32)
         .cuda()
     )
-    #plot_points(P_sensor, os.path.join(scene.model_path, f"ref.png"))
     P_sensor_hom = homogenize(P_sensor.reshape((-1, 2)))
     P_view_insidelens_direction_hom = (torch.inverse(K) @ P_sensor_hom.T).T
     P_view_insidelens_direction = dehomogenize(P_view_insidelens_direction_hom)
-    P_view_outsidelens_direction = P_view_insidelens_direction
-    camera_directions_w_lens = homogenize(P_view_outsidelens_direction)
-    ref_points = camera_directions_w_lens.reshape((P_sensor.shape[0], P_sensor.shape[1], 3))[:, :, :2]
+
+    return P_sensor, P_view_insidelens_direction
+
+def init_from_coeff(coeff, dataset, ref_points):
     r = torch.sqrt(torch.sum(ref_points**2, dim=-1, keepdim=True))
     inv_r = 1 / r
     theta = torch.atan(r)
-    coeff = [0, 0, 0, 0]
     if os.path.exists(os.path.join(dataset.source_path, 'fish/sparse/0/cameras.bin')):
         cam_intrinsics = read_intrinsics_binary(os.path.join(dataset.source_path, 'fish/sparse/0/cameras.bin'))
         for idx, key in enumerate(cam_intrinsics):
@@ -143,52 +143,52 @@ def init_from_colmap(scene, dataset, optimizer_lens_net, lens_net, scheduler_len
         ref_points = ref_points * (inv_r * (theta + coeff[0] * theta**3 + coeff[1] * theta**5 + coeff[2] * theta**7))
     else:
         ref_points = ref_points
-    print(f"using coeff: {coeff}")
+
+    return ref_points
+
+def init_from_colmap(scene, dataset, optimizer_lens_net, lens_net, scheduler_lens_net, resume_training=None, iresnet_lr=1e-7):
+    P_sensor, P_view_insidelens_direction = generate_pts(scene, boundary_scale=5, sample_resolution=40)
+    P_view_outsidelens_direction = P_view_insidelens_direction
+    camera_directions_w_lens = homogenize(P_view_outsidelens_direction)
+    ref_points = camera_directions_w_lens.reshape((P_sensor.shape[0], P_sensor.shape[1], 3))[:, :, :2]
+    coeff = [0, 0, 0, 0]
+    ref_points = init_from_coeff(coeff, dataset, ref_points)
     inf_mask = torch.isinf(ref_points)
     nan_mask = torch.isnan(ref_points)
     ref_points[inf_mask] = 0
     ref_points[nan_mask] = 0
-    boundary_original_points = P_view_insidelens_direction[-1]
-    print(boundary_original_points)
+    plot_points(ref_points, os.path.join(scene.model_path, f"ref1.png"))
 
-    width = viewpoint_cam.image_width
-    height = viewpoint_cam.image_height
-    sample_width = int(width / 20)
-    sample_height = int(height / 20)
-    K = viewpoint_cam.get_K
-    width = viewpoint_cam.fish_gt_image.shape[2]
-    height = viewpoint_cam.fish_gt_image.shape[1]
-    width = int(width * 4)
-    height = int(height * 4)
-    K[0, 2] = width / 2
-    K[1, 2] = height / 2
-    i, j = np.meshgrid(
-        np.linspace(0, width, sample_width),
-        np.linspace(0, height, sample_height),
-        indexing="ij",
-    )
-    i = i.T
-    j = j.T
-    P_sensor = (
-        torch.from_numpy(np.stack((i, j), axis=-1))
-        .to(torch.float32)
-        .cuda()
-    )
-    P_sensor_hom = homogenize(P_sensor.reshape((-1, 2)))
-    P_view_insidelens_direction_hom = (torch.inverse(K) @ P_sensor_hom.T).T
-    P_view_insidelens_direction = dehomogenize(P_view_insidelens_direction_hom)
+    P_sensor, P_view_insidelens_direction = generate_pts(scene, boundary_scale=1.5, sample_resolution=40)
+    P_view_outsidelens_direction = P_view_insidelens_direction
+    camera_directions_w_lens = homogenize(P_view_outsidelens_direction)
+    ref_points1 = camera_directions_w_lens.reshape((P_sensor.shape[0], P_sensor.shape[1], 3))[:, :, :2]
+    coeff = [0, 0, 0, 0]
+    ref_points1 = init_from_coeff(coeff, dataset, ref_points1)
+    print(f"using coeff: {coeff}")
+    inf_mask = torch.isinf(ref_points1)
+    nan_mask = torch.isnan(ref_points1)
+    ref_points1[inf_mask] = 0
+    ref_points1[nan_mask] = 0
+    plot_points(ref_points1, os.path.join(scene.model_path, f"ref2.png"))
+    combine = torch.cat((ref_points, ref_points1), dim=0)
+    plot_points(combine, os.path.join(scene.model_path, f"ref1_2.png"))
+
+    P_sensor0, P_view_insidelens_direction0 = generate_pts(scene, boundary_scale=5, sample_resolution=40)
+    P_sensor1, P_view_insidelens_direction1 = generate_pts(scene, boundary_scale=1.5, sample_resolution=40)
+    P_sensor =torch.cat((P_sensor0, P_sensor1), dim=0)
+    P_view_insidelens_direction =torch.cat((P_view_insidelens_direction0, P_view_insidelens_direction1), dim=0)
 
     if resume_training == None:
         progress_bar_ires = tqdm(range(0, 10000), desc="Init Iresnet")
         for i in range(10000):
             P_view_outsidelens_direction = lens_net.forward(P_view_insidelens_direction, sensor_to_frustum=True)
             control_points = homogenize(P_view_outsidelens_direction)
-            control_points = control_points.reshape((P_sensor.shape[0], P_sensor.shape[1], 3))[:, :, :2]
             inf_mask = torch.isinf(control_points)
             nan_mask = torch.isnan(control_points)
             control_points[inf_mask] = 0
             control_points[nan_mask] = 0
-            loss = ((control_points - ref_points)**2).mean()
+            loss = ((control_points[:, :2] - combine.reshape(-1, 2))**2).mean()
             progress_bar_ires.set_postfix(loss=loss.item())
             progress_bar_ires.update(1)
             loss.backward()
@@ -196,13 +196,13 @@ def init_from_colmap(scene, dataset, optimizer_lens_net, lens_net, scheduler_len
             optimizer_lens_net.zero_grad(set_to_none = True)
             scheduler_lens_net.step()
 
-            if i % 4999 == 0:
+            if i % 2000 == 0:
                 control_points_np = control_points.cpu().detach().numpy()
-                ref_points_np = ref_points.cpu().detach().numpy()
+                ref_points_np = ref_points.reshape(-1, 2).cpu().detach().numpy()
+                combine_np = combine.reshape(-1, 2).cpu().detach().numpy()
                 plt.figure(figsize=(10, 6))
-                for s in range(control_points_np.shape[0]):
-                    plt.scatter(control_points_np[s, :, 0], control_points_np[s, :, 1], color='blue', label='Control Points' if s == 0 else "")
-                    plt.scatter(ref_points_np[s, :, 0], ref_points_np[s, :, 1], color='red', label='Reference Points' if s == 0 else "")
+                plt.scatter(control_points_np[:, 0], control_points_np[:, 1], color='blue')
+                plt.scatter(combine_np[:, 0], combine_np[:, 1], color='red')
                 plt.savefig(f'/home/yd428/playaround_gaussian_platting/output/test/loss_{i}.png')
                 plt.close()
 

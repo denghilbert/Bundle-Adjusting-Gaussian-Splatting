@@ -54,9 +54,123 @@ if torch.cuda.is_available():
 np.random.seed(seed_value)
 random.seed(seed_value)
 
+def create_differentiable_vignetting_mask(image_tensor, scaling_factors):
+    # Step 1: Get the height and width of the image
+    _, width, height = image_tensor.shape  # Assume image_tensor is of shape (C, H, W)
+
+    # Step 2: Create a grid of distances from the center
+    x = torch.arange(width).float().to(image_tensor.device) - (width - 1) / 2
+    y = torch.arange(height).float().to(image_tensor.device) - (height - 1) / 2
+    X, Y = torch.meshgrid(x, y, indexing="ij")
+
+    # Calculate Euclidean distance from the center
+    distances = torch.sqrt(X**2 + Y**2)
+
+    # Step 3: Normalize distances to the range [0, N-1]
+    max_distance = distances.max()
+    distances_normalized = distances / max_distance * (scaling_factors.size(0) - 1)
+
+    # Step 4: Perform linear interpolation for differentiable mask creation
+    lower_indices = distances_normalized.floor().long().clamp(0, scaling_factors.size(0) - 2)
+    upper_indices = lower_indices + 1
+
+    lower_weights = (upper_indices - distances_normalized).cuda()  # weight for lower index
+    upper_weights = (distances_normalized - lower_indices).cuda()  # weight for upper index
+
+    # Get the scaling factors for the lower and upper indices
+    scaling_mask = lower_weights * scaling_factors[lower_indices] + upper_weights * scaling_factors[upper_indices]
+
+    return scaling_mask
+
+class VignettingModel(torch.nn.Module):
+    def __init__(self, n_terms=4, device='cuda'):
+        super(VignettingModel, self).__init__()
+
+        # Number of terms in the summation (higher order model)
+        self.n_terms = n_terms
+
+        # Initialize learnable parameters (requires_grad=True for optimization)
+        # Initialize a_k close to zero for minimal vignetting effect at the start
+        self.a_k = torch.nn.Parameter(torch.full((n_terms,), 0.01, device=device))  # Coefficients a_k initialized near 0
+
+        # Initialize beta_k to a small value but ensuring it gives a smooth falloff
+        self.beta_k = torch.nn.Parameter(torch.linspace(2.0, 8.0, n_terms).to(device))
+
+        # Initialize gamma to 1 for neutral global exponentiation
+        #self.gamma = torch.nn.Parameter(torch.tensor(1.0).to(device))
+        self.gamma = 1.
+
+        # Store the device (e.g., 'cuda' or 'cpu')
+        self.device = device
+
+    def bak_forward(self, image_size):
+        # Get image dimensions
+        height, width = image_size
+
+        # Compute the image center
+        x_c, y_c = width / 2, height / 2
+
+        # Compute the maximum possible distance from the center (diagonal distance)
+        r_max = torch.sqrt(torch.tensor((x_c ** 2 + y_c ** 2), dtype=torch.float32).to(self.device))
+
+        # Create a meshgrid of pixel coordinates on the specified device
+        y, x = torch.meshgrid(torch.arange(height, dtype=torch.float32).to(self.device),
+                              torch.arange(width, dtype=torch.float32).to(self.device))
+
+        # Calculate the distance of each pixel from the image center
+        d = torch.sqrt((x - x_c) ** 2 + (y - y_c) ** 2)
+
+        # Normalize the distance by r_max
+        d_normalized = d / r_max
+
+        # Initialize the vignetting mask
+        mask = torch.zeros_like(d_normalized)
+
+        # Sum over the higher-order terms to compute the vignetting mask
+        for k in range(self.n_terms):
+            mask += self.a_k[k] * d_normalized ** self.beta_k[k]
+
+        # Apply the global exponent gamma
+        mask = 1 - mask.clamp(0, 1) ** self.gamma
+
+        return mask
+
+    def forward(self, image_size):
+        # Get image dimensions
+        height, width = image_size
+
+        # Compute the image center
+        x_c, y_c = width / 2, height / 2
+
+        # Create a meshgrid of pixel coordinates on the specified device
+        y, x = torch.meshgrid(torch.arange(height, dtype=torch.float32).to(self.device),
+                              torch.arange(width, dtype=torch.float32).to(self.device))
+
+        # Calculate the distance of each pixel from the image center
+        r = torch.sqrt((x - x_c) ** 2 + (y - y_c) ** 2)
+
+        # Apply the arctan(r)/r normalization
+        #r_normalized = torch.arctan(r) / r
+        r_normalized = torch.arctan(r)
+
+        # Replace NaNs from division by zero at the center (r=0) with 1
+        r_normalized[r == 0] = 1
+
+        # Initialize the vignetting mask
+        mask = torch.zeros_like(r_normalized)
+
+        # Sum over the higher-order terms to compute the vignetting mask
+        for k in range(self.n_terms):
+            mask += self.a_k[k] * r_normalized ** self.beta_k[k]
+
+        # Apply the global exponent gamma
+        mask = 1 - mask.clamp(0, 1) ** self.gamma
+
+        return mask
 
 def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoint_iterations, checkpoint, debug_from, use_wandb=False, random_init=False, hybrid=False, opt_cam=False, opt_distortion=False, start_vignetting=10000000000, opt_intrinsic=False, r_t_noise=[0., 0.], r_t_lr=[0.001, 0.001], global_alignment_lr=0.001, extra_loss=False, start_opt_lens=1, extend_scale=2., control_point_sample_scale=8., outside_rasterizer=False, abs_grad=False, densi_num=0.0002, if_circular_mask=False, flow_scale=[1., 1.], apply2gt=False, iresnet_lr=1e-7, opacity_threshold=0.005):
     first_iter = 0
+    tb_writer = prepare_output_and_logger(dataset)
     gaussians = GaussianModel(dataset.sh_degree, dataset.asg_degree)
     if hybrid:
         specular_mlp = SpecularModel()
@@ -69,6 +183,11 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
     #for param in lens_net.parameters():
     #    print(param)
 
+    #vignetting_factors = nn.Parameter(torch.ones(100, requires_grad=True, device='cuda'))
+    #vignetting_optimizer = torch.optim.Adam([vignetting_factors], lr=1e-3)
+    vignetting_model = VignettingModel(n_terms=4, device='cuda')
+    vignetting_optimizer = torch.optim.Adam(vignetting_model.parameters(), lr=0.01)
+    vignetting_scheduler = torch.optim.lr_scheduler.MultiStepLR(vignetting_optimizer, milestones=[1000], gamma=10)
 
     scene = Scene(dataset, gaussians, random_init=random_init, r_t_noise=r_t_noise, r_t_lr=r_t_lr, global_alignment_lr=global_alignment_lr, outside_rasterizer=outside_rasterizer, flow_scale=flow_scale, apply2gt=apply2gt, vis_pose=args.vis_pose)
 
@@ -194,6 +313,15 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
             #    flow = control_points @ projection_matrix[:2, :2]
             #    plot_points(flow, os.path.join(scene.model_path, f"flow_{iteration}.png"))
 
+        if start_vignetting < iteration:
+            vignetting_mask = vignetting_model((image.shape[1], image.shape[2]))
+            mask = mask * vignetting_mask
+
+            if iteration % 1000 == 1:
+                mask_ = vignetting_model((image.shape[1], image.shape[2])).cpu().detach().unsqueeze(0)
+                mask_ = mask_.permute(1, 2, 0)
+                mask_ = mask_.cpu().numpy()
+                wandb.log({f"vignetting_model/vis": wandb.Image(mask_)})
 
         # Loss
         if outside_rasterizer and not apply2gt:
@@ -272,6 +400,22 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
                 gaussians.optimizer.step()
                 gaussians.optimizer.zero_grad(set_to_none = True)
 
+                if start_vignetting < iteration:
+                    vignetting_optimizer.step()
+                    vignetting_optimizer.zero_grad(set_to_none = True)
+                    if use_wandb and iteration % 10 == 0:
+                        scalars = {
+                            f"vignetting_model/a_k0": vignetting_model.a_k[0].cpu().item(),
+                            f"vignetting_model/a_k1": vignetting_model.a_k[1].cpu().item(),
+                            f"vignetting_model/a_k2": vignetting_model.a_k[2].cpu().item(),
+                            f"vignetting_model/a_k3": vignetting_model.a_k[3].cpu().item(),
+                            f"vignetting_model/beta_k0": vignetting_model.beta_k[0].cpu().item(),
+                            f"vignetting_model/beta_k1": vignetting_model.beta_k[1].cpu().item(),
+                            f"vignetting_model/beta_k2": vignetting_model.beta_k[2].cpu().item(),
+                            f"vignetting_model/beta_k3": vignetting_model.beta_k[3].cpu().item(),
+                            #f"vignetting_model/gamma": vignetting_model.gamma.cpu().item()
+                        }
+                        wandb.log(scalars, step=iteration)
                 if opt_distortion:
                     optimizer_lens_net.step()
                     optimizer_lens_net.zero_grad(set_to_none=True)
@@ -481,8 +625,7 @@ if __name__ == "__main__":
     # Start GUI server, configure and run training
     network_gui.init(args.ip, args.port)
     torch.autograd.set_detect_anomaly(args.detect_anomaly)
-    training(lp.extract(args), op.extract(args), pp.extract(args), args.test_iterations, args.save_iterations, args.checkpoint_iterations, args.start_checkpoint, args.debug_from, use_wandb=(args.wandb_project_name!=None), random_init=args.random_init_pc, hybrid=args.hybrid, opt_cam=args.opt_cam, opt_distortion=args.opt_distortion, start_vignetting=args.start_vignetting, opt_intrinsic=args.opt_intrinsic, r_t_lr=args.r_t_lr, r_t_noise=args.r_t_noise, global_alignment_lr=args.global_alignment_lr, extra_loss=args.extra_loss,
-             start_opt_lens=args.start_opt_lens, extend_scale=args.extend_scale, control_point_sample_scale=args.control_point_sample_scale, outside_rasterizer=args.outside_rasterizer, abs_grad=args.abs_grad, densi_num=args.densi_num, if_circular_mask=args.if_circular_mask, flow_scale=args.flow_scale, apply2gt=args.apply2gt, iresnet_lr=args.iresnet_lr, opacity_threshold=args.opacity_threshold)
+    training(lp.extract(args), op.extract(args), pp.extract(args), args.test_iterations, args.save_iterations, args.checkpoint_iterations, args.start_checkpoint, args.debug_from, use_wandb=(args.wandb_project_name!=None), random_init=args.random_init_pc, hybrid=args.hybrid, opt_cam=args.opt_cam, opt_distortion=args.opt_distortion, start_vignetting=args.start_vignetting, opt_intrinsic=args.opt_intrinsic, r_t_lr=args.r_t_lr, r_t_noise=args.r_t_noise, global_alignment_lr=args.global_alignment_lr, extra_loss=args.extra_loss, start_opt_lens=args.start_opt_lens, extend_scale=args.extend_scale, control_point_sample_scale=args.control_point_sample_scale, outside_rasterizer=args.outside_rasterizer, abs_grad=args.abs_grad, densi_num=args.densi_num, if_circular_mask=args.if_circular_mask, flow_scale=args.flow_scale, apply2gt=args.apply2gt, iresnet_lr=args.iresnet_lr, opacity_threshold=args.opacity_threshold)
 
     # All done
     print("\nTraining complete.")
