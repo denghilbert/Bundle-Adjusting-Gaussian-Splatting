@@ -21,9 +21,11 @@ from utils.general_utils import PILtoTorch
 
 
 class Camera(nn.Module):
-    def __init__(self, colmap_id, R, T, intrinsic_matrix, FoVx, FoVy, focal_length_x, focal_length_y, image, gt_alpha_mask, image_name, uid, trans=np.array([0.0, 0.0, 0.0]), scale=1.0, data_device = "cuda", depth=None, ori_path=None, outside_rasterizer=False, test_outside_rasterizer=False, orig_fov_w=0, orig_fov_h=0, flow_scale=[1., 1.], apply2gt=False):
+    def __init__(self, colmap_id, R, T, intrinsic_matrix, FoVx, FoVy, focal_length_x, focal_length_y, image, gt_alpha_mask, fish_gt_image, image_name, uid, trans=np.array([0.0, 0.0, 0.0]), scale=1.0, data_device = "cuda", depth=None, ori_path=None, outside_rasterizer=False, test_outside_rasterizer=False, orig_fov_w=0, orig_fov_h=0, original_image_resolution=None, fish_gt_image_resolution=None, flow_scale=[1., 1.], apply2gt=False):
         super(Camera, self).__init__()
         assert orig_fov_w !=0 and orig_fov_h !=0
+        assert original_image_resolution != None
+        assert fish_gt_image_resolution != None
         self.orig_fov_w = orig_fov_w
         self.orig_fov_h = orig_fov_h
 
@@ -46,17 +48,14 @@ class Camera(nn.Module):
             print(f"[Warning] Custom device {data_device} failed, fallback to default cuda device" )
             self.data_device = torch.device("cuda")
 
-        self.original_image = image.clamp(0.0, 1.0)
-        self.image_width = self.original_image.shape[2]
-        self.image_height = self.original_image.shape[1]
         self.depth = torch.Tensor(depth).to(self.data_device) if depth is not None else None
 
-        if gt_alpha_mask is not None:
-            #self.original_image *= gt_alpha_mask.to(self.data_device)
-            self.original_image *= gt_alpha_mask
-        else:
-            #self.original_image *= torch.ones((1, self.image_height, self.image_width), device=self.data_device)
-            self.original_image *= torch.ones((1, self.image_height, self.image_width))
+        self.image_width = original_image_resolution[2]
+        self.image_height = original_image_resolution[1]
+        self.original_image_pil = image
+        self.fish_gt_image_pil = fish_gt_image
+        self.original_image_resolution = original_image_resolution
+        self.fish_gt_image_resolution = fish_gt_image_resolution
 
 
         self.zfar = 100.0
@@ -89,46 +88,30 @@ class Camera(nn.Module):
                 focal2fov(self.focal_y, int(2. * self.orig_fov_h)),
                 self.focal_x,
                 self.focal_y,
-                int(2. * self.original_image.shape[2]),
-                int(2. * self.original_image.shape[1])
+                int(2. * self.original_image_resolution[2]),
+                int(2. * self.original_image_resolution[1])
             )
 
-        if not test_outside_rasterizer:
-            if 'image' in ori_path and 'indoor' not in ori_path:
-                if os.path.exists(ori_path.split('images')[0] + 'fish/images' + ori_path.split('images')[1]):
-                    image = Image.open(ori_path.split('images')[0] + 'fish/images' + ori_path.split('images')[1])
-                    orig_w, orig_h = image.size
-                    resized_image_rgb = PILtoTorch(image, (orig_w, orig_h))
-                    gt_image = resized_image_rgb[:3, ...]
-                    self.fish_gt_image = gt_image.clamp(0.0, 1.0)
-            elif 'indoor' in ori_path:
-                image = Image.open(ori_path.split('images')[0] + 'fish/images/' + ori_path.split('images')[1].split('indoor_')[1])
-                orig_w, orig_h = image.size
-                resized_image_rgb = PILtoTorch(image, (orig_w, orig_h))
-                gt_image = resized_image_rgb[:3, ...]
-                self.fish_gt_image = gt_image.clamp(0.0, 1.0)
-            else:
-                self.fish_gt_image = self.original_image
 
         if outside_rasterizer:
             # eyeful and fisheyenerf
             self.reset_intrinsic(
-                focal2fov(self.focal_x, self.fish_gt_image.shape[2]),
-                focal2fov(self.focal_y, self.fish_gt_image.shape[1]),
+                focal2fov(self.focal_x, self.fish_gt_image_resolution[2]),
+                focal2fov(self.focal_y, self.fish_gt_image_resolution[1]),
                 self.focal_x,
                 self.focal_y,
-                int(1. * self.fish_gt_image.shape[2]),
-                int(1. * self.fish_gt_image.shape[1])
+                int(1. * self.fish_gt_image_resolution[2]),
+                int(1. * self.fish_gt_image_resolution[1])
             )
             if 'smerf' in ori_path:
                 # smerf the reason for 2 is we are using resample_2
                 self.reset_intrinsic(
-                    focal2fov(self.focal_x, 2. * self.fish_gt_image.shape[2]),
-                    focal2fov(self.focal_y, 2. * self.fish_gt_image.shape[1]),
+                    focal2fov(self.focal_x, 2. * self.fish_gt_image_resolution[2]),
+                    focal2fov(self.focal_y, 2. * self.fish_gt_image_resolution[1]),
                     self.focal_x,
                     self.focal_y,
-                    int(1. * self.fish_gt_image.shape[2]),
-                    int(1. * self.fish_gt_image.shape[1])
+                    int(1. * self.fish_gt_image_resolution[2]),
+                    int(1. * self.fish_gt_image_resolution[1])
                 )
 
             self.flow4gt = self.projection_matrix
@@ -143,8 +126,8 @@ class Camera(nn.Module):
                     focal2fov(self.focal_y, int(flow_scale[1] * self.orig_fov_h)),
                     self.focal_x,
                     self.focal_y,
-                    int(1. * self.original_image.shape[2]),
-                    int(1. * self.original_image.shape[1])
+                    int(1. * self.original_image_resolution[2]),
+                    int(1. * self.original_image_resolution[1])
                 )
 
             # b
@@ -153,12 +136,12 @@ class Camera(nn.Module):
             ## smerf: inside outside
             if apply2gt:
                 self.reset_intrinsic(
-                    focal2fov(self.focal_x, int(flow_scale[0] * self.fish_gt_image.shape[2])),
-                    focal2fov(self.focal_y, int(flow_scale[1] * self.fish_gt_image.shape[1])),
+                    focal2fov(self.focal_x, int(flow_scale[0] * self.fish_gt_image_resolution[2])),
+                    focal2fov(self.focal_y, int(flow_scale[1] * self.fish_gt_image_resolution[1])),
                     self.focal_x,
                     self.focal_y,
-                    int(1. * self.fish_gt_image.shape[2]),
-                    int(1. * self.fish_gt_image.shape[1])
+                    int(1. * self.fish_gt_image_resolution[2]),
+                    int(1. * self.fish_gt_image_resolution[1])
                 )
 
 
@@ -242,6 +225,20 @@ class Camera(nn.Module):
         self.full_proj_transform = self.full_proj_transform.to(data_device)
         self.camera_center = self.camera_center.to(data_device)
         self.fid = self.fid.to(data_device)
+
+    @property
+    def original_image(self):
+        resized_image_rgb = PILtoTorch(self.original_image_pil, (self.original_image_resolution[2], self.original_image_resolution[1]))
+        original_image = resized_image_rgb[:3, ...]
+        original_image = original_image.clamp(0.0, 1.0)
+        return original_image
+
+    @property
+    def fish_gt_image(self):
+        resized_image_rgb = PILtoTorch(self.fish_gt_image_pil, (self.fish_gt_image_resolution[2], self.fish_gt_image_resolution[1]))
+        fish_gt_image = resized_image_rgb[:3, ...]
+        fish_gt_image = fish_gt_image.clamp(0.0, 1.0)
+        return fish_gt_image
 
     @property
     def get_rays(self, noise_d=None, noise_o=None):

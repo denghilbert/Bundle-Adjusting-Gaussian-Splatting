@@ -83,8 +83,8 @@ def generate_pts(scene, boundary_scale=4, sample_resolution=20):
     sample_width = int(width / sample_resolution)
     sample_height = int(height / sample_resolution)
     K = viewpoint_cam.get_K
-    width = viewpoint_cam.fish_gt_image.shape[2]
-    height = viewpoint_cam.fish_gt_image.shape[1]
+    width = viewpoint_cam.fish_gt_image_resolution[2]
+    height = viewpoint_cam.fish_gt_image_resolution[1]
     width = int(width * boundary_scale)
     height = int(height * boundary_scale)
     K[0, 2] = width / 2
@@ -235,7 +235,7 @@ def apply_distortion(lens_net, P_view_insidelens_direction, P_sensor, viewpoint_
         mask = (~((gt_image[0]<0.00001) & (gt_image[1]<0.00001)).unsqueeze(0)).float()
         return gt_image, mask, flow
     else:
-        flow = nn.functional.interpolate(flow.permute(2, 0, 1).unsqueeze(0), size=(int(viewpoint_cam.fish_gt_image.shape[1]*flow_scale[0]), int(viewpoint_cam.fish_gt_image.shape[2]*flow_scale[1])), mode='bilinear', align_corners=False).permute(0, 2, 3, 1).squeeze(0)
+        flow = nn.functional.interpolate(flow.permute(2, 0, 1).unsqueeze(0), size=(int(viewpoint_cam.fish_gt_image_resolution[1]*flow_scale[0]), int(viewpoint_cam.fish_gt_image_resolution[2]*flow_scale[1])), mode='bilinear', align_corners=False).permute(0, 2, 3, 1).squeeze(0)
         image = F.grid_sample(
             image.unsqueeze(0),
             flow.unsqueeze(0),
@@ -243,7 +243,7 @@ def apply_distortion(lens_net, P_view_insidelens_direction, P_sensor, viewpoint_
             padding_mode="zeros",
             align_corners=True,
         )
-        image = center_crop(image, viewpoint_cam.fish_gt_image.shape[1], viewpoint_cam.fish_gt_image.shape[2]).squeeze(0)
+        image = center_crop(image, viewpoint_cam.fish_gt_image_resolution[1], viewpoint_cam.fish_gt_image_resolution[2]).squeeze(0)
         mask = (~((image[0]==0.0000) & (image[1]==0.0000)).unsqueeze(0)).float()
         return image, mask, flow
 
@@ -254,8 +254,8 @@ def generate_control_pts(viewpoint_cam, control_point_sample_scale, flow_scale):
     sample_width = int(width / control_point_sample_scale)
     sample_height = int(height/ control_point_sample_scale)
     K = viewpoint_cam.get_K
-    width = viewpoint_cam.fish_gt_image.shape[2]
-    height = viewpoint_cam.fish_gt_image.shape[1]
+    width = viewpoint_cam.fish_gt_image_resolution[2]
+    height = viewpoint_cam.fish_gt_image_resolution[1]
     width = int(width * flow_scale[0])
     height = int(height * flow_scale[1])
     K[0, 2] = width / 2

@@ -14,6 +14,8 @@ import numpy as np
 from utils.general_utils import PILtoTorch, ArrayToTorch
 from utils.graphics_utils import fov2focal
 import json
+import os
+from PIL import Image
 
 WARNED = False
 
@@ -42,26 +44,37 @@ def loadCam(args, id, cam_info, resolution_scale, outside_rasterizer, flow_scale
         cam_info.intrinsic_matrix[0, 2] = resolution[0] / 2
         cam_info.intrinsic_matrix[1, 2] = resolution[1] / 2
 
-    resized_image_rgb = PILtoTorch(cam_info.image, resolution)
-
-    gt_image = resized_image_rgb[:3, ...]
+    original_image = cam_info.image
+    original_image_resolution = (3, resolution[1], resolution[0])
     loaded_mask = None
 
-    if resized_image_rgb.shape[1] == 4:
-        loaded_mask = resized_image_rgb[3:4, ...]
+    ori_path = cam_info.image_path
+    if 'image' in ori_path and 'indoor' not in ori_path:
+        if os.path.exists(ori_path.split('images')[0] + 'fish/images' + ori_path.split('images')[1]):
+            fish_gt_image = Image.open(ori_path.split('images')[0] + 'fish/images' + ori_path.split('images')[1])
+            fish_gt_image_resolution = (3, fish_gt_image.size[1], fish_gt_image.size[0])
+    elif 'indoor' in ori_path:
+        fish_gt_image = Image.open(ori_path.split('images')[0] + 'fish/images/' + ori_path.split('images')[1].split('indoor_')[1])
+        fish_gt_image_resolution = (3, fish_gt_image.size[1], fish_gt_image.size[0])
+    else:
+        fish_gt_image = original_image
+        fish_gt_image_resolution = (3, fish_gt_image.size[1], fish_gt_image.size[0])
 
     return Camera(
         colmap_id=cam_info.uid, R=cam_info.R, T=cam_info.T,
         intrinsic_matrix=cam_info.intrinsic_matrix,
         FoVx=cam_info.FovX, FoVy=cam_info.FovY,
         focal_length_x=cam_info.focal_length_x, focal_length_y=cam_info.focal_length_y,
-        image=gt_image, gt_alpha_mask=loaded_mask,
+        image=original_image, gt_alpha_mask=loaded_mask,
+        fish_gt_image = fish_gt_image,
         image_name=cam_info.image_name, uid=id,
         data_device=args.data_device, depth=cam_info.depth,
-        ori_path=cam_info.image_path,
+        ori_path=ori_path,
         outside_rasterizer=outside_rasterizer,
         orig_fov_w=orig_w,
         orig_fov_h=orig_h,
+        original_image_resolution=original_image_resolution,
+        fish_gt_image_resolution=fish_gt_image_resolution,
         flow_scale=flow_scale,
         apply2gt=apply2gt
     )
