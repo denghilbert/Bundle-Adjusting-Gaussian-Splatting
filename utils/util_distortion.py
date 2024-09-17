@@ -203,7 +203,7 @@ def init_from_colmap(scene, dataset, optimizer_lens_net, lens_net, scheduler_len
                 plt.figure(figsize=(10, 6))
                 plt.scatter(control_points_np[:, 0], control_points_np[:, 1], color='blue')
                 plt.scatter(combine_np[:, 0], combine_np[:, 1], color='red')
-                plt.savefig(f'/home/yd428/playaround_gaussian_platting/output/test/loss_{i}.png')
+                plt.savefig(os.path.join(scene.model_path, f"loss_{i}.png"))
                 plt.close()
 
         progress_bar_ires.close()

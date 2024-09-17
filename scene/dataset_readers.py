@@ -379,7 +379,6 @@ def readCamerasFromTransforms(path, transformsfile, white_background, extension=
         #    random.shuffle(frames)
         #    frames = frames[:300]
 
-            #import pdb;pdb.set_trace()
         for idx, frame in enumerate(frames):
             if 'jpg' in frame["file_path"]:
                 cam_name = os.path.join(path, frame["file_path"])
@@ -389,7 +388,10 @@ def readCamerasFromTransforms(path, transformsfile, white_background, extension=
             # NeRF 'transform_matrix' is a camera-to-world transform
             c2w = np.array(frame["transform_matrix"])
             # change from OpenGL/Blender camera axes (Y up, Z back) to COLMAP (Y down, Z forward)
-            c2w[:3, 1:3] *= -1
+            if contents["type"] == "mitsuba":
+                c2w[:3, 0:2] *= -1
+            else:
+                c2w[:3, 1:3] *= -1
 
             # get the world-to-camera transform and set R, T
             w2c = np.linalg.inv(c2w)
@@ -475,7 +477,6 @@ def readNerfSyntheticInfo(path, white_background, eval, extension=".png"):
 
     if not eval:
         train_cam_infos.extend(test_cam_infos)
-        test_cam_infos = []
 
     nerf_normalization = getNerfppNorm(train_cam_infos)
 
@@ -483,12 +484,21 @@ def readNerfSyntheticInfo(path, white_background, eval, extension=".png"):
     if not os.path.exists(ply_path):
         # Since this data set has no colmap data, we start with random points
         num_pts = 100_000
-        print(f"Generating random point cloud ({num_pts})...")
 
-        # We create random points inside the bounds of the synthetic Blender scenes
-        xyz = np.random.random((num_pts, 3)) * 2.6 - 1.3
+        if os.path.exists(os.path.join(path, "one_mesh.ply")):
+            mesh = trimesh.load(os.path.join(path, "one_mesh.ply"), force='mesh')
+            vertices = mesh.vertices
+            if len(vertices) > 1000000:
+                subset_indices = np.random.choice(vertices.shape[0], size=1000000, replace=False)
+                vertices = vertices[subset_indices]
+            num_pts = len(vertices)
+            xyz = vertices
+        else:
+            # We create random points inside the bounds of the synthetic Blender scenes
+            xyz = np.random.random((num_pts, 3)) * 2.6 - 1.3
         shs = np.random.random((num_pts, 3)) / 255.0
         pcd = BasicPointCloud(points=xyz, colors=SH2RGB(shs), normals=np.zeros((num_pts, 3)))
+        print(f"Generating random point cloud ({num_pts})...")
 
         storePly(ply_path, xyz, SH2RGB(shs) * 255)
     try:

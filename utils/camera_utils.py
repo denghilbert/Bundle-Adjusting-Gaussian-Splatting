@@ -53,6 +53,9 @@ def loadCam(args, id, cam_info, resolution_scale, outside_rasterizer, flow_scale
         if os.path.exists(ori_path.split('images')[0] + 'fish/images' + ori_path.split('images')[1]):
             fish_gt_image = Image.open(ori_path.split('images')[0] + 'fish/images' + ori_path.split('images')[1])
             fish_gt_image_resolution = (3, fish_gt_image.size[1], fish_gt_image.size[0])
+        else:
+            fish_gt_image = original_image
+            fish_gt_image_resolution = (3, fish_gt_image.size[1], fish_gt_image.size[0])
     elif 'indoor' in ori_path:
         fish_gt_image = Image.open(ori_path.split('images')[0] + 'fish/images/' + ori_path.split('images')[1].split('indoor_')[1])
         fish_gt_image_resolution = (3, fish_gt_image.size[1], fish_gt_image.size[0])
