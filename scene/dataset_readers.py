@@ -493,6 +493,30 @@ def readNerfSyntheticInfo(path, white_background, eval, extension=".png"):
                 vertices = vertices[subset_indices]
             num_pts = len(vertices)
             xyz = vertices
+        elif os.path.exists(os.path.join(path, "models")):
+            obj_dir = os.path.join(path, "models")
+            vertices_list = []
+            colors_list = []
+            default_color = [255, 255, 255]
+            for filename in os.listdir(obj_dir):
+                #if 'Mesh024' in filename or 'Mesh021' in filename and 'lamp' in filename:
+                if 'Mesh020' in filename or 'Mesh021' in filename and 'lamp' in filename:
+                    continue
+                if filename.endswith('.obj'):
+                    obj_path = os.path.join(obj_dir, filename)
+                    mesh = trimesh.load(obj_path)
+                    vertices = mesh.vertices
+                    if hasattr(mesh.visual, 'vertex_colors') and mesh.visual.vertex_colors is not None:
+                        colors = mesh.visual.vertex_colors[:, :3]  # Take only RGB (ignore alpha if present)
+                    elif hasattr(mesh.visual, 'face_colors') and mesh.visual.face_colors is not None:
+                        colors = np.tile(mesh.visual.face_colors[:3], (vertices.shape[0], 1))  # Apply face color to all vertices
+                    else:
+                        colors = np.tile(default_color, (vertices.shape[0], 1))
+                    vertices_list.append(vertices)
+                    colors_list.append(colors)
+
+            xyz = np.concatenate(vertices_list, axis=0)
+            num_pts = len(xyz)
         else:
             # We create random points inside the bounds of the synthetic Blender scenes
             xyz = np.random.random((num_pts, 3)) * 2.6 - 1.3
