@@ -16,11 +16,12 @@ from utils.graphics_utils import fov2focal
 import json
 import os
 from PIL import Image
+from scipy.spatial.transform import Rotation
 
 WARNED = False
 
 
-def loadCam(args, id, cam_info, resolution_scale, outside_rasterizer, flow_scale, apply2gt):
+def loadCam(args, id, cam_info, resolution_scale, outside_rasterizer, flow_scale, apply2gt, render_resolution):
     orig_w, orig_h = cam_info.image.size
 
     if args.resolution in [1, 2, 4, 8]:
@@ -79,15 +80,16 @@ def loadCam(args, id, cam_info, resolution_scale, outside_rasterizer, flow_scale
         original_image_resolution=original_image_resolution,
         fish_gt_image_resolution=fish_gt_image_resolution,
         flow_scale=flow_scale,
-        apply2gt=apply2gt
+        apply2gt=apply2gt,
+        render_resolution=render_resolution
     )
 
 
-def cameraList_from_camInfos(cam_infos, resolution_scale, args, outside_rasterizer, flow_scale, apply2gt):
+def cameraList_from_camInfos(cam_infos, resolution_scale, args, outside_rasterizer, flow_scale, apply2gt, render_resolution):
     camera_list = []
 
     for id, c in enumerate(cam_infos):
-        camera_list.append(loadCam(args, id, c, resolution_scale, outside_rasterizer, flow_scale, apply2gt))
+        camera_list.append(loadCam(args, id, c, resolution_scale, outside_rasterizer, flow_scale, apply2gt, render_resolution))
 
     return camera_list
 
@@ -136,3 +138,25 @@ def camera_nerfies_from_JSON(path, scale):
         image_size=np.array((int(round(camera_json['image_size'][0] * scale)),
                              int(round(camera_json['image_size'][1] * scale)))),
     )
+
+def rotate_camera(viewpoint_cam, deg_x, deg_y, deg_z):
+    R = viewpoint_cam.R.T  # World-to-camera rotation matrix
+    T = viewpoint_cam.T  # World-to-camera translation matrix
+    camera_center_world = -np.dot(R.T, T)
+    R_camera_to_world = R.T  # Inverse of the rotation matrix in world-to-camera space
+
+    theta_x = np.deg2rad(deg_x)  # Convert degrees to radians
+    theta_y = np.deg2rad(deg_y)  # Convert degrees to radians
+    theta_z = np.deg2rad(deg_z)  # Convert degrees to radians
+    right_camera = R_camera_to_world[:, 0]   # Right (x-axis)
+    up_camera = R_camera_to_world[:, 1]      # Up (y-axis)
+    forward_camera = R_camera_to_world[:, 2] # Forward (z-axis)
+    Ry = Rotation.from_rotvec(theta_y * up_camera).as_matrix()
+    Rx = Rotation.from_rotvec(theta_x * right_camera).as_matrix()
+    Rz = Rotation.from_rotvec(theta_z * forward_camera).as_matrix()
+
+    R_camera_to_world_new = np.dot(Rz, np.dot(Rx, np.dot(Ry, R_camera_to_world)))
+    R_new = R_camera_to_world_new.T
+    T_new = -np.dot(R_new, camera_center_world)
+
+    return R_new, T_new

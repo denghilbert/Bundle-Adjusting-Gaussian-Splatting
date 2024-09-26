@@ -380,7 +380,7 @@ def readCamerasFromTransforms(path, transformsfile, white_background, extension=
         #    frames = frames[:300]
 
         for idx, frame in enumerate(frames):
-            if 'jpg' in frame["file_path"]:
+            if 'jpg' in frame["file_path"] or 'png' in frame["file_path"]:
                 cam_name = os.path.join(path, frame["file_path"])
             else:
                 cam_name = os.path.join(path, frame["file_path"] + extension)

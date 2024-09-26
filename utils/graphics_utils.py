@@ -13,6 +13,8 @@ import torch
 import math
 import numpy as np
 from typing import NamedTuple
+import torch
+import torch.nn.functional as F
 
 
 class BasicPointCloud(NamedTuple):
@@ -111,3 +113,164 @@ def fov2focal(fov, pixels):
 
 def focal2fov(focal, pixels):
     return 2 * math.atan(pixels / (2 * focal))
+
+def cubemap_to_perspective(
+    img_forward, img_left, img_right, img_up, img_down,
+    fov_h_deg, fov_v_deg, output_width, output_height
+):
+    """
+    Converts cubemap images to a perspective projection.
+
+    Args:
+        img_forward: PyTorch tensor of shape (C, H, W)
+        img_left: PyTorch tensor of shape (C, H, W)
+        img_right: PyTorch tensor of shape (C, H, W)
+        img_up: PyTorch tensor of shape (C, H, W)
+        img_down: PyTorch tensor of shape (C, H, W)
+        fov_h_deg: Horizontal field of view in degrees
+        fov_v_deg: Vertical field of view in degrees
+        output_width: Width of the output image
+        output_height: Height of the output image
+
+    Returns:
+        output_image: PyTorch tensor of shape (C, output_height, output_width)
+    """
+
+    device = img_forward.device
+    dtype = img_forward.dtype
+
+    # Convert FOVs to radians
+    fov_h_rad = torch.deg2rad(torch.tensor(fov_h_deg, device=device, dtype=dtype))
+    fov_v_rad = torch.deg2rad(torch.tensor(fov_v_deg, device=device, dtype=dtype))
+
+    # Compute focal lengths
+    focal_length_x = (output_width / 2.0) / torch.tan(fov_h_rad / 2.0)
+    focal_length_y = (output_height / 2.0) / torch.tan(fov_v_rad / 2.0)
+
+    # Generate grid of pixel coordinates
+    i = torch.linspace(0, output_width - 1, output_width, device=device, dtype=dtype)
+    j = torch.linspace(0, output_height - 1, output_height, device=device, dtype=dtype)
+    i, j = torch.meshgrid(i, j, indexing='ij')  # Shape: (output_width, output_height)
+
+    # Convert pixel coordinates to camera space coordinates
+    x_camera = (i - (output_width / 2.0)) / focal_length_x
+    y_camera = ((output_height / 2.0) - j) / focal_length_y  # Invert y-axis
+    z_camera = torch.ones_like(x_camera)
+
+    # Normalize the direction vectors
+    dirs = torch.stack((x_camera, y_camera, z_camera), dim=-1)  # Shape: (W, H, 3)
+    dirs = dirs / torch.norm(dirs, dim=-1, keepdim=True)
+
+    # Determine which face to sample from
+    abs_dirs = torch.abs(dirs)
+    max_abs_dir, max_dim = abs_dirs.max(dim=-1)  # Shape: (W, H)
+
+    # Initialize the output image
+    C = img_forward.shape[0]
+    output_image = torch.zeros((C, output_height, output_width), device=device, dtype=dtype)
+
+    # Prepare the face images for grid sampling
+    face_imgs = {
+        'forward': img_forward.unsqueeze(0),  # Add batch dimension
+        'right': img_right.unsqueeze(0),
+        'left': img_left.unsqueeze(0),
+        'up': img_up.unsqueeze(0),
+        'down': img_down.unsqueeze(0)
+    }
+
+    # Create a single mask tensor for all faces
+    faces_tensor = torch.full((output_width, output_height), -1, device=device, dtype=torch.long)
+    faces_tensor[(max_dim == 2) & (dirs[..., 2] > 0)] = 0  # Forward
+    faces_tensor[(max_dim == 0) & (dirs[..., 0] > 0)] = 1  # Right
+    faces_tensor[(max_dim == 0) & (dirs[..., 0] < 0)] = 2  # Left
+    faces_tensor[(max_dim == 1) & (dirs[..., 1] > 0)] = 3  # Up
+    faces_tensor[(max_dim == 1) & (dirs[..., 1] < 0)] = 4  # Down
+
+    # Precompute denominators for each face to avoid division by zero
+    epsilon = 1e-6
+
+    denominators = torch.where(
+        faces_tensor.unsqueeze(-1) == torch.tensor([0, 1, 2, 3, 4], device=device).view(1, 1, 5),
+        torch.stack([
+            dirs[..., 2],         # Forward: dir_z
+            dirs[..., 0],         # Right: dir_x
+            -dirs[..., 0],        # Left: -dir_x
+            dirs[..., 1],         # Up: dir_y
+            -dirs[..., 1],        # Down: -dir_y
+        ], dim=-1),
+        torch.ones_like(dirs[..., :1]) * epsilon
+    )
+
+    # Compute numerators for u and v
+    numerators_u = torch.where(
+        faces_tensor.unsqueeze(-1) == torch.tensor([0, 1, 2, 3, 4], device=device).view(1, 1, 5),
+        torch.stack([
+            dirs[..., 0],         # Forward: dir_x
+            -dirs[..., 2],        # Right: -dir_z
+            dirs[..., 2],         # Left: dir_z
+            dirs[..., 0],         # Up: dir_x
+            dirs[..., 0],         # Down: dir_x
+        ], dim=-1),
+        torch.zeros_like(dirs[..., :1])
+    )
+
+    numerators_v = torch.where(
+        faces_tensor.unsqueeze(-1) == torch.tensor([0, 1, 2, 3, 4], device=device).view(1, 1, 5),
+        torch.stack([
+            dirs[..., 1],         # Forward: dir_y
+            dirs[..., 1],         # Right: dir_y
+            dirs[..., 1],         # Left: dir_y
+            -dirs[..., 2],        # Up: -dir_z
+            dirs[..., 2],         # Down: dir_z
+        ], dim=-1),
+        torch.zeros_like(dirs[..., :1])
+    )
+
+    # Select the appropriate numerators and denominators
+    face_indices = faces_tensor.view(-1)
+    valid_mask = face_indices != -1
+    face_indices_valid = face_indices[valid_mask]
+    dirs_valid = dirs.view(-1, 3)[valid_mask]
+
+    denominator = denominators.view(-1, 5)[valid_mask, face_indices_valid]
+    numerator_u = numerators_u.view(-1, 5)[valid_mask, face_indices_valid]
+    numerator_v = numerators_v.view(-1, 5)[valid_mask, face_indices_valid]
+
+    # Avoid division by zero
+    denominator = torch.where(denominator == 0, torch.full_like(denominator, epsilon), denominator)
+
+    # Compute u and v coordinates
+    u = numerator_u / denominator
+    v = numerator_v / denominator
+
+    # Stack u and v into a grid for grid_sample
+    grid = torch.stack((u, v), dim=-1)  # Shape: (N, 2)
+    grid = grid.unsqueeze(0).unsqueeze(2)  # Shape: (1, 1, N, 2)
+
+    # Since u and v are in [-1, 1], they can be used directly in grid_sample
+
+    # Prepare the face images list
+    face_imgs_list = [face_imgs['forward'], face_imgs['right'], face_imgs['left'], face_imgs['up'], face_imgs['down']]
+
+    # Sample from the faces
+    sampled = []
+    for idx in range(5):
+        mask = face_indices_valid == idx
+        if mask.any():
+            grid_face = grid[..., mask, :]
+            img_face = face_imgs_list[idx]
+
+            # Sample the face image using grid_sample
+            sampled_face = F.grid_sample(
+                img_face, grid_face, mode='bilinear', padding_mode='border', align_corners=True
+            )  # Shape: (1, C, 1, N_face)
+
+            sampled.append((mask, sampled_face.squeeze(0).squeeze(1)))  # (mask, tensor of shape (C, N_face))
+
+    # Assemble the output image
+    output_image_flat = output_image.view(C, -1)
+    idx = 0
+    for mask, sampled_face in sampled:
+        output_image_flat[:, valid_mask][..., mask] = sampled_face
+
+    return output_image

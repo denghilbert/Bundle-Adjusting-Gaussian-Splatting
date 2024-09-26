@@ -19,6 +19,7 @@ from scene.gaussian_model import GaussianModel
 from scene.specular_model import SpecularModel
 from scene.cameras import quaternion_to_rotation_matrix, rotation_matrix_to_quaternion
 from scene.iresnet import iResNet
+from scene.cameras import Camera
 from arguments import ModelParams
 from utils.camera_utils import cameraList_from_camInfos, camera_to_JSON
 from utils.camera import Lie
@@ -53,7 +54,7 @@ class Scene:
 
     gaussians : GaussianModel
 
-    def __init__(self, args : ModelParams, gaussians : GaussianModel, load_iteration=None, shuffle=True, resolution_scales=[1.0], random_init=False, r_t_noise=[0., 0., 1.], r_t_lr=[0.001, 0.001], global_alignment_lr=0.001, outside_rasterizer=False, flow_scale=[1., 1.], apply2gt=False, vis_pose=False):
+    def __init__(self, args : ModelParams, gaussians : GaussianModel, load_iteration=None, shuffle=True, resolution_scales=[1.0], random_init=False, r_t_noise=[0., 0., 1.], r_t_lr=[0.001, 0.001], global_alignment_lr=0.001, outside_rasterizer=False, flow_scale=[1., 1.], render_resolution=1., apply2gt=False, vis_pose=False):
         """b
         :param path: Path to colmap scene main folder.
         """
@@ -121,8 +122,8 @@ class Scene:
 
             generator = torch.Generator().manual_seed(55)
             if vis_pose:
-                self.unnoisy_train_cameras[resolution_scale] = cameraList_from_camInfos(scene_info.train_cameras, resolution_scale, args, outside_rasterizer, flow_scale, apply2gt)
-                self.debug_cameras[resolution_scale] = cameraList_from_camInfos(scene_info.train_cameras, resolution_scale, args, outside_rasterizer, flow_scale, apply2gt)
+                self.unnoisy_train_cameras[resolution_scale] = cameraList_from_camInfos(scene_info.train_cameras, resolution_scale, args, outside_rasterizer, flow_scale, apply2gt, render_resolution)
+                self.debug_cameras[resolution_scale] = cameraList_from_camInfos(scene_info.train_cameras, resolution_scale, args, outside_rasterizer, flow_scale, apply2gt, render_resolution)
             # simply add noise
             so3_noise = torch.randn((len(scene_info.train_cameras), 3), generator=generator) * r_t_noise[0]
             t_noise = (torch.randn((len(scene_info.train_cameras), 3), generator=generator) * r_t_noise[1]).numpy()
@@ -150,11 +151,11 @@ class Scene:
                 #import pdb; pdb.set_trace()
                 #print(scene_info.train_cameras[index])
             #import pdb; pdb.set_trace()
-            self.train_cameras[resolution_scale] = cameraList_from_camInfos(scene_info.train_cameras, resolution_scale, args, outside_rasterizer, flow_scale, apply2gt)
+            self.train_cameras[resolution_scale] = cameraList_from_camInfos(scene_info.train_cameras, resolution_scale, args, outside_rasterizer, flow_scale, apply2gt, render_resolution)
             print("Loading Test Cameras")
-            self.test_cameras[resolution_scale] = cameraList_from_camInfos(scene_info.test_cameras, resolution_scale, args, outside_rasterizer, flow_scale, apply2gt)
+            self.test_cameras[resolution_scale] = cameraList_from_camInfos(scene_info.test_cameras, resolution_scale, args, outside_rasterizer, flow_scale, apply2gt, render_resolution)
             if vis_pose:
-                self.unnoisy_test_cameras[resolution_scale] = cameraList_from_camInfos(scene_info.test_cameras, resolution_scale, args, outside_rasterizer, flow_scale, apply2gt)
+                self.unnoisy_test_cameras[resolution_scale] = cameraList_from_camInfos(scene_info.test_cameras, resolution_scale, args, outside_rasterizer, flow_scale, apply2gt, render_resolution)
 
         if self.loaded_iter:
             self.gaussians.load_ply(os.path.join(self.model_path, "point_cloud", "iteration_" + str(self.loaded_iter), "point_cloud.ply"))
