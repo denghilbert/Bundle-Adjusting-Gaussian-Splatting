@@ -113,6 +113,15 @@ class Camera(nn.Module):
                     int(1. * self.fish_gt_image_resolution[2]),
                     int(1. * self.fish_gt_image_resolution[1])
                 )
+                if 'berlin' in ori_path:
+                    self.reset_intrinsic(
+                        focal2fov(self.focal_x, 3. * self.fish_gt_image_resolution[2]),
+                        focal2fov(self.focal_y, 3. * self.fish_gt_image_resolution[1]),
+                        self.focal_x,
+                        self.focal_y,
+                        int(1. * self.fish_gt_image_resolution[2]),
+                        int(1. * self.fish_gt_image_resolution[1])
+                    )
 
             self.flow4gt = self.projection_matrix
 
@@ -140,7 +149,7 @@ class Camera(nn.Module):
                     focal2fov(self.focal_y, int(flow_scale[1] * self.fish_gt_image_resolution[1])),
                     self.focal_x,
                     self.focal_y,
-                    int(render_resolution * self.fish_gt_image_resolution[2]),
+                    int((flow_scale[0]/flow_scale[1]) * render_resolution * self.fish_gt_image_resolution[2]),
                     int(render_resolution * self.fish_gt_image_resolution[1])
                 )
 

@@ -285,6 +285,59 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
         N = gaussians.get_xyz.shape[0]
         mlp_color = 0
 
+        #viewpoint_cam = viewpoint_stack[33]
+        #viewpoint_cam.reset_intrinsic(
+        #    #focal2fov(viewpoint_cam.focal_x, int(1. * viewpoint_cam.fish_gt_image_resolution[2])),
+        #    #focal2fov(viewpoint_cam.focal_y, int(1. * viewpoint_cam.fish_gt_image_resolution[1])),
+        #    1.5707963267948966,
+        #    1.5707963267948966,
+        #    viewpoint_cam.focal_x,
+        #    viewpoint_cam.focal_y,
+        #    #int(1. * viewpoint_cam.fish_gt_image_resolution[2]),
+        #    #int(1. * viewpoint_cam.fish_gt_image_resolution[1])
+        #    800,
+        #    800
+        #)
+
+        #R_new, T_new = rotate_camera(viewpoint_cam, 90, 0, 0)
+        #viewpoint_cam.reset_extrinsic(R_new.T, T_new)
+        #render_pkg = render(viewpoint_cam, gaussians, pipe, background, mlp_color, shift_factors, iteration=iteration, hybrid=hybrid, global_alignment=scene.getGlobalAlignment())
+        #img_up = render_pkg["render"]
+        #torchvision.utils.save_image(img_up, f'up.png')
+
+        #R_new, T_new = rotate_camera(viewpoint_cam, -180, 0, 0)
+        #viewpoint_cam.reset_extrinsic(R_new.T, T_new)
+        #render_pkg = render(viewpoint_cam, gaussians, pipe, background, mlp_color, shift_factors, iteration=iteration, hybrid=hybrid, global_alignment=scene.getGlobalAlignment())
+        #img_down = render_pkg["render"]
+        #torchvision.utils.save_image(img_down, f'down.png')
+
+        #R_new, T_new = rotate_camera(viewpoint_cam, 90, 90, 0)
+        #viewpoint_cam.reset_extrinsic(R_new.T, T_new)
+        #render_pkg = render(viewpoint_cam, gaussians, pipe, background, mlp_color, shift_factors, iteration=iteration, hybrid=hybrid, global_alignment=scene.getGlobalAlignment())
+        #img_right = render_pkg["render"]
+        #torchvision.utils.save_image(img_right, f'right.png')
+
+        #R_new, T_new = rotate_camera(viewpoint_cam, 0, -180, 0)
+        #viewpoint_cam.reset_extrinsic(R_new.T, T_new)
+        #render_pkg = render(viewpoint_cam, gaussians, pipe, background, mlp_color, shift_factors, iteration=iteration, hybrid=hybrid, global_alignment=scene.getGlobalAlignment())
+        #img_left = render_pkg["render"]
+        #torchvision.utils.save_image(img_left, f'left.png')
+
+        #R_new, T_new = rotate_camera(viewpoint_cam, 0, 90, 0)
+        #viewpoint_cam.reset_extrinsic(R_new.T, T_new)
+        #render_pkg = render(viewpoint_cam, gaussians, pipe, background, mlp_color, shift_factors, iteration=iteration, hybrid=hybrid, global_alignment=scene.getGlobalAlignment())
+        #img_forward = render_pkg["render"]
+        #torchvision.utils.save_image(img_forward, f'forward.png')
+
+        #fov_h_deg = 150  # Horizontal FOV in degrees
+        #fov_v_deg = 150  # Vertical FOV in degrees
+        #output_width = 800
+        #output_height = 800
+
+        #output_image = cubemap_to_perspective(img_forward, img_left, img_right, img_up, img_down, fov_h_deg, fov_v_deg, output_width, output_height)
+        #torchvision.utils.save_image(output_image, f'final.png')
+        #import pdb;pdb.set_trace()
+
         render_pkg = render(viewpoint_cam, gaussians, pipe, background, mlp_color, shift_factors, iteration=iteration, hybrid=hybrid, global_alignment=scene.getGlobalAlignment())
         image, viewspace_point_tensor, visibility_filter, radii = render_pkg["render"], render_pkg["viewspace_points"], render_pkg["visibility_filter"], render_pkg["radii"]
 
@@ -479,7 +532,7 @@ def training_report(use_wandb, iteration, Ll1, ssim_loss, loss, l1_loss, elapsed
                                 )
                                 image = center_crop(image, viewpoint.fish_gt_image_resolution[1], viewpoint.fish_gt_image_resolution[2]).squeeze(0)
                                 mask = (~((image.squeeze(0)[0]==0.) & (image.squeeze(0)[1]==0.)).unsqueeze(0)).float()
-                                gt_image = viewpoint.fish_gt_image.cuda()
+                                gt_image = viewpoint.fish_gt_image.cuda() * mask
                                 torchvision.utils.save_image(gt_image.cpu(), os.path.join(scene.model_path, 'training_val_{}/gt/masked_{}'.format(iteration, viewpoint.image_name) + "_" + name + ".png"))
                                 torchvision.utils.save_image(image, os.path.join(scene.model_path, 'training_val_{}/renderred/distorted_{}'.format(iteration, viewpoint.image_name) + "_" + name + ".png"))
                                 if use_wandb and name == 'train':
@@ -535,7 +588,6 @@ def training_report(use_wandb, iteration, Ll1, ssim_loss, loss, l1_loss, elapsed
                             f"validation/lpips": torch.tensor(lpipss).mean().item(),
                         }
                         wandb.log(scalars, step=iteration)
-
         torch.cuda.empty_cache()
 
     if use_wandb and iteration % 10 == 0:

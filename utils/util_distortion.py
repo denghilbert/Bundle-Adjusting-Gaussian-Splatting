@@ -124,7 +124,6 @@ def init_from_coeff(coeff, dataset, ref_points):
         with open(os.path.join(dataset.source_path, 'cameras.json')) as json_file:
             contents = json.load(json_file)
             coeff = contents['KRT'][-1]['distortion']
-    #coeff = [0., 0, 0, 0]
     if len(coeff) == 4:
         ref_points = ref_points * (inv_r * (theta + coeff[0] * theta**3 + coeff[1] * theta**5 + coeff[2] * theta**7 + coeff[3] * theta**9))
     elif len(coeff) == 2:
@@ -143,6 +142,7 @@ def init_from_coeff(coeff, dataset, ref_points):
         ref_points = ref_points * (inv_r * (theta + coeff[0] * theta**3 + coeff[1] * theta**5 + coeff[2] * theta**7))
     else:
         ref_points = ref_points
+    print(f"using coeff: {coeff}")
 
     return ref_points
 
@@ -165,7 +165,6 @@ def init_from_colmap(scene, dataset, optimizer_lens_net, lens_net, scheduler_len
     ref_points1 = camera_directions_w_lens.reshape((P_sensor.shape[0], P_sensor.shape[1], 3))[:, :, :2]
     coeff = [0, 0, 0, 0]
     ref_points1 = init_from_coeff(coeff, dataset, ref_points1)
-    print(f"using coeff: {coeff}")
     inf_mask = torch.isinf(ref_points1)
     nan_mask = torch.isnan(ref_points1)
     ref_points1[inf_mask] = 0
