@@ -28,12 +28,21 @@ class Camera(nn.Module):
         assert fish_gt_image_resolution != None
         self.orig_fov_w = orig_fov_w
         self.orig_fov_h = orig_fov_h
+        self.ori_path = ori_path
+        self.outside_rasterizer = outside_rasterizer
+        self.test_outside_rasterizer = test_outside_rasterizer
+        self.original_image_resolution = original_image_resolution
+        self.fish_gt_image_resolution = fish_gt_image_resolution
+        self.flow_scale =flow_scale
+        self.apply2gt = apply2gt
+        self.render_resolution =render_resolution
 
         self.uid = uid
         self.colmap_id = colmap_id
         self.R = R
         self.T = T
         self.intrinsic_matrix = torch.from_numpy(intrinsic_matrix).cuda()
+        self.intrinsic_matrix_numpy = intrinsic_matrix
         self.FoVx = FoVx
         self.FoVy = FoVy
         self.focal_x = focal_length_x
@@ -54,8 +63,6 @@ class Camera(nn.Module):
         self.image_height = original_image_resolution[1]
         self.original_image_pil = image
         self.fish_gt_image_pil = fish_gt_image
-        self.original_image_resolution = original_image_resolution
-        self.fish_gt_image_resolution = fish_gt_image_resolution
 
 
         self.zfar = 100.0

@@ -216,7 +216,7 @@ def storePly(path, xyz, rgb):
     ply_data = PlyData([vertex_element])
     ply_data.write(path)
 
-def readColmapSceneInfo(path, images, eval, llffhold=8):
+def readColmapSceneInfo(path, images, eval, llffhold=8, init_type="sfm", num_pts=100000):
     try:
         cameras_extrinsic_file = os.path.join(path, "sparse/0", "images.bin")
         cameras_intrinsic_file = os.path.join(path, "sparse/0", "cameras.bin")
@@ -246,16 +246,32 @@ def readColmapSceneInfo(path, images, eval, llffhold=8):
 
     nerf_normalization = getNerfppNorm(train_cam_infos)
 
-    ply_path = os.path.join(path, "sparse/0/points3D.ply")
-    bin_path = os.path.join(path, "sparse/0/points3D.bin")
-    txt_path = os.path.join(path, "sparse/0/points3D.txt")
-    if not os.path.exists(ply_path):
-        print("Converting point3d.bin to .ply, will happen only the first time you open the scene.")
-        try:
-            xyz, rgb, _ = read_points3D_binary(bin_path)
-        except:
-            xyz, rgb, _ = read_points3D_text(txt_path)
-        storePly(ply_path, xyz, rgb)
+    if init_type == "sfm":
+        ply_path = os.path.join(path, "sparse/0/points3D.ply")
+        bin_path = os.path.join(path, "sparse/0/points3D.bin")
+        txt_path = os.path.join(path, "sparse/0/points3D.txt")
+        if not os.path.exists(ply_path):
+            print("Converting point3d.bin to .ply, will happen only the first time you open the scene.")
+            try:
+                xyz, rgb, _ = read_points3D_binary(bin_path)
+            except:
+                xyz, rgb, _ = read_points3D_text(txt_path)
+            storePly(ply_path, xyz, rgb)
+    elif init_type == "random":
+        ply_path = os.path.join(path, "random.ply")
+        print(f"Generating random point cloud ({num_pts})...")
+
+        xyz = np.random.random((num_pts, 3)) * nerf_normalization["radius"]* 3*2 -(nerf_normalization["radius"]*3)
+
+        num_pts = xyz.shape[0]
+        shs = np.random.random((num_pts, 3)) / 255.0
+        pcd = BasicPointCloud(points=xyz, colors=SH2RGB(shs), normals=np.zeros((num_pts, 3)))
+
+        storePly(ply_path, xyz, SH2RGB(shs) * 255)
+    else:
+        print("Please specify a correct init_type: random or sfm")
+        exit(0)
+
     try:
         pcd = fetchPly(ply_path)
     except:
@@ -267,55 +283,6 @@ def readColmapSceneInfo(path, images, eval, llffhold=8):
                            nerf_normalization=nerf_normalization,
                            ply_path=ply_path)
     return scene_info
-
-def readCamerasFromDiffusion(path, transformsfile, white_background, extension=".png"):
-    cam_infos = []
-
-    with open(os.path.join(path, transformsfile)) as json_file:
-        contents = json.load(json_file)
-        fovx = contents["camera_angle_x"]
-
-        frames = contents["frames"]
-        for idx, frame in enumerate(frames):
-            cam_name = os.path.join(path, frame["file_path"] + extension)
-
-            # NeRF 'transform_matrix' is a camera-to-world transform
-            #c2w = np.array(frame["transform_matrix"])
-            # change from OpenGL/Blender camera axes (Y up, Z back) to COLMAP (Y down, Z forward)
-            #c2w[:3, 1:3] *= -1
-
-            # get the world-to-camera transform and set R, T
-            #w2c = np.linalg.inv(c2w)
-            w2c = np.array(frame["transform_matrix"])
-            R = np.transpose(w2c[:3,:3])  # R is stored transposed due to 'glm' in CUDA code
-            T = w2c[:3, 3]
-
-            image_path = os.path.join(path, cam_name)
-            image_name = Path(cam_name).stem
-            image = Image.open(image_path)
-
-            im_data = np.array(image.convert("RGBA"))
-
-            bg = np.array([1,1,1]) if white_background else np.array([0, 0, 0])
-
-            norm_data = im_data / 255.0
-            arr = norm_data[:,:,:3] * norm_data[:, :, 3:4] + bg * (1 - norm_data[:, :, 3:4])
-            image = Image.fromarray(np.array(arr*255.0, dtype=np.byte), "RGB")
-
-            fovy = focal2fov(fov2focal(fovx, image.size[0]), image.size[1])
-            FovY = fovy
-            FovX = fovx
-
-            intrinsic_matrix = np.array([
-                [fov2focal(FovX, image.size[0]), 0., image.size[0] * 0.5],
-                [0., fov2focal(FovY, image.size[1]), image.size[1] * 0.5],
-                [0., 0., 1.]
-            ], dtype=np.float32)
-
-            cam_infos.append(CameraInfo(uid=idx, R=R, T=T, FovY=FovY, FovX=FovX, image=image, intrinsic_matrix=intrinsic_matrix,
-                            image_path=image_path, image_name=image_name, width=image.size[0], height=image.size[1]))
-
-    return cam_infos
 
 def readCamerasFromVRNeRF(path, transformsfile, white_background, extension=".jpg"):
     cam_infos = []
@@ -425,7 +392,7 @@ def readCamerasFromTransforms(path, transformsfile, white_background, extension=
     return cam_infos
 
 
-def readMetashapeInfo(path, white_background, eval, extension=".png"):
+def readMetashapeInfo(path, white_background, eval, extension=".png", init_type="sfm", num_pts=100000):
     print("Reading Training Transforms")
     train_cam_infos = readCamerasFromVRNeRF(path, "cameras.json", white_background, extension)
     print(f"Numer of training cameras: {len(train_cam_infos)}")
@@ -440,23 +407,27 @@ def readMetashapeInfo(path, white_background, eval, extension=".png"):
 
     nerf_normalization = getNerfppNorm(train_cam_infos)
 
-    ply_path = os.path.join(path, "points3d.ply")
-    if not os.path.exists(ply_path):
-        # Since this data set has no colmap data, we start with random points
-        num_pts = 100_000
+    if init_type == "sfm":
+        ply_path = os.path.join(path, "points3d.ply")
+        if not os.path.exists(ply_path):
+            xyz, rgb = load_mesh(os.path.join(path, 'mesh.obj'), os.path.join(path, 'mesh.mtl'), os.path.join(path, 'mesh.jpg'))
+            pcd = BasicPointCloud(points=xyz, colors=rgb, normals=np.zeros((len(xyz), 3)))
+            storePly(ply_path, xyz, rgb)
+    elif init_type == "random":
+        ply_path = os.path.join(path, "random.ply")
         print(f"Generating random point cloud ({num_pts})...")
 
-        # We create random points inside the bounds of the synthetic Blender scenes
-        #xyz = np.random.random((num_pts, 3)) * 2.6 - 1.3
-        #shs = np.random.random((num_pts, 3)) / 255.0
-        #pcd = BasicPointCloud(points=xyz, colors=SH2RGB(shs), normals=np.zeros((num_pts, 3)))
-        #storePly(ply_path, xyz, SH2RGB(shs) * 255)
-        xyz, rgb = load_mesh(os.path.join(path, 'mesh.obj'), os.path.join(path, 'mesh.mtl'), os.path.join(path, 'mesh.jpg'))
-        #indices = np.random.choice(xyz.shape[0], size=100000, replace=False)
-        #xyz = xyz[indices]
-        #rgb = rgb[indices]
-        pcd = BasicPointCloud(points=xyz, colors=rgb, normals=np.zeros((len(xyz), 3)))
-        storePly(ply_path, xyz, rgb)
+        xyz = np.random.random((num_pts, 3)) * nerf_normalization["radius"]* 3*2 -(nerf_normalization["radius"]*3)
+
+        num_pts = xyz.shape[0]
+        shs = np.random.random((num_pts, 3)) / 255.0
+        pcd = BasicPointCloud(points=xyz, colors=SH2RGB(shs), normals=np.zeros((num_pts, 3)))
+
+        storePly(ply_path, xyz, SH2RGB(shs) * 255)
+    else:
+        print("Please specify a correct init_type: random or sfm")
+        exit(0)
+
     try:
         pcd = fetchPly(ply_path)
     except:
@@ -469,7 +440,7 @@ def readMetashapeInfo(path, white_background, eval, extension=".png"):
                            ply_path=ply_path)
     return scene_info
 
-def readNerfSyntheticInfo(path, white_background, eval, extension=".png"):
+def readNerfSyntheticInfo(path, white_background, eval, extension=".png", init_type="sfm", num_pts=100000):
     print("Reading Training Transforms")
     train_cam_infos = readCamerasFromTransforms(path, "transforms_train.json", white_background, extension)
     print("Reading Test Transforms")
@@ -480,87 +451,63 @@ def readNerfSyntheticInfo(path, white_background, eval, extension=".png"):
 
     nerf_normalization = getNerfppNorm(train_cam_infos)
 
-    ply_path = os.path.join(path, "points3d.ply")
-    if not os.path.exists(ply_path):
-        # Since this data set has no colmap data, we start with random points
-        num_pts = 100_000
+    if init_type == "sfm":
+        ply_path = os.path.join(path, "points3d.ply")
+        if not os.path.exists(ply_path):
+            # Since this data set has no colmap data, we start with random points
+            num_pts = 100_000
 
-        if os.path.exists(os.path.join(path, "one_mesh.ply")):
-            mesh = trimesh.load(os.path.join(path, "one_mesh.ply"), force='mesh')
-            vertices = mesh.vertices
-            if len(vertices) > 1000000:
-                subset_indices = np.random.choice(vertices.shape[0], size=1000000, replace=False)
-                vertices = vertices[subset_indices]
-            num_pts = len(vertices)
-            xyz = vertices
-        elif os.path.exists(os.path.join(path, "models")):
-            obj_dir = os.path.join(path, "models")
-            vertices_list = []
-            colors_list = []
-            default_color = [255, 255, 255]
-            for filename in os.listdir(obj_dir):
-                #if 'Mesh024' in filename or 'Mesh021' in filename and 'lamp' in filename:
-                if 'Mesh020' in filename or 'Mesh021' in filename and 'lamp' in filename:
-                    continue
-                if filename.endswith('.obj'):
-                    obj_path = os.path.join(obj_dir, filename)
-                    mesh = trimesh.load(obj_path)
-                    vertices = mesh.vertices
-                    if hasattr(mesh.visual, 'vertex_colors') and mesh.visual.vertex_colors is not None:
-                        colors = mesh.visual.vertex_colors[:, :3]  # Take only RGB (ignore alpha if present)
-                    elif hasattr(mesh.visual, 'face_colors') and mesh.visual.face_colors is not None:
-                        colors = np.tile(mesh.visual.face_colors[:3], (vertices.shape[0], 1))  # Apply face color to all vertices
-                    else:
-                        colors = np.tile(default_color, (vertices.shape[0], 1))
-                    vertices_list.append(vertices)
-                    colors_list.append(colors)
+            if os.path.exists(os.path.join(path, "one_mesh.ply")):
+                mesh = trimesh.load(os.path.join(path, "one_mesh.ply"), force='mesh')
+                vertices = mesh.vertices
+                if len(vertices) > 1000000:
+                    subset_indices = np.random.choice(vertices.shape[0], size=1000000, replace=False)
+                    vertices = vertices[subset_indices]
+                num_pts = len(vertices)
+                xyz = vertices
+            elif os.path.exists(os.path.join(path, "models")):
+                obj_dir = os.path.join(path, "models")
+                vertices_list = []
+                colors_list = []
+                default_color = [255, 255, 255]
+                for filename in os.listdir(obj_dir):
+                    #if 'Mesh024' in filename or 'Mesh021' in filename and 'lamp' in filename:
+                    if 'Mesh020' in filename or 'Mesh021' in filename and 'lamp' in filename:
+                        continue
+                    if filename.endswith('.obj'):
+                        obj_path = os.path.join(obj_dir, filename)
+                        mesh = trimesh.load(obj_path)
+                        vertices = mesh.vertices
+                        if hasattr(mesh.visual, 'vertex_colors') and mesh.visual.vertex_colors is not None:
+                            colors = mesh.visual.vertex_colors[:, :3]  # Take only RGB (ignore alpha if present)
+                        elif hasattr(mesh.visual, 'face_colors') and mesh.visual.face_colors is not None:
+                            colors = np.tile(mesh.visual.face_colors[:3], (vertices.shape[0], 1))  # Apply face color to all vertices
+                        else:
+                            colors = np.tile(default_color, (vertices.shape[0], 1))
+                        vertices_list.append(vertices)
+                        colors_list.append(colors)
 
-            xyz = np.concatenate(vertices_list, axis=0)
-            num_pts = len(xyz)
-        else:
-            # We create random points inside the bounds of the synthetic Blender scenes
-            xyz = np.random.random((num_pts, 3)) * 2.6 - 1.3
-        shs = np.random.random((num_pts, 3)) / 255.0
-        pcd = BasicPointCloud(points=xyz, colors=SH2RGB(shs), normals=np.zeros((num_pts, 3)))
+                xyz = np.concatenate(vertices_list, axis=0)
+                num_pts = len(xyz)
+            shs = np.random.random((num_pts, 3)) / 255.0
+            pcd = BasicPointCloud(points=xyz, colors=SH2RGB(shs), normals=np.zeros((num_pts, 3)))
+            print(f"Loading point cloud ({num_pts})...")
+            storePly(ply_path, xyz, SH2RGB(shs) * 255)
+    elif init_type == "random":
+        ply_path = os.path.join(path, "random.ply")
         print(f"Generating random point cloud ({num_pts})...")
 
-        storePly(ply_path, xyz, SH2RGB(shs) * 255)
-    try:
-        pcd = fetchPly(ply_path)
-    except:
-        pcd = None
+        xyz = np.random.random((num_pts, 3)) * nerf_normalization["radius"]* 3*2 -(nerf_normalization["radius"]*3)
 
-    scene_info = SceneInfo(point_cloud=pcd,
-                           train_cameras=train_cam_infos,
-                           test_cameras=test_cam_infos,
-                           nerf_normalization=nerf_normalization,
-                           ply_path=ply_path)
-    return scene_info
-
-def readDiffusion(path, white_background, eval, extension=".jpg"):
-    print("Reading Training Transforms")
-    train_cam_infos = readCamerasFromDiffusion(path, "transforms_train.json", white_background, extension)
-    print("Reading Test Transforms")
-    test_cam_infos = readCamerasFromDiffusion(path, "transforms_test.json", white_background, extension)
-
-    if not eval:
-        train_cam_infos.extend(test_cam_infos)
-        test_cam_infos = []
-
-    nerf_normalization = getNerfppNorm(train_cam_infos)
-
-    ply_path = os.path.join(path, "points3d.ply")
-    if not os.path.exists(ply_path):
-        # Since this data set has no colmap data, we start with random points
-        num_pts = 100_000
-        print(f"Generating random point cloud ({num_pts})...")
-
-        # We create random points inside the bounds of the synthetic Blender scenes
-        xyz = np.random.random((num_pts, 3)) * 2.6 - 1.3
+        num_pts = xyz.shape[0]
         shs = np.random.random((num_pts, 3)) / 255.0
         pcd = BasicPointCloud(points=xyz, colors=SH2RGB(shs), normals=np.zeros((num_pts, 3)))
 
         storePly(ply_path, xyz, SH2RGB(shs) * 255)
+    else:
+        print("Please specify a correct init_type: random or sfm")
+        exit(0)
+
     try:
         pcd = fetchPly(ply_path)
     except:
@@ -577,5 +524,4 @@ sceneLoadTypeCallbacks = {
     "Colmap": readColmapSceneInfo,
     "Blender" : readNerfSyntheticInfo,
     "Metashape" : readMetashapeInfo,
-    "Diffusion" : readDiffusion
 }

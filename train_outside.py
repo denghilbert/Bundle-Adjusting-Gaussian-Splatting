@@ -18,6 +18,7 @@ from random import randint
 from utils.loss_utils import l1_loss, ssim, kl_divergence, l2_loss
 from gaussian_renderer import render, network_gui
 from scene import Scene, GaussianModel, SpecularModel, iResNet
+from scene.gaussian_model import build_scaling_rotation
 from utils.general_utils import safe_state, get_linear_noise_func, linear_to_srgb
 from tqdm import tqdm
 from utils.image_utils import psnr
@@ -40,6 +41,7 @@ from torch import nn
 import torch.nn.functional as F
 from utils.util_distortion import homogenize, dehomogenize, colorize, plot_points, center_crop, init_from_colmap, apply_distortion, generate_control_pts
 import copy
+from scene.cameras import Camera
 
 # set random seeds
 import numpy as np
@@ -171,6 +173,9 @@ class VignettingModel(torch.nn.Module):
         return mask
 
 def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoint_iterations, checkpoint, debug_from, use_wandb=False, random_init=False, hybrid=False, opt_cam=False, opt_shift=False, no_distortion_mask=False, opt_distortion=False, start_vignetting=10000000000, opt_intrinsic=False, r_t_noise=[0., 0.], r_t_lr=[0.001, 0.001], global_alignment_lr=0.001, extra_loss=False, start_opt_lens=1, extend_scale=2., control_point_sample_scale=8., outside_rasterizer=False, abs_grad=False, densi_num=0.0002, if_circular_mask=False, flow_scale=[1., 1.], render_resolution=1., apply2gt=False, iresnet_lr=1e-7, opacity_threshold=0.005):
+    if dataset.cap_max == -1:
+        print("Please specify the maximum number of Gaussians using --cap_max.")
+        exit()
     first_iter = 0
     tb_writer = prepare_output_and_logger(dataset)
     gaussians = GaussianModel(dataset.sh_degree, dataset.asg_degree)
@@ -265,7 +270,7 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
 
         iter_start.record()
 
-        gaussians.update_learning_rate(iteration)
+        xyz_lr = gaussians.update_learning_rate(iteration)
         if hybrid:
             specular_mlp.update_learning_rate(iteration)
 
@@ -383,6 +388,8 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
             torchvision.utils.save_image(gt_image, os.path.join(scene.model_path, f"gt_fish2perspective_{iteration}.png"))
 
         loss = (1.0 - opt.lambda_dssim) * Ll1 + opt.lambda_dssim * (1.0 - ssim_loss)# + 0.1 * (loss_projection / len(camera_pairs[viewpoint_cam.uid]))
+        loss = loss + args.opacity_reg * torch.abs(gaussians.get_opacity).mean()
+        loss = loss + args.scale_reg * torch.abs(gaussians.get_scaling).mean()
         loss.backward(retain_graph=True)
 
         iter_end.record()
@@ -416,34 +423,52 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
 
 
             # Densification
-            if iteration < opt.densify_until_iter:
-                # Keep track of max radii in image-space for pruning
-                gaussians.max_radii2D[visibility_filter] = torch.max(gaussians.max_radii2D[visibility_filter], radii[visibility_filter])
+            #if iteration < opt.densify_until_iter:
+            #    # Keep track of max radii in image-space for pruning
+            #    gaussians.max_radii2D[visibility_filter] = torch.max(gaussians.max_radii2D[visibility_filter], radii[visibility_filter])
+            #    viewspace_point_tensor_densify = render_pkg["viewspace_points_densify"]
+            #    gaussians.add_densification_stats(viewspace_point_tensor, viewspace_point_tensor_densify, visibility_filter, abs_grad)
 
-                viewspace_point_tensor_densify = render_pkg["viewspace_points_densify"]
-                gaussians.add_densification_stats(viewspace_point_tensor, viewspace_point_tensor_densify, visibility_filter, abs_grad)
+            #    if iteration > opt.densify_from_iter and iteration % opt.densification_interval == 0:
+            #        size_threshold = 20 if iteration > opt.opacity_reset_interval else None
+            #        if abs_grad:
+            #            gaussians.densify_and_prune(opt.abs_densify_grad_threshold, opacity_threshold, scene.cameras_extent, size_threshold)
+            #        else:
+            #            gaussians.densify_and_prune(opt.densify_grad_threshold, opacity_threshold, scene.cameras_extent, size_threshold)
+            #            #gaussians.densify_and_prune(densi_num, 0.005, scene.cameras_extent, size_threshold)
+
+            #    if iteration % opt.opacity_reset_interval == 0 or (dataset.white_background and iteration == opt.densify_from_iter):
+            #        gaussians.reset_opacity()
+
+            #    if use_wandb and iteration % 10 == 0:
+            #        scalars = {
+            #            f"gradient/2d_gradient": viewspace_point_tensor.grad.mean(),
+            #        }
+            #        wandb.log(scalars, step=iteration)
+
+            if iteration < opt.densify_until_iter and iteration > opt.densify_from_iter and iteration % opt.densification_interval == 0:
+                dead_mask = (gaussians.get_opacity <= 0.005).squeeze(-1)
+                gaussians.relocate_gs(dead_mask=dead_mask)
+                gaussians.add_new_gs(cap_max=args.cap_max)
                 if use_wandb and iteration % 10 == 0:
                     scalars = {
                         f"gradient/2d_gradient": viewspace_point_tensor.grad.mean(),
                     }
                     wandb.log(scalars, step=iteration)
 
-                if iteration > opt.densify_from_iter and iteration % opt.densification_interval == 0:
-                    size_threshold = 20 if iteration > opt.opacity_reset_interval else None
-                    if abs_grad:
-                        gaussians.densify_and_prune(opt.abs_densify_grad_threshold, opacity_threshold, scene.cameras_extent, size_threshold)
-                    else:
-                        gaussians.densify_and_prune(opt.densify_grad_threshold, opacity_threshold, scene.cameras_extent, size_threshold)
-                        #gaussians.densify_and_prune(densi_num, 0.005, scene.cameras_extent, size_threshold)
-
-                if iteration % opt.opacity_reset_interval == 0 or (dataset.white_background and iteration == opt.densify_from_iter):
-                    gaussians.reset_opacity()
-
 
             # Optimizer step
             if iteration < opt.iterations:
                 gaussians.optimizer.step()
                 gaussians.optimizer.zero_grad(set_to_none = True)
+
+                L = build_scaling_rotation(gaussians.get_scaling, gaussians.get_rotation)
+                actual_covariance = L @ L.transpose(1, 2)
+                def op_sigmoid(x, k=100, x0=0.995):
+                    return 1 / (1 + torch.exp(-k * (x - x0)))
+                noise = torch.randn_like(gaussians._xyz) * (op_sigmoid(1- gaussians.get_opacity))*args.noise_lr*xyz_lr
+                noise = torch.bmm(actual_covariance, noise.unsqueeze(-1)).squeeze(-1)
+                gaussians._xyz.add_(noise)
 
                 if start_vignetting < iteration:
                     vignetting_optimizer.step()
@@ -503,8 +528,18 @@ def training_report(use_wandb, iteration, Ll1, ssim_loss, loss, l1_loss, elapsed
     # Report test and samples of training set
     if iteration in testing_iterations:
         torch.cuda.empty_cache()
-        validation_configs = ({'name': 'test', 'cameras' : scene.getTestCameras()},
-                              {'name': 'train', 'cameras' : [scene.getTrainCameras()[idx % len(scene.getTrainCameras())] for idx in range(5, 30, 5)]})
+        validation_configs = ({'name': 'test', 'cameras' : []},
+                              {'name': 'train', 'cameras' : []})
+
+        for camera in scene.getTestCameras():
+            validation_configs[0]['cameras'].append(
+                Camera(camera.colmap_id, camera.R, camera.T, camera.intrinsic_matrix_numpy, camera.FoVx, camera.FoVy, camera.focal_x, camera.focal_y, camera.original_image_pil, None, camera.fish_gt_image_pil, camera.image_name, camera.uid, depth=None, ori_path=camera.ori_path, outside_rasterizer=camera.outside_rasterizer, test_outside_rasterizer=camera.test_outside_rasterizer, orig_fov_w=camera.orig_fov_w, orig_fov_h=camera.orig_fov_h, original_image_resolution=camera.original_image_resolution, fish_gt_image_resolution=camera.fish_gt_image_resolution, flow_scale=camera.flow_scale, apply2gt=camera.apply2gt, render_resolution=camera.render_resolution)
+            )
+
+        for camera in [scene.getTrainCameras()[idx % len(scene.getTrainCameras())] for idx in range(5, 30, 5)]:
+            validation_configs[1]['cameras'].append(
+                Camera(camera.colmap_id, camera.R, camera.T, camera.intrinsic_matrix_numpy, camera.FoVx, camera.FoVy, camera.focal_x, camera.focal_y, camera.original_image_pil, None, camera.fish_gt_image_pil, camera.image_name, camera.uid, depth=None, ori_path=camera.ori_path, outside_rasterizer=camera.outside_rasterizer, test_outside_rasterizer=camera.test_outside_rasterizer, orig_fov_w=camera.orig_fov_w, orig_fov_h=camera.orig_fov_h, original_image_resolution=camera.original_image_resolution, fish_gt_image_resolution=camera.fish_gt_image_resolution, flow_scale=camera.flow_scale, apply2gt=camera.apply2gt, render_resolution=camera.render_resolution)
+            )
 
         file_path = os.path.join(scene.model_path, 'evaluation_results.txt')
         with open(file_path, 'a') as f:
@@ -519,6 +554,16 @@ def training_report(use_wandb, iteration, Ll1, ssim_loss, loss, l1_loss, elapsed
                     os.makedirs(os.path.join(scene.model_path, 'training_val_{}/gt').format(iteration), exist_ok=True)
                     os.makedirs(os.path.join(scene.model_path, 'training_val_{}/renderred').format(iteration), exist_ok=True)
                     for idx, viewpoint in enumerate(config['cameras']):
+                        viewpoint.reset_intrinsic(
+                            viewpoint.FoVx,
+                            viewpoint.FoVy,
+                            viewpoint.focal_x,
+                            viewpoint.focal_y,
+                            int(2. * viewpoint.image_width),
+                            int(2. * viewpoint.image_height)
+                            #int(flow_scale[0] * viewpoint.image_width),
+                            #int(flow_scale[1] * viewpoint.image_height)
+                        )
                         image = torch.clamp(renderFunc(viewpoint, scene.gaussians, *renderArgs, global_alignment=scene.getGlobalAlignment())["render"], 0.0, 1.0)
                         torchvision.utils.save_image(image, os.path.join(scene.model_path, 'training_val_{}/renderred/{}'.format(iteration, viewpoint.image_name) + "_" + name + ".png"))
                         if outside_rasterizer:
@@ -532,7 +577,10 @@ def training_report(use_wandb, iteration, Ll1, ssim_loss, loss, l1_loss, elapsed
                                 )
                                 image = center_crop(image, viewpoint.fish_gt_image_resolution[1], viewpoint.fish_gt_image_resolution[2]).squeeze(0)
                                 mask = (~((image.squeeze(0)[0]==0.) & (image.squeeze(0)[1]==0.)).unsqueeze(0)).float()
-                                gt_image = viewpoint.fish_gt_image.cuda() * mask
+                                if iteration == 1:
+                                    gt_image = viewpoint.fish_gt_image.cuda()
+                                else:
+                                    gt_image = viewpoint.fish_gt_image.cuda() * mask
                                 torchvision.utils.save_image(gt_image.cpu(), os.path.join(scene.model_path, 'training_val_{}/gt/masked_{}'.format(iteration, viewpoint.image_name) + "_" + name + ".png"))
                                 torchvision.utils.save_image(image, os.path.join(scene.model_path, 'training_val_{}/renderred/distorted_{}'.format(iteration, viewpoint.image_name) + "_" + name + ".png"))
                                 if use_wandb and name == 'train':
@@ -543,7 +591,7 @@ def training_report(use_wandb, iteration, Ll1, ssim_loss, loss, l1_loss, elapsed
                             elif apply2gt:
                                 P_sensor, P_view_insidelens_direction = generate_control_pts(viewpoint, control_point_sample_scale, flow_scale)
                                 gt_image, mask, flow_apply2_gt_or_img = apply_distortion(lens_net, P_view_insidelens_direction, P_sensor, viewpoint, image, apply2gt=apply2gt)
-                                if no_distortion_mask:
+                                if iteration == 1:
                                     image = image
                                 else:
                                     image = image * mask

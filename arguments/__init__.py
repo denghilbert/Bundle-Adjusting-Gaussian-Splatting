@@ -55,6 +55,8 @@ class ModelParams(ParamGroup):
         self._white_background = False
         self.data_device = "cuda"
         self.eval = False
+        self.cap_max = -1
+        self.init_type = "sfm"
         super().__init__(parser, "Loading Parameters", sentinel)
 
     def extract(self, args):
@@ -87,9 +89,12 @@ class OptimizationParams(ParamGroup):
         self.densification_interval = 100
         self.opacity_reset_interval = 3000
         self.densify_from_iter = 500
-        self.densify_until_iter = 15_000
+        self.densify_until_iter = 25_000
         self.densify_grad_threshold = 0.0002
         self.abs_densify_grad_threshold = 0.0004
+        self.noise_lr = 5e5
+        self.scale_reg = 0.01
+        self.opacity_reg = 0.01
         super().__init__(parser, "Optimization Parameters")
 
 def get_combined_args(parser : ArgumentParser):
