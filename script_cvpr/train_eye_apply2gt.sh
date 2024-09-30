@@ -11,8 +11,12 @@ for flow_scale in 1.5 1. 2.; do
             # Check if it's a directory
             if [ -d "$dir" ]; then
                 name=$(basename "$dir")
-                echo python train_outside.py -s $dir -m "eyeful/${name}_lr${lr}_optcam_scale${flow_scale}" --r_t_noise 0.0 0.0 1. --test_iterations 1 7000 20000 30000 --save_iterations 7000 20000 30000 40000 --checkpoint_iterations 7000 20000 30000 40000 --iterations 40000 --r_t_lr 0.002 0.002 --control_point_sample_scale 4 --extend_scale 10000 --opt_distortion --outside_rasterizer --opt_cam --flow_scale $flow_scale $flow_scale --iresnet_lr $lr --apply2gt --wandb_project_name eyeful --wandb_group_name ${name}_lr${lr}_optcam_scale${flow_scale} --wandb_mode online --port 11113
-                python train_outside.py -s $dir -m "eyeful/${name}_lr${lr}_optcam_scale${flow_scale}" --r_t_noise 0.0 0.0 1. --test_iterations 1 7000 20000 30000 --save_iterations 7000 20000 30000 40000 --checkpoint_iterations 7000 20000 30000 40000 --iterations 40000 --r_t_lr 0.002 0.002 --control_point_sample_scale 4 --extend_scale 10000 --opt_distortion --outside_rasterizer --opt_cam --flow_scale $flow_scale $flow_scale --iresnet_lr $lr --apply2gt --wandb_project_name eyeful --wandb_group_name ${name}_lr${lr}_optcam_scale${flow_scale} --wandb_mode online --port 11113
+                if [[ "$name" == *"office"* ]]; then
+                    echo "Skipping directory $name as it contains 'office'."
+                    continue
+                fi
+                echo python train_outside.py -s $dir -m "eyeful/${name}_lr${lr}_optcam_scale${flow_scale}_denfrom500_reset3000" --r_t_noise 0.0 0.0 1. --test_iterations 1 7000 20000 30000 40000 --save_iterations 7000 20000 30000 40000 --checkpoint_iterations 7000 20000 30000 40000 --iterations 40000 --r_t_lr 0.002 0.002 --control_point_sample_scale 4 --extend_scale 10000 --opt_distortion --outside_rasterizer --opt_cam --flow_scale $flow_scale $flow_scale --iresnet_lr $lr --apply2gt --wandb_project_name eyeful --wandb_mode online --port 12113
+                python train_outside.py -s $dir -m "eyeful/${name}_lr${lr}_optcam_scale${flow_scale}_denfrom500_reset3000" --r_t_noise 0.0 0.0 1. --test_iterations 1 7000 20000 30000 40000 --save_iterations 7000 20000 30000 40000 --checkpoint_iterations 7000 20000 30000 40000 --iterations 40000 --r_t_lr 0.002 0.002 --control_point_sample_scale 4 --extend_scale 10000 --opt_distortion --outside_rasterizer --opt_cam --flow_scale $flow_scale $flow_scale --iresnet_lr $lr --apply2gt --wandb_project_name eyeful --wandb_mode online --port 12113
             fi
         done
     done

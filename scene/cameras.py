@@ -122,8 +122,8 @@ class Camera(nn.Module):
                 )
                 if 'berlin' in ori_path:
                     self.reset_intrinsic(
-                        focal2fov(self.focal_x, 3. * self.fish_gt_image_resolution[2]),
-                        focal2fov(self.focal_y, 3. * self.fish_gt_image_resolution[1]),
+                        focal2fov(self.focal_x, 2.9 * self.fish_gt_image_resolution[2]),
+                        focal2fov(self.focal_y, 2.9 * self.fish_gt_image_resolution[1]),
                         self.focal_x,
                         self.focal_y,
                         int(1. * self.fish_gt_image_resolution[2]),
