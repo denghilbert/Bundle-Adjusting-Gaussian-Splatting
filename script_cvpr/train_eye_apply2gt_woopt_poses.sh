@@ -1,0 +1,19 @@
+#!/bin/bash
+
+# Define the path where you want to list directories
+path_to_directories="dataset_cvpr/eyeful"
+
+# Iterate over each directory in the specified path
+
+for flow_scale in 1.5 1. 2.; do
+    for lr in 1e-7 1e-8 1e-9; do
+        for dir in "$path_to_directories"/*; do
+            # Check if it's a directory
+            if [ -d "$dir" ]; then
+                name=$(basename "$dir")
+                echo python train_outside.py -s $dir -m "eyeful/${name}_lr${lr}_wooptcam_scale${flow_scale}" --r_t_noise 0.0 0.0 1. --test_iterations 1 7000 20000 30000 --save_iterations 7000 20000 30000 40000 --checkpoint_iterations 7000 20000 30000 40000 --iterations 40000 --r_t_lr 0.002 0.002 --control_point_sample_scale 4 --extend_scale 10000 --opt_distortion --outside_rasterizer --flow_scale $flow_scale $flow_scale --iresnet_lr $lr --apply2gt --wandb_project_name eyeful --wandb_group_name ${name}_lr${lr}_wooptcam_scale${flow_scale} --wandb_mode online --port 11123
+                python train_outside.py -s $dir -m "eyeful/${name}_lr${lr}_wooptcam_scale${flow_scale}" --r_t_noise 0.0 0.0 1. --test_iterations 1 7000 20000 30000 --save_iterations 7000 20000 30000 40000 --checkpoint_iterations 7000 20000 30000 40000 --iterations 40000 --r_t_lr 0.002 0.002 --control_point_sample_scale 4 --extend_scale 10000 --opt_distortion --outside_rasterizer --flow_scale $flow_scale $flow_scale --iresnet_lr $lr --apply2gt --wandb_project_name eyeful --wandb_group_name ${name}_lr${lr}_wooptcam_scale${flow_scale} --wandb_mode online --port 11123
+            fi
+        done
+    done
+done

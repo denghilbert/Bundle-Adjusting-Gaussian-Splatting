@@ -223,7 +223,7 @@ def apply_distortion(lens_net, P_view_insidelens_direction, P_sensor, viewpoint_
     flow = control_points @ projection_matrix[:2, :2]
 
     if apply2gt:
-        flow = nn.functional.interpolate(flow.permute(2, 0, 1).unsqueeze(0), size=(viewpoint_cam.image_height, viewpoint_cam.image_width), mode='bilinear', align_corners=False).permute(0, 2, 3, 1).squeeze(0)
+        flow = nn.functional.interpolate(flow.permute(2, 0, 1).unsqueeze(0), size=(int(viewpoint_cam.image_height), int(viewpoint_cam.image_width)), mode='bilinear', align_corners=False).permute(0, 2, 3, 1).squeeze(0)
         gt_image = F.grid_sample(
             viewpoint_cam.fish_gt_image.cuda().unsqueeze(0),
             flow.unsqueeze(0),

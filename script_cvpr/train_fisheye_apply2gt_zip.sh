@@ -12,8 +12,8 @@ for lr in 1e-7 1e-8 1e-9 1e-10; do
             flow_scale_x=2.
             flow_scale_y=2.
             if echo "$name" | grep -qE "berlin"; then
-                flow_scale_x=5.
-                flow_scale_y=5.
+                flow_scale_x=4.
+                flow_scale_y=4.
             fi
             if [ -f "smerf/${name}_${lr}_flowx${flow_scale_x}_flowy${flow_scale_y}_allimgs/chkpnt30000.pth" ]; then
                 echo "All ready trained under smerf/${name}_${lr}_flowx${flow_scale_x}_flowy${flow_scale_y}_allimgs"

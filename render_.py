@@ -189,7 +189,7 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
         (model_params, first_iter) = torch.load(checkpoint)
         print(f'loading iteration {first_iter}')
         lens_net = torch.load(os.path.join(scene.model_path, f'lens_net{first_iter}.pth'))
-        gaussians.restore(model_params, opt)
+        gaussians.restore(model_params, opt, validation=True)
         if opt_cam:
             scene.train_cameras = torch.load(os.path.join(scene.model_path, 'opt_cams.pt'))
             scene.unnoisy_train_cameras = torch.load(os.path.join(scene.model_path, 'gt_cams.pt'))
@@ -365,16 +365,6 @@ if __name__ == "__main__":
 
     # Initialize wandb
     os.makedirs(args.model_path, exist_ok=True)
-    if args.wandb_project_name != None:
-        wandb.login()
-        wandb_run = init_wandb(args,
-                               project=args.wandb_project_name,
-                               mode=args.wandb_mode,
-                               resume=args.resume,
-                               use_group=True,
-                               set_group=args.wandb_group_name
-                               )
-
     # Initialize system state (RNG)
     safe_state(args.quiet)
 

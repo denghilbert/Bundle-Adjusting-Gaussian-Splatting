@@ -75,23 +75,45 @@ class GaussianModel:
             self.spatial_lr_scale,
         )
 
-    def restore(self, model_args, training_args):
-        (self.active_sh_degree,
-        self._xyz,
-        self._features_dc,
-        self._features_rest,
-        self._scaling,
-        self._rotation,
-        self._opacity,
-        self.max_radii2D,
-        xyz_gradient_accum,
-        denom,
-        opt_dict,
-        self.spatial_lr_scale) = model_args
+    def restore(self, model_args, training_args, validation=False):
+        if len(model_args) == 12:
+            (self.active_sh_degree,
+            self._xyz,
+            self._features_dc,
+            self._features_rest,
+            self._scaling,
+            self._rotation,
+            self._opacity,
+            self.max_radii2D,
+            xyz_gradient_accum,
+            denom,
+            opt_dict,
+            self.spatial_lr_scale) = model_args
+        elif len(model_args) == 15:
+            (self.active_sh_degree,
+            self._xyz,
+            _,
+            _,
+            self._features_dc,
+            self._features_rest,
+            self._scaling,
+            self._rotation,
+            self._opacity,
+            _,
+            self.max_radii2D,
+            xyz_gradient_accum,
+            denom,
+            opt_dict,
+            self.spatial_lr_scale) = model_args
+
+        else:
+            print("fail to load")
+            exit()
         self.training_setup(training_args)
         self.xyz_gradient_accum = xyz_gradient_accum
         self.denom = denom
-        self.optimizer.load_state_dict(opt_dict)
+        if not validation:
+            self.optimizer.load_state_dict(opt_dict)
 
     @property
     def get_scaling(self):
@@ -406,7 +428,7 @@ class GaussianModel:
         new_scaling = self._scaling[selected_pts_mask]
         new_rotation = self._rotation[selected_pts_mask]
 
-        self.densification_postfix(new_xyz, new_features_dc, new_features_rest, new_opacities, new_scaling, new_rotation, new_feature_asg, new_normal, new_normal2)
+        self.densification_postfix(new_xyz, new_features_dc, new_features_rest, new_opacities, new_scaling, new_rotation)
 
     def densify_and_prune(self, max_grad, min_opacity, extent, max_screen_size):
         grads = self.xyz_gradient_accum / self.denom
@@ -523,7 +545,7 @@ class GaussianModel:
 
     def add_new_gs(self, cap_max):
         current_num_points = self._opacity.shape[0]
-        target_num = min(cap_max, int(1.05 * current_num_points))
+        target_num = min(cap_max, int(1.005 * current_num_points))
         num_gs = max(0, target_num - current_num_points)
 
         if num_gs <= 0:

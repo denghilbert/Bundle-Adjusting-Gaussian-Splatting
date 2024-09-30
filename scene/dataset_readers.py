@@ -409,7 +409,7 @@ def readMetashapeInfo(path, white_background, eval, extension=".png", init_type=
 
     if init_type == "sfm":
         ply_path = os.path.join(path, "points3d.ply")
-        if not os.path.exists(ply_path):
+        if not os.path.exists(ply_path) or True:
             xyz, rgb = load_mesh(os.path.join(path, 'mesh.obj'), os.path.join(path, 'mesh.mtl'), os.path.join(path, 'mesh.jpg'))
             pcd = BasicPointCloud(points=xyz, colors=rgb, normals=np.zeros((len(xyz), 3)))
             storePly(ply_path, xyz, rgb)
