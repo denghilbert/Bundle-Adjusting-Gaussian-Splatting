@@ -204,17 +204,18 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
 
     iteration = 30000
     mlp_color = 0
-    render_pkg = render(viewpoint_cam, gaussians, pipe, background, mlp_color, shift_factors, iteration=iteration, hybrid=hybrid, global_alignment=scene.getGlobalAlignment())
-    image, viewspace_point_tensor, visibility_filter, radii = render_pkg["render"], render_pkg["viewspace_points"], render_pkg["visibility_filter"], render_pkg["radii"]
+    with torch.no_grad():
+        render_pkg = render(viewpoint_cam, gaussians, pipe, background, mlp_color, shift_factors, iteration=iteration, hybrid=hybrid, global_alignment=scene.getGlobalAlignment())
+        image, viewspace_point_tensor, visibility_filter, radii = render_pkg["render"], render_pkg["viewspace_points"], render_pkg["visibility_filter"], render_pkg["radii"]
 
-    flow_apply2_gt_or_img = None
-    P_sensor, P_view_insidelens_direction = generate_control_pts(viewpoint_cam, control_point_sample_scale, flow_scale)
-    if not apply2gt:
-        image, mask, flow_apply2_gt_or_img = apply_distortion(lens_net, P_view_insidelens_direction, P_sensor, viewpoint_cam, image, apply2gt=apply2gt, flow_scale=flow_scale)
-        if if_circular_mask:
-            mask = mask * circular_mask
-    if apply2gt:
-        gt_image, mask, flow_apply2_gt_or_img = apply_distortion(lens_net, P_view_insidelens_direction, P_sensor, viewpoint_cam, image, apply2gt=apply2gt)
+        flow_apply2_gt_or_img = None
+        P_sensor, P_view_insidelens_direction = generate_control_pts(viewpoint_cam, control_point_sample_scale, flow_scale)
+        if not apply2gt:
+            image, mask, flow_apply2_gt_or_img = apply_distortion(lens_net, P_view_insidelens_direction, P_sensor, viewpoint_cam, image, apply2gt=apply2gt, flow_scale=flow_scale)
+            if if_circular_mask:
+                mask = mask * circular_mask
+        if apply2gt:
+            gt_image, mask, flow_apply2_gt_or_img = apply_distortion(lens_net, P_view_insidelens_direction, P_sensor, viewpoint_cam, image, apply2gt=apply2gt)
 
     with torch.no_grad():
         training_report(iteration, scene, render, (pipe, background, mlp_color, shift_factors), lens_net, opt_distortion, no_distortion_mask, outside_rasterizer, flow_scale, control_point_sample_scale, flow_apply2_gt_or_img, apply2gt)
@@ -223,7 +224,7 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
 def training_report(iteration, scene : Scene, renderFunc, renderArgs, lens_net, opt_distortion, no_distortion_mask, outside_rasterizer, flow_scale, control_point_sample_scale, flow_apply2_gt_or_img, apply2gt):
     torch.cuda.empty_cache()
     validation_configs = ({'name': 'test', 'cameras' : scene.getTestCameras()},
-                          {'name': 'train', 'cameras' : [scene.getTrainCameras()[idx % len(scene.getTrainCameras())] for idx in range(5, 30, 5)]})
+                          {'name': 'train', 'cameras' : scene.getTrainCameras()})
 
     file_path = os.path.join(scene.model_path, 'validation.txt')
     with open(file_path, 'a') as f:
@@ -238,15 +239,24 @@ def training_report(iteration, scene : Scene, renderFunc, renderArgs, lens_net, 
                 os.makedirs(os.path.join(scene.model_path, 'validation_{}/gt').format(name), exist_ok=True)
                 os.makedirs(os.path.join(scene.model_path, 'validation_{}/renderred').format(name), exist_ok=True)
                 for idx, viewpoint in enumerate(config['cameras']):
+                    # best qualitative number
+                    #viewpoint.reset_intrinsic(
+                    #    viewpoint.FoVx,
+                    #    viewpoint.FoVy,
+                    #    viewpoint.focal_x,
+                    #    viewpoint.focal_y,
+                    #    1. * viewpoint.image_width,
+                    #    1. * viewpoint.image_height
+                    #)
+                    # render for qualitative fisheyenerf
+                    # you also need to set the control_point_sample_scale to a larger number
                     viewpoint.reset_intrinsic(
-                        #focal2fov(viewpoint.focal_x, int(flow_scale[0] * viewpoint.           orig_fov_w)),
-                        #focal2fov(viewpoint.focal_y, int(flow_scale[1] * viewpoint.           orig_fov_h)),
                         viewpoint.FoVx,
                         viewpoint.FoVy,
                         viewpoint.focal_x,
                         viewpoint.focal_y,
-                        2. * viewpoint.image_width,
-                        2. * viewpoint.image_height
+                        1.2 * viewpoint.image_width,
+                        1.2 * viewpoint.image_height
                     )
 
                     image = torch.clamp(renderFunc(viewpoint, scene.gaussians, *renderArgs, global_alignment=scene.getGlobalAlignment())["render"], 0.0, 1.0)

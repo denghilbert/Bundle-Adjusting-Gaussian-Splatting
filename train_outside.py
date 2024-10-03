@@ -172,7 +172,7 @@ class VignettingModel(torch.nn.Module):
 
         return mask
 
-def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoint_iterations, checkpoint, debug_from, use_wandb=False, random_init=False, hybrid=False, opt_cam=False, opt_shift=False, no_distortion_mask=False, opt_distortion=False, start_vignetting=10000000000, opt_intrinsic=False, r_t_noise=[0., 0.], r_t_lr=[0.001, 0.001], global_alignment_lr=0.001, extra_loss=False, start_opt_lens=1, extend_scale=2., control_point_sample_scale=8., outside_rasterizer=False, abs_grad=False, densi_num=0.0002, if_circular_mask=False, flow_scale=[1., 1.], render_resolution=1., apply2gt=False, iresnet_lr=1e-7, opacity_threshold=0.005, mcmc=False):
+def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoint_iterations, checkpoint, debug_from, use_wandb=False, random_init=False, hybrid=False, opt_cam=False, opt_shift=False, no_distortion_mask=False, opt_distortion=False, start_vignetting=10000000000, opt_intrinsic=False, r_t_noise=[0., 0.], r_t_lr=[0.001, 0.001], global_alignment_lr=0.001, extra_loss=False, start_opt_lens=1, extend_scale=2., control_point_sample_scale=8., outside_rasterizer=False, abs_grad=False, densi_num=0.0002, if_circular_mask=False, flow_scale=[1., 1.], render_resolution=1., apply2gt=False, iresnet_lr=1e-7, no_init_iresnet=False, opacity_threshold=0.005, mcmc=False):
     if dataset.cap_max == -1 and mcmc:
         print("Please specify the maximum number of Gaussians using --cap_max.")
         exit()
@@ -233,7 +233,7 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
             os.makedirs(os.path.join(args.model_path, 'plot'), exist_ok=True)
 
     # colmap init
-    if outside_rasterizer:
+    if outside_rasterizer and not no_init_iresnet:
         init_from_colmap(scene, dataset, optimizer_lens_net, lens_net, scheduler_lens_net, resume_training=checkpoint, iresnet_lr=iresnet_lr)
 
     # circular mask
@@ -558,16 +558,17 @@ def training_report(use_wandb, iteration, Ll1, ssim_loss, loss, l1_loss, elapsed
                     os.makedirs(os.path.join(scene.model_path, 'training_val_{}/gt').format(iteration), exist_ok=True)
                     os.makedirs(os.path.join(scene.model_path, 'training_val_{}/renderred').format(iteration), exist_ok=True)
                     for idx, viewpoint in enumerate(config['cameras']):
-                        viewpoint.reset_intrinsic(
-                            viewpoint.FoVx,
-                            viewpoint.FoVy,
-                            viewpoint.focal_x,
-                            viewpoint.focal_y,
-                            int(2. * viewpoint.image_width),
-                            int(2. * viewpoint.image_height)
-                            #int(flow_scale[0] * viewpoint.image_width),
-                            #int(flow_scale[1] * viewpoint.image_height)
-                        )
+                        #if outside_rasterizer:
+                        #    viewpoint.reset_intrinsic(
+                        #        viewpoint.FoVx,
+                        #        viewpoint.FoVy,
+                        #        viewpoint.focal_x,
+                        #        viewpoint.focal_y,
+                        #        int(2. * viewpoint.image_width),
+                        #        int(2. * viewpoint.image_height)
+                        #        #int(flow_scale[0] * viewpoint.image_width),
+                        #        #int(flow_scale[1] * viewpoint.image_height)
+                        #    )
                         image = torch.clamp(renderFunc(viewpoint, scene.gaussians, *renderArgs, global_alignment=scene.getGlobalAlignment())["render"], 0.0, 1.0)
                         torchvision.utils.save_image(image, os.path.join(scene.model_path, 'training_val_{}/renderred/{}'.format(iteration, viewpoint.image_name) + "_" + name + ".png"))
                         if outside_rasterizer:
@@ -710,6 +711,7 @@ if __name__ == "__main__":
     parser.add_argument("--no_distortion_mask", action="store_true", default=False)
 
     parser.add_argument("--mcmc", action="store_true", default=False)
+    parser.add_argument("--no_init_iresnet", action="store_true", default=False)
 
     args = parser.parse_args(sys.argv[1:])
     args.save_iterations.append(args.iterations)
@@ -742,7 +744,7 @@ if __name__ == "__main__":
         global_alignment_lr=args.global_alignment_lr, extra_loss=args.extra_loss, start_opt_lens=args.start_opt_lens,
         extend_scale=args.extend_scale, control_point_sample_scale=args.control_point_sample_scale, outside_rasterizer=args.outside_rasterizer,
         abs_grad=args.abs_grad, densi_num=args.densi_num, if_circular_mask=args.if_circular_mask, flow_scale=args.flow_scale,
-        render_resolution=args.render_resolution, apply2gt=args.apply2gt, iresnet_lr=args.iresnet_lr, opacity_threshold=args.opacity_threshold, mcmc=args.mcmc
+        render_resolution=args.render_resolution, apply2gt=args.apply2gt, iresnet_lr=args.iresnet_lr, no_init_iresnet=args.no_init_iresnet, opacity_threshold=args.opacity_threshold, mcmc=args.mcmc
     )
 
     # All done
