@@ -293,7 +293,7 @@ def readCamerasFromVRNeRF(path, transformsfile, white_background, extension=".jp
         frames = contents['KRT']
 
         #random.shuffle(frames)
-        #frames = frames[:5]
+        #frames = frames[:33]
         for idx, frame in enumerate(frames):
             cam_name = os.path.join(path, frame["cameraId"] + '.jpg')
             #if '0_REN' in cam_name: continue

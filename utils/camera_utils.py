@@ -21,7 +21,7 @@ from scipy.spatial.transform import Rotation
 WARNED = False
 
 
-def loadCam(args, id, cam_info, resolution_scale, outside_rasterizer, flow_scale, apply2gt, render_resolution):
+def loadCam(args, id, cam_info, resolution_scale, outside_rasterizer, flow_scale, apply2gt, render_resolution, cubemap):
     orig_w, orig_h = cam_info.image.size
 
     if args.resolution in [1, 2, 4, 8]:
@@ -81,15 +81,16 @@ def loadCam(args, id, cam_info, resolution_scale, outside_rasterizer, flow_scale
         fish_gt_image_resolution=fish_gt_image_resolution,
         flow_scale=flow_scale,
         apply2gt=apply2gt,
-        render_resolution=render_resolution
+        render_resolution=render_resolution,
+        cubemap=cubemap
     )
 
 
-def cameraList_from_camInfos(cam_infos, resolution_scale, args, outside_rasterizer, flow_scale, apply2gt, render_resolution):
+def cameraList_from_camInfos(cam_infos, resolution_scale, args, outside_rasterizer, flow_scale, apply2gt, render_resolution, cubemap):
     camera_list = []
 
     for id, c in enumerate(cam_infos):
-        camera_list.append(loadCam(args, id, c, resolution_scale, outside_rasterizer, flow_scale, apply2gt, render_resolution))
+        camera_list.append(loadCam(args, id, c, resolution_scale, outside_rasterizer, flow_scale, apply2gt, render_resolution, cubemap))
 
     return camera_list
 
