@@ -372,7 +372,7 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
 
         if cubemap:
             mask_fov90 = torch.zeros((1, viewpoint_cam.image_height, viewpoint_cam.image_width), dtype=torch.float32).cuda()
-            mask_fov90[:, viewpoint_cam.image_height//2 - int(viewpoint_cam.focal_y):viewpoint_cam.image_height//2 + int(viewpoint_cam.focal_y), viewpoint_cam.image_width//2 - int(viewpoint_cam.focal_x):viewpoint_cam.image_width//2 + int(viewpoint_cam.focal_x)] = 1
+            mask_fov90[:, viewpoint_cam.image_height//2 - int(viewpoint_cam.focal_y) - 2:viewpoint_cam.image_height//2 + int(viewpoint_cam.focal_y) + 2, viewpoint_cam.image_width//2 - int(viewpoint_cam.focal_x) - 2:viewpoint_cam.image_width//2 + int(viewpoint_cam.focal_x) + 2] = 1
 
             img_list, viewspace_point_tensor_list, visibility_filter_list, radii_list = render_cubemap(viewpoint_cam, mask_fov90, 0., 0., gaussians, pipe, background, mlp_color, shift_factors, iteration, hybrid, scene)
 
@@ -704,15 +704,21 @@ def training_report(use_wandb, iteration, Ll1, ssim_loss, loss, l1_loss, elapsed
                                     wandb.log({f"images/gt_rendering_{viewpoint.image_name}": wandb.Image(img_numpy)})
                         elif cubemap:
                             mask_fov90 = torch.zeros((1, viewpoint.image_height, viewpoint.image_width), dtype=torch.float32).cuda()
-                            mask_fov90[:, viewpoint.image_height//2 - int(viewpoint.focal_y):viewpoint.image_height//2 + int(viewpoint.focal_y), viewpoint.image_width//2 - int(viewpoint.focal_x):viewpoint.image_width//2 + int(viewpoint.focal_x)] = 1
+                            mask_fov90[:, viewpoint.image_height//2 - int(viewpoint.focal_y) - 2:viewpoint.image_height//2 + int(viewpoint.focal_y) + 2, viewpoint.image_width//2 - int(viewpoint.focal_x) - 2:viewpoint.image_width//2 + int(viewpoint.focal_x) + 2] = 1
                             img_list, img_perspective_list = render_cubemap(viewpoint, mask_fov90, 0., 0., scene.gaussians, *renderArgs, iteration, False, scene, validation=True)
                             direction_name = ['forward', 'up', 'down', 'left', 'right']
                             for i in range(5):
-                                torchvision.utils.save_image(img_perspective_list[i], os.path.join(scene.model_path, 'training_val_{}/renderred/{}/{}_perspective'.format(iteration, direction_name[i], viewpoint.image_name) + "_" + name + ".png"))
+                                #torchvision.utils.save_image(img_perspective_list[i], os.path.join(scene.model_path, 'training_val_{}/renderred/{}/{}_perspective'.format(iteration, direction_name[i], viewpoint.image_name) + "_" + name + ".png"))
+                                torchvision.utils.save_image(img_list[i], os.path.join(scene.model_path, 'training_val_{}/renderred/{}'.format(iteration, i) + "_" + name + ".png"))
                             final_image = torch.zeros_like(img_list[0])
+                            intensity_final = final_image.sum(dim=0, keepdim=True)  # Track the current intensities of the final image
+
                             for img in img_list:
-                                mask = img.sum(dim=0, keepdim=True) > 0  # Summing across the color channels to get non-zero areas
-                                final_image = torch.where(mask, img, final_image)
+                                intensity_img = img.sum(dim=0, keepdim=True)  # Calculate the intensity for the current image
+                                mask = intensity_img > intensity_final  # Find pixels where the new image has a larger intensity
+                                final_image = torch.where(mask, img, final_image)  # Update final image where intensity is larger
+                                intensity_final = torch.where(mask, intensity_img, intensity_final)  # Update intensity tracker
+
                             torchvision.utils.save_image(final_image, os.path.join(scene.model_path, 'training_val_{}/renderred/{}_distorted_stitch'.format(iteration, viewpoint.image_name) + "_" + name + ".png"))
                             gt_image = viewpoint.original_image.cuda()
                             torchvision.utils.save_image(gt_image, os.path.join(scene.model_path, 'training_val_{}/gt/{}_perspective'.format(iteration, viewpoint.image_name) + "_" + name + ".png"))
