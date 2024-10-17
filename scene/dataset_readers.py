@@ -147,10 +147,16 @@ def readColmapCameras(cam_extrinsics, cam_intrinsics, images_folder):
                 [0., focal_length_y, height * 0.5],
                 [0., 0., 1.]
             ], dtype=np.float32)
-            #print(intr.model)
-            #print(intr.params)
-            #print(intrinsic_matrix)
-            #import pdb;pdb.set_trace()
+            if 'colmap' in images_folder and 'eyeful' in images_folder:
+                intrinsic_matrix = np.array([
+                    [fov2focal(FovX, 684), 0., 684 * 0.5],
+                    [0., fov2focal(FovY, 1024), 1024 * 0.5],
+                    [0., 0., 1.]
+                ], dtype=np.float32)
+                focal_length_x = intrinsic_matrix[0][0].astype(np.float64)
+                focal_length_y = intrinsic_matrix[1][1].astype(np.float64)
+                width = 684
+                height = 1024
         elif intr.model=="SIMPLE_RADIAL":
             focal_length_x = intr.params[0]
             FovY = focal2fov(focal_length_x, height)
@@ -321,7 +327,6 @@ def readCamerasFromVRNeRF(path, transformsfile, white_background, extension=".jp
             image = Image.fromarray(np.array(arr*255.0, dtype=np.byte), "RGB")
 
 
-            #import pdb;pdb.set_trace()
             intrinsic_matrix = np.array([
                 [fov2focal(FovX, image.size[0]), 0., image.size[0] * 0.5],
                 [0., fov2focal(FovY, image.size[1]), image.size[1] * 0.5],
@@ -440,11 +445,17 @@ def readMetashapeInfo(path, white_background, eval, extension=".png", init_type=
                            ply_path=ply_path)
     return scene_info
 
-def readNerfSyntheticInfo(path, white_background, eval, extension=".png", init_type="sfm", num_pts=100000):
+def readNerfSyntheticInfo(path, white_background, eval, extension=".png", init_type="sfm", num_pts=100000, table1=False):
     print("Reading Training Transforms")
     train_cam_infos = readCamerasFromTransforms(path, "transforms_train.json", white_background, extension)
     print("Reading Test Transforms")
-    test_cam_infos = readCamerasFromTransforms(path, "transforms_test.json", white_background, extension)
+    if not table1:
+        test_cam_infos = readCamerasFromTransforms(path, "transforms_test.json", white_background, extension)
+    elif table1:
+        test_cam_infos = readCamerasFromTransforms(path, "transforms_table1.json", white_background, extension)
+    else:
+        print("you should have table1 json for evaluation")
+        exit()
 
     if not eval:
         train_cam_infos.extend(test_cam_infos)

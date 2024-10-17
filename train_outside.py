@@ -621,12 +621,12 @@ def training_report(use_wandb, iteration, Ll1, ssim_loss, loss, l1_loss, elapsed
         validation_configs = ({'name': 'test', 'cameras' : []},
                               {'name': 'train', 'cameras' : []})
 
-        for camera in scene.getTestCameras():
+        for camera in scene.getTestCameras()[:]:
             validation_configs[0]['cameras'].append(
                 Camera(camera.colmap_id, camera.R, camera.T, camera.intrinsic_matrix_numpy, camera.FoVx, camera.FoVy, camera.focal_x, camera.focal_y, camera.original_image_pil, None, camera.fish_gt_image_pil, camera.image_name, camera.uid, depth=None, ori_path=camera.ori_path, outside_rasterizer=camera.outside_rasterizer, test_outside_rasterizer=camera.test_outside_rasterizer, orig_fov_w=camera.orig_fov_w, orig_fov_h=camera.orig_fov_h, original_image_resolution=camera.original_image_resolution, fish_gt_image_resolution=camera.fish_gt_image_resolution, flow_scale=camera.flow_scale, apply2gt=camera.apply2gt, render_resolution=camera.render_resolution, cubemap=cubemap)
             )
 
-        for camera in [scene.getTrainCameras()[idx % len(scene.getTrainCameras())] for idx in range(10)]:
+        for camera in scene.getTrainCameras()[:5]:
             validation_configs[1]['cameras'].append(
                 Camera(camera.colmap_id, camera.R, camera.T, camera.intrinsic_matrix_numpy, camera.FoVx, camera.FoVy, camera.focal_x, camera.focal_y, camera.original_image_pil, None, camera.fish_gt_image_pil, camera.image_name, camera.uid, depth=None, ori_path=camera.ori_path, outside_rasterizer=camera.outside_rasterizer, test_outside_rasterizer=camera.test_outside_rasterizer, orig_fov_w=camera.orig_fov_w, orig_fov_h=camera.orig_fov_h, original_image_resolution=camera.original_image_resolution, fish_gt_image_resolution=camera.fish_gt_image_resolution, flow_scale=camera.flow_scale, apply2gt=camera.apply2gt, render_resolution=camera.render_resolution, cubemap=cubemap)
             )
@@ -708,8 +708,8 @@ def training_report(use_wandb, iteration, Ll1, ssim_loss, loss, l1_loss, elapsed
                             img_list, img_perspective_list = render_cubemap(viewpoint, mask_fov90, 0., 0., scene.gaussians, *renderArgs, iteration, False, scene, validation=True)
                             direction_name = ['forward', 'up', 'down', 'left', 'right']
                             for i in range(5):
-                                #torchvision.utils.save_image(img_perspective_list[i], os.path.join(scene.model_path, 'training_val_{}/renderred/{}/{}_perspective'.format(iteration, direction_name[i], viewpoint.image_name) + "_" + name + ".png"))
-                                torchvision.utils.save_image(img_list[i], os.path.join(scene.model_path, 'training_val_{}/renderred/{}'.format(iteration, i) + "_" + name + ".png"))
+                                torchvision.utils.save_image(img_perspective_list[i], os.path.join(scene.model_path, 'training_val_{}/renderred/{}/{}_perspective'.format(iteration, direction_name[i], viewpoint.image_name) + "_" + name + ".png"))
+                                #torchvision.utils.save_image(img_list[i], os.path.join(scene.model_path, 'training_val_{}/renderred/{}'.format(iteration, i) + "_" + name + ".png"))
                             final_image = torch.zeros_like(img_list[0])
                             intensity_final = final_image.sum(dim=0, keepdim=True)  # Track the current intensities of the final image
 

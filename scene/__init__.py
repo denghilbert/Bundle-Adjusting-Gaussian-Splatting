@@ -54,7 +54,7 @@ class Scene:
 
     gaussians : GaussianModel
 
-    def __init__(self, args : ModelParams, gaussians : GaussianModel, load_iteration=None, shuffle=True, resolution_scales=[1.0], random_init=False, r_t_noise=[0., 0., 1.], r_t_lr=[0.001, 0.001], global_alignment_lr=0.001, outside_rasterizer=False, flow_scale=[1., 1.], render_resolution=1., apply2gt=False, vis_pose=False, cubemap=False):
+    def __init__(self, args : ModelParams, gaussians : GaussianModel, load_iteration=None, shuffle=True, resolution_scales=[1.0], random_init=False, r_t_noise=[0., 0., 1.], r_t_lr=[0.001, 0.001], global_alignment_lr=0.001, outside_rasterizer=False, flow_scale=[1., 1.], render_resolution=1., apply2gt=False, vis_pose=False, cubemap=False, table1=False):
         """b
         :param path: Path to colmap scene main folder.
         """
@@ -87,7 +87,7 @@ class Scene:
             scene_info = sceneLoadTypeCallbacks["Metashape"](args.source_path, args.white_background, args.eval, init_type=args.init_type)
         elif os.path.exists(os.path.join(args.source_path, "transforms_train.json")):
             print("Found transforms_train.json file, assuming Blender data set!")
-            scene_info = sceneLoadTypeCallbacks["Blender"](args.source_path, args.white_background, args.eval, init_type=args.init_type)
+            scene_info = sceneLoadTypeCallbacks["Blender"](args.source_path, args.white_background, args.eval, init_type=args.init_type, table1=table1)
         else:
             assert False, "Could not recognize scene type!"
 
@@ -150,7 +150,7 @@ class Scene:
             #import pdb; pdb.set_trace()
             self.train_cameras[resolution_scale] = cameraList_from_camInfos(scene_info.train_cameras, resolution_scale, args, outside_rasterizer, flow_scale, apply2gt, render_resolution, cubemap)
             print("Loading Test Cameras")
-            self.test_cameras[resolution_scale] = cameraList_from_camInfos(scene_info.test_cameras, resolution_scale, args, outside_rasterizer, flow_scale, apply2gt, render_resolution, cubemap)
+            self.test_cameras[resolution_scale] = cameraList_from_camInfos(scene_info.test_cameras, resolution_scale, args, outside_rasterizer, flow_scale, apply2gt, render_resolution, cubemap, table1=table1)
             if vis_pose:
                 self.unnoisy_test_cameras[resolution_scale] = cameraList_from_camInfos(scene_info.test_cameras, resolution_scale, args, outside_rasterizer, flow_scale, apply2gt, render_resolution, cubemap)
 
