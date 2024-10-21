@@ -236,7 +236,14 @@ def render_cubemap(viewpoint_cam, mask_fov90, shift_width, shift_height, gaussia
         if i == 4: break
         render_pkg = render(sub_camera, gaussians, pipe, background, mlp_color, shift_factors, iteration=iteration, hybrid=hybrid, global_alignment=scene.getGlobalAlignment())
         img_up, viewspace_point_tensor, visibility_filter, radii = render_pkg["render"] * mask_fov90, render_pkg["viewspace_points"], render_pkg["visibility_filter"], render_pkg["radii"]
-        rays_up = generate_pts_up_down_left_right(sub_camera, shift_width=0, shift_height=-shift_height)
+        if name[i] == 'up':
+            rays_up = generate_pts_up_down_left_right(sub_camera, shift_width=0, shift_height=-shift_height)
+        elif name[i] == 'down':
+            rays_up = generate_pts_up_down_left_right(sub_camera, shift_width=0, shift_height=shift_height)
+        elif name[i] == 'left':
+            rays_up = generate_pts_up_down_left_right(sub_camera, shift_width=shift_width, shift_height=0)
+        elif name[i] == 'right':
+            rays_up = generate_pts_up_down_left_right(sub_camera, shift_width=-shift_width, shift_height=0)
         img_distorted, img_perspective = apply_flow_up_down_left_right(sub_camera, rays_up, img_up, types=name[i], is_fisheye=True)
         img_distorted_masked, half_mask = mask_half(img_distorted, name[i])
 
@@ -419,7 +426,8 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
             ssim_loss = ssim(image, gt_image)
         elif cubemap:
             gt_image = viewpoint_cam.original_image.cuda()
-            mask_gt_image = generate_circular_mask(gt_image.shape, min(gt_image.shape[-2:])//2).cuda()
+            #mask_gt_image = generate_circular_mask(gt_image.shape, min(gt_image.shape[-2:])//2).cuda()
+            mask_gt_image = generate_circular_mask(gt_image.shape, 400).cuda()
 
             Ll1 = (
                 l1_loss(img_list[0]*mask_gt_image*img_mask_list[0], gt_image*mask_gt_image*img_mask_list[0]) +
@@ -435,6 +443,25 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
                 ssim(img_list[3]*mask_gt_image*img_mask_list[3], gt_image*mask_gt_image*img_mask_list[3]) +
                 ssim(img_list[4]*mask_gt_image*img_mask_list[4], gt_image*mask_gt_image*img_mask_list[4])
             )
+
+            #torchvision.utils.save_image(gt_image * mask_gt_image * img_mask_list[0], os.path.join(scene.model_path, f'gt_0.png'))
+            #torchvision.utils.save_image(gt_image * mask_gt_image * img_mask_list[1], os.path.join(scene.model_path, f'gt_1.png'))
+            #torchvision.utils.save_image(gt_image * mask_gt_image * img_mask_list[2], os.path.join(scene.model_path, f'gt_2.png'))
+            #torchvision.utils.save_image(gt_image * mask_gt_image * img_mask_list[3], os.path.join(scene.model_path, f'gt_3.png'))
+            #torchvision.utils.save_image(gt_image * mask_gt_image * img_mask_list[4], os.path.join(scene.model_path, f'gt_4.png'))
+            #torchvision.utils.save_image(img_list[0] * mask_gt_image * img_mask_list[0], os.path.join(scene.model_path, f'img_0.png'))
+            #torchvision.utils.save_image(img_list[1] * mask_gt_image * img_mask_list[1], os.path.join(scene.model_path, f'img_1.png'))
+            #torchvision.utils.save_image(img_list[2] * mask_gt_image * img_mask_list[2], os.path.join(scene.model_path, f'img_2.png'))
+            #torchvision.utils.save_image(img_list[3] * mask_gt_image * img_mask_list[3], os.path.join(scene.model_path, f'img_3.png'))
+            #torchvision.utils.save_image(img_list[4] * mask_gt_image * img_mask_list[4], os.path.join(scene.model_path, f'img_4.png'))
+
+            #torchvision.utils.save_image(mask_gt_image, os.path.join(scene.model_path, f'mask_gt.png'))
+            #torchvision.utils.save_image(img_mask_list[0].float(), os.path.join(scene.model_path, f'mask_0.png'))
+            #torchvision.utils.save_image(img_mask_list[1].float(), os.path.join(scene.model_path, f'mask_1.png'))
+            #torchvision.utils.save_image(img_mask_list[2].float(), os.path.join(scene.model_path, f'mask_2.png'))
+            #torchvision.utils.save_image(img_mask_list[3].float(), os.path.join(scene.model_path, f'mask_3.png'))
+            #torchvision.utils.save_image(img_mask_list[4].float(), os.path.join(scene.model_path, f'mask_4.png'))
+            #import pdb;pdb.set_trace()
         else:
             gt_image = viewpoint_cam.original_image.cuda()
             Ll1 = l1_loss(image, gt_image)
@@ -705,6 +732,7 @@ def training_report(use_wandb, iteration, Ll1, ssim_loss, loss, l1_loss, elapsed
                         elif cubemap:
                             mask_fov90 = torch.zeros((1, viewpoint.image_height, viewpoint.image_width), dtype=torch.float32).cuda()
                             mask_fov90[:, viewpoint.image_height//2 - int(viewpoint.focal_y) - 2:viewpoint.image_height//2 + int(viewpoint.focal_y) + 2, viewpoint.image_width//2 - int(viewpoint.focal_x) - 2:viewpoint.image_width//2 + int(viewpoint.focal_x) + 2] = 1
+                            torchvision.utils.save_image(mask_fov90.float(), os.path.join(scene.model_path, 'mask1.png'))
                             img_list, img_perspective_list = render_cubemap(viewpoint, mask_fov90, 0., 0., scene.gaussians, *renderArgs, iteration, False, scene, validation=True)
                             direction_name = ['forward', 'up', 'down', 'left', 'right']
                             for i in range(5):
@@ -720,6 +748,8 @@ def training_report(use_wandb, iteration, Ll1, ssim_loss, loss, l1_loss, elapsed
                                 intensity_final = torch.where(mask, intensity_img, intensity_final)  # Update intensity tracker
 
                             torchvision.utils.save_image(final_image, os.path.join(scene.model_path, 'training_val_{}/renderred/{}_distorted_stitch'.format(iteration, viewpoint.image_name) + "_" + name + ".png"))
+                            mask_gt_image = generate_circular_mask(viewpoint.original_image.shape, 400).cuda()
+                            torchvision.utils.save_image(final_image*mask_gt_image, os.path.join(scene.model_path, 'training_val_{}/renderred/{}_distorted_stitch_masked'.format(iteration, viewpoint.image_name) + "_" + name + ".png"))
                             gt_image = viewpoint.original_image.cuda()
                             torchvision.utils.save_image(gt_image, os.path.join(scene.model_path, 'training_val_{}/gt/{}_perspective'.format(iteration, viewpoint.image_name) + "_" + name + ".png"))
                             if use_wandb and name == 'train':
@@ -742,7 +772,8 @@ def training_report(use_wandb, iteration, Ll1, ssim_loss, loss, l1_loss, elapsed
                             ssims.append(ssim(image, gt_image))
                             lpipss.append(lpips(image, gt_image))
                         elif cubemap:
-                            mask_gt_image = generate_circular_mask(gt_image.shape, min(gt_image.shape[-2:])//2).cuda()
+                            #mask_gt_image = generate_circular_mask(gt_image.shape, min(gt_image.shape[-2:])//2).cuda()
+                            mask_gt_image = generate_circular_mask(gt_image.shape, 400).cuda()
                             l1_test += l1_loss(final_image*mask_gt_image, gt_image*mask_gt_image).mean().double()
                             psnr_test += psnr(final_image*mask_gt_image, gt_image*mask_gt_image).mean().double()
                             ssims.append(ssim(final_image*mask_gt_image, gt_image*mask_gt_image))

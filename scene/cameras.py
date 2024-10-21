@@ -191,6 +191,10 @@ class Camera(nn.Module):
             R_new, T_new = rotate_camera(self.sub_cameras[4], 0, 180, 0)
             self.sub_cameras[4].reset_extrinsic(R_new.T, T_new)
 
+            if FoVx < 1.58:
+                self.reset_intrinsic(1.58, self.FoVy, fov2focal(1.58, self.image_width), self.focal_y, self.image_width, self.image_height)
+            if FoVy < 1.58:
+                self.reset_intrinsic(self.FoVx, 1.58, self.focal_x, fov2focal(1.58, self.image_height), self.image_width, self.image_height)
             #self.reset_intrinsic(1.5707963267948966, 1.5707963267948966, self.FoVx, self.FoVy, self.FoVx * 2, self.FoVy * 2) # eyeful
             # 270 fisheye
             #self.reset_intrinsic(1.5707963267948966, 1.5707963267948966, fov2focal(1.5707963267948966, 684*3), fov2focal(1.5707963267948966, 684*3), int(684*3), int(684*3))
@@ -215,6 +219,8 @@ class Camera(nn.Module):
 
         self.FoVx = FoVx
         self.FoVy = FoVy
+        self.focal_x = focal_x
+        self.focal_y = focal_y
         self.learnable_fovx = nn.Parameter(torch.tensor(FoVx).cuda().requires_grad_(True))
         self.learnable_fovy = nn.Parameter(torch.tensor(FoVy).cuda().requires_grad_(True))
         self.projection_matrix = getProjectionMatrix(znear=self.znear, zfar=self.zfar, fovX=self.learnable_fovx, fovY=self.learnable_fovy).transpose(0,1).cuda()

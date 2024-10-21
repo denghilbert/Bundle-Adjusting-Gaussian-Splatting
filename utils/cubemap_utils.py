@@ -25,8 +25,8 @@ def generate_pts_up_down_left_right(viewpoint_cam, shift_width=0, shift_height=0
     height = viewpoint_cam.image_height
     K = viewpoint_cam.get_K
     i, j = np.meshgrid(
-        np.linspace(0 + shift_width * width, width + shift_width * width, width),
-        np.linspace(0 + shift_height * height, height + shift_height * height, height),
+        np.linspace(0 + shift_width * width, width + shift_width * width, width//1),
+        np.linspace(0 + shift_height * height, height + shift_height * height, height//1),
         indexing="ij",
     )
     i = i.T
@@ -51,12 +51,37 @@ def apply_flow_up_down_left_right(viewpoint_cam, rays, img, types="forward", is_
     K = viewpoint_cam.get_K
     r = torch.sqrt(torch.sum(rays**2, dim=-1, keepdim=True))
     if is_fisheye:
-        inv_r = 1 / r
+        inv_r = 1 / (r + 1e-5)
         theta = torch.tan(r)
-        rays_dis = theta * inv_r * rays
+        scale = theta * inv_r
+        #scale[scale < 0] = 0 # including scale < 0 can extend to cameras more than 180 degree
+        #scale[scale > 10] = 0
+        rays_dis = scale * rays
     else:
         rays_dis = rays
     rays_dis_hom = homogenize(rays_dis)
+
+    #xy_points = rays[:, :2].cpu().numpy()
+    #plt.figure(figsize=(10, 10))
+    #plt.scatter(xy_points[:, 0], xy_points[:, 1], s=10, alpha=0.8)
+    #plt.title('2D Scatter Plot of Rays')
+    #plt.xlabel('X')
+    #plt.ylabel('Y')
+    #plt.axis('equal')
+    #output_image_path = "output/test/forward_pts.png"
+    #plt.savefig(output_image_path, dpi=300, bbox_inches='tight')
+    #plt.close()
+
+    #xy_points = rays_dis_hom[:, :2].cpu().numpy()
+    #plt.figure(figsize=(10, 10))
+    #plt.scatter(xy_points[:, 0], xy_points[:, 1], s=10, alpha=0.8)
+    #plt.title('2D Scatter Plot of Rays')
+    #plt.xlabel('X')
+    #plt.ylabel('Y')
+    #plt.axis('equal')
+    #output_image_path = "output/test/forward_pts_.png"
+    #plt.savefig(output_image_path, dpi=300, bbox_inches='tight')
+    #plt.close()
 
     if types == 'left':
         x = rays_dis_hom[:, 0]  # First column (x)
@@ -76,12 +101,26 @@ def apply_flow_up_down_left_right(viewpoint_cam, rays, img, types="forward", is_
         z = rays_dis_hom[:, 2]  # Third column (z)
         P_up = torch.stack((-x / y, -z / y), dim=1)  # Shape: [N, 2]
         rays_dis_hom = homogenize(P_up)
+
     elif types == 'down':
         x = rays_dis_hom[:, 0]  # First column (x)
         y = rays_dis_hom[:, 1]  # Second column (y)
         z = rays_dis_hom[:, 2]  # Third column (z)
         P_down = torch.stack((x / y, -z / y), dim=1)  # Shape: [N, 2]
         rays_dis_hom = homogenize(P_down)
+
+        #xy_points = rays_dis_hom[:, :2].cpu().numpy()
+        #xy_points[xy_points>10] = 0
+        #xy_points[xy_points<-10] = 0
+        #plt.figure(figsize=(10, 10))
+        #plt.scatter(xy_points[:, 0], xy_points[:, 1], s=10, alpha=0.8)
+        #plt.title('2D Scatter Plot of Rays')
+        #plt.xlabel('X')
+        #plt.ylabel('Y')
+        #plt.axis('equal')
+        #output_image_path = "output/test/forward_pts__.png"
+        #plt.savefig(output_image_path, dpi=300, bbox_inches='tight')
+        #plt.close()
 
     rays_dis_inside = dehomogenize((K @ rays_dis_hom.T).T).reshape(height, width, 2)
 
@@ -102,6 +141,10 @@ def apply_flow_up_down_left_right(viewpoint_cam, rays, img, types="forward", is_
         padding_mode='zeros',
         align_corners=True)
     distorted_img = distorted_img.squeeze(0)  # Shape: [3, 800, 800]
+    #import torchvision
+    #torchvision.utils.save_image(img, "output/test/forward_pts___.png")
+    #torchvision.utils.save_image(distorted_img, "output/test/forward_pts____.png")
+    #import pdb;pdb.set_trace()
 
     return distorted_img, img
 

@@ -147,6 +147,19 @@ def readColmapCameras(cam_extrinsics, cam_intrinsics, images_folder):
                 [0., focal_length_y, height * 0.5],
                 [0., 0., 1.]
             ], dtype=np.float32)
+            #if 'netflix' in images_folder:
+            #    print(intrinsic_matrix)
+            #    intrinsic_matrix = np.array([
+            #        [fov2focal(FovX, 1000), 0., 1000 * 0.5],
+            #        [0., fov2focal(FovY, 666), 666 * 0.5],
+            #        [0., 0., 1.]
+            #    ], dtype=np.float32)
+            #    focal_length_x = intrinsic_matrix[0][0].astype(np.float64)
+            #    focal_length_y = intrinsic_matrix[1][1].astype(np.float64)
+            #    width = 1000
+            #    height = 666
+            #    print(intrinsic_matrix)
+            #    import pdb;pdb.set_trace()
             if 'colmap' in images_folder and 'eyeful' in images_folder:
                 intrinsic_matrix = np.array([
                     [fov2focal(FovX, 684), 0., 684 * 0.5],
@@ -243,17 +256,20 @@ def readColmapSceneInfo(path, images, eval, llffhold=8, init_type="sfm", num_pts
     cam_infos_unsorted = readColmapCameras(cam_extrinsics=cam_extrinsics, cam_intrinsics=cam_intrinsics, images_folder=os.path.join(path, reading_dir))
     cam_infos = sorted(cam_infos_unsorted.copy(), key = lambda x : x.image_name)
 
+    if 'colmap' in cameras_extrinsic_file and 'eyeful' in cameras_extrinsic_file:
+        llffhold = 24
     if eval:
         train_cam_infos = [c for idx, c in enumerate(cam_infos) if idx % llffhold != 0]
         test_cam_infos = [c for idx, c in enumerate(cam_infos) if idx % llffhold == 0]
     else:
         train_cam_infos = cam_infos
-        test_cam_infos = []
+        test_cam_infos = cam_infos[:5]
 
     nerf_normalization = getNerfppNorm(train_cam_infos)
 
     if init_type == "sfm":
         ply_path = os.path.join(path, "sparse/0/points3D.ply")
+        ply_dense_path = os.path.join(path, "sparse/0/fused.ply")
         bin_path = os.path.join(path, "sparse/0/points3D.bin")
         txt_path = os.path.join(path, "sparse/0/points3D.txt")
         if not os.path.exists(ply_path):
@@ -279,7 +295,10 @@ def readColmapSceneInfo(path, images, eval, llffhold=8, init_type="sfm", num_pts
         exit(0)
 
     try:
-        pcd = fetchPly(ply_path)
+        if os.path.exists(ply_dense_path):
+            pcd = fetchPly(ply_dense_path)
+        else:
+            pcd = fetchPly(ply_path)
     except:
         pcd = None
 
