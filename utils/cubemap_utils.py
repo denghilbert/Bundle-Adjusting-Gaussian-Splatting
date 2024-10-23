@@ -20,13 +20,13 @@ def dehomogenize(X: torch.Tensor):
     assert X.shape[1] in (3, 4)
     return X[:, :-1] / X[:, -1:]
 
-def generate_pts_up_down_left_right(viewpoint_cam, shift_width=0, shift_height=0):
+def generate_pts_up_down_left_right(viewpoint_cam, shift_width=0, shift_height=0, sample_rate=1):
     width = viewpoint_cam.image_width
     height = viewpoint_cam.image_height
     K = viewpoint_cam.get_K
     i, j = np.meshgrid(
-        np.linspace(0 + shift_width * width, width + shift_width * width, width//1),
-        np.linspace(0 + shift_height * height, height + shift_height * height, height//1),
+        np.linspace(0 + shift_width * width, width + shift_width * width, width//sample_rate),
+        np.linspace(0 + shift_height * height, height + shift_height * height, height//sample_rate),
         indexing="ij",
     )
     i = i.T
@@ -45,7 +45,7 @@ def generate_pts_up_down_left_right(viewpoint_cam, shift_width=0, shift_height=0
     return P_view_insidelens_direction
 
 
-def apply_flow_up_down_left_right(viewpoint_cam, rays, img, types="forward", is_fisheye=False):
+def apply_flow_up_down_left_right(viewpoint_cam, lens_net, rays, rays_residual, img, types="forward", is_fisheye=False):
     width = viewpoint_cam.image_width
     height = viewpoint_cam.image_height
     K = viewpoint_cam.get_K
@@ -59,7 +59,10 @@ def apply_flow_up_down_left_right(viewpoint_cam, rays, img, types="forward", is_
         rays_dis = scale * rays
     else:
         rays_dis = rays
-    rays_dis_hom = homogenize(rays_dis)
+    import pdb;pdb.set_trace()
+    residual = lens_net.forward(rays_residual, sensor_to_frustum=True).reshape(height//8, width//8, 2).permute(2, 0, 1).unsqueeze(0)
+    upsampled_rays = F.interpolate(residual, size=(height, width), mode='bilinear', align_corners=False).squeeze(0).permute(1, 2, 0).reshape(-1, 2)
+    rays_dis_hom = homogenize(upsampled_rays)
 
     #xy_points = rays[:, :2].cpu().numpy()
     #plt.figure(figsize=(10, 10))
@@ -174,3 +177,47 @@ def mask_half(image: torch.Tensor, direction: str = "left") -> torch.Tensor:
     masked_image = image * mask
 
     return masked_image, mask
+
+
+def init_from_tan(scene, dataset, optimizer_lens_net, lens_net, scheduler_lens_net, resume_training=None, iresnet_lr=1e-7):
+    viewpoint_cam = scene.getTrainCameras().copy()[0]
+    rays = generate_pts_up_down_left_right(viewpoint_cam, sample_rate=8)
+
+    import math
+    magnitude = torch.sqrt(rays[:, 0]**2 + rays[:, 1]**2)
+    mask = magnitude > (math.pi / 2)
+    rays[mask] = 0
+
+    r = torch.sqrt(torch.sum(rays**2, dim=-1, keepdim=True))
+    inv_r = 1 / (r + 1e-5)
+    theta = torch.tan(r)
+    scale = theta * inv_r
+    rays_dis = scale * rays
+
+    import pdb;pdb.set_trace()
+    if resume_training == None:
+        progress_bar_ires = tqdm(range(0, 10000), desc="Init Iresnet")
+        for i in range(10000):
+            rays_pass_iresnet = lens_net.forward(rays, sensor_to_frustum=True)
+            inf_mask = torch.isinf(rays_pass_iresnet)
+            nan_mask = torch.isnan(rays_pass_iresnet)
+            rays_pass_iresnet[inf_mask] = 0
+            rays_pass_iresnet[nan_mask] = 0
+            loss = ((rays_pass_iresnet - rays_dis)**2).mean()
+            progress_bar_ires.set_postfix(loss=loss.item())
+            progress_bar_ires.update(1)
+            loss.backward()
+            optimizer_lens_net.step()
+            optimizer_lens_net.zero_grad(set_to_none = True)
+            scheduler_lens_net.step()
+
+            if i % 2000 == 0:
+                rays_pass_iresnet_np = rays_pass_iresnet.cpu().detach().numpy()
+                ref_points_np = rays_dis.reshape(-1, 2).cpu().detach().numpy()
+                plt.figure(figsize=(10, 6))
+                plt.scatter(rays_pass_iresnet_np[:, 0], rays_pass_iresnet_np[:, 1], color='blue')
+                plt.scatter(ref_points_np[:, 0], ref_points_np[:, 1], color='red')
+                plt.savefig(os.path.join(scene.model_path, f"loss_{i}.png"))
+                plt.close()
+
+        progress_bar_ires.close()

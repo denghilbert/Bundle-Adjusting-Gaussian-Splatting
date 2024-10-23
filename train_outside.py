@@ -41,7 +41,7 @@ from io import BytesIO
 from torch import nn
 import torch.nn.functional as F
 from utils.util_distortion import homogenize, dehomogenize, colorize, plot_points, center_crop, init_from_colmap, apply_distortion, generate_control_pts
-from utils.cubemap_utils import apply_flow_up_down_left_right, generate_pts_up_down_left_right, mask_half
+from utils.cubemap_utils import apply_flow_up_down_left_right, generate_pts_up_down_left_right, mask_half, init_from_tan
 import copy
 from scene.cameras import Camera
 from scipy.ndimage import binary_erosion
@@ -215,15 +215,16 @@ def generate_circular_mask(image_shape: torch.Size, radius: int) -> torch.Tensor
     return mask
 
 
-def render_cubemap(viewpoint_cam, mask_fov90, shift_width, shift_height, gaussians, pipe, background, mlp_color, shift_factors, iteration, hybrid, scene, validation=False):
+def render_cubemap(viewpoint_cam, lens_net, mask_fov90, shift_width, shift_height, gaussians, pipe, background, mlp_color, shift_factors, iteration, hybrid, scene, validation=False):
     img_list, viewspace_point_tensor_list, visibility_filter_list, radii_list = [], [], [], []
     if validation:
         img_perspective_list = []
 
     rays_forward = generate_pts_up_down_left_right(viewpoint_cam, shift_width=0, shift_height=0)
+    rays_residual = generate_pts_up_down_left_right(viewpoint_cam, shift_width=0, shift_height=0, sample_rate=8)
     render_pkg = render(viewpoint_cam, gaussians, pipe, background, mlp_color, shift_factors, iteration=iteration, hybrid=hybrid, global_alignment=scene.getGlobalAlignment())
     img_forward, viewspace_point_tensor, visibility_filter, radii = render_pkg["render"] * mask_fov90, render_pkg["viewspace_points"], render_pkg["visibility_filter"], render_pkg["radii"]
-    img_distorted, img_perspective = apply_flow_up_down_left_right(viewpoint_cam, rays_forward, img_forward, types="forward", is_fisheye=True)
+    img_distorted, img_perspective = apply_flow_up_down_left_right(viewpoint_cam, lens_net, rays_forward, rays_residual, img_forward, types="forward", is_fisheye=True)
     img_list.append(img_distorted)
     if validation:
         img_perspective_list.append(img_perspective)
@@ -238,13 +239,17 @@ def render_cubemap(viewpoint_cam, mask_fov90, shift_width, shift_height, gaussia
         img_up, viewspace_point_tensor, visibility_filter, radii = render_pkg["render"] * mask_fov90, render_pkg["viewspace_points"], render_pkg["visibility_filter"], render_pkg["radii"]
         if name[i] == 'up':
             rays_up = generate_pts_up_down_left_right(sub_camera, shift_width=0, shift_height=-shift_height)
+            rays_residual = generate_pts_up_down_left_right(sub_camera, shift_width=0, shift_height=-shift_height, sample_rate=8)
         elif name[i] == 'down':
             rays_up = generate_pts_up_down_left_right(sub_camera, shift_width=0, shift_height=shift_height)
+            rays_residual = generate_pts_up_down_left_right(sub_camera, shift_width=0, shift_height=-shift_height, sample_rate=8)
         elif name[i] == 'left':
             rays_up = generate_pts_up_down_left_right(sub_camera, shift_width=shift_width, shift_height=0)
+            rays_residual = generate_pts_up_down_left_right(sub_camera, shift_width=0, shift_height=-shift_height, sample_rate=8)
         elif name[i] == 'right':
             rays_up = generate_pts_up_down_left_right(sub_camera, shift_width=-shift_width, shift_height=0)
-        img_distorted, img_perspective = apply_flow_up_down_left_right(sub_camera, rays_up, img_up, types=name[i], is_fisheye=True)
+            rays_residual = generate_pts_up_down_left_right(sub_camera, shift_width=0, shift_height=-shift_height, sample_rate=8)
+        img_distorted, img_perspective = apply_flow_up_down_left_right(sub_camera, lens_net, rays_up, rays_residual, img_up, types=name[i], is_fisheye=True)
         img_distorted_masked, half_mask = mask_half(img_distorted, name[i])
 
         img_list.append(img_distorted_masked)
@@ -273,6 +278,10 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
     l_lens_net = [{'params': lens_net.parameters(), 'lr': 1e-5}]
     optimizer_lens_net = torch.optim.Adam(l_lens_net, eps=1e-15)
     scheduler_lens_net = torch.optim.lr_scheduler.MultiStepLR(optimizer_lens_net, milestones=[7000], gamma=0.5)
+    def zero_weights(m):
+        if isinstance(m, nn.Linear):
+            nn.init.constant_(m.weight, 0.)
+            nn.init.constant_(m.bias, 0.)
     #lens_net.apply(zero_weights)
     #for param in lens_net.parameters():
     #    print(param)
@@ -322,6 +331,12 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
     # colmap init
     if outside_rasterizer and not no_init_iresnet:
         init_from_colmap(scene, dataset, optimizer_lens_net, lens_net, scheduler_lens_net, resume_training=checkpoint, iresnet_lr=iresnet_lr)
+    if cubemap:
+        #init_from_tan(scene, dataset, optimizer_lens_net, lens_net, scheduler_lens_net, resume_training=checkpoint, iresnet_lr=iresnet_lr)
+        #import pdb;pdb.set_trace()
+        for param_group in optimizer_lens_net.param_groups:
+            param_group['lr'] = iresnet_lr
+        print(f"The learning rate is reset to {param_group['lr']}")
 
     # circular mask
     if if_circular_mask:
@@ -381,7 +396,7 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
             mask_fov90 = torch.zeros((1, viewpoint_cam.image_height, viewpoint_cam.image_width), dtype=torch.float32).cuda()
             mask_fov90[:, viewpoint_cam.image_height//2 - int(viewpoint_cam.focal_y) - 1:viewpoint_cam.image_height//2 + int(viewpoint_cam.focal_y) + 1, viewpoint_cam.image_width//2 - int(viewpoint_cam.focal_x) - 1:viewpoint_cam.image_width//2 + int(viewpoint_cam.focal_x) + 1] = 1
 
-            img_list, viewspace_point_tensor_list, visibility_filter_list, radii_list = render_cubemap(viewpoint_cam, mask_fov90, 0., 0., gaussians, pipe, background, mlp_color, shift_factors, iteration, hybrid, scene)
+            img_list, viewspace_point_tensor_list, visibility_filter_list, radii_list = render_cubemap(viewpoint_cam, lens_net, mask_fov90, 0., 0., gaussians, pipe, background, mlp_color, shift_factors, iteration, hybrid, scene)
 
             img_mask_list = []
             for img in img_list:
@@ -484,6 +499,9 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
             loss = loss + args.scale_reg * torch.abs(gaussians.get_scaling).mean()
         loss.backward(retain_graph=True)
 
+        #last_linear_layer = lens_net.i_resnet_linear.module_list[-1].residual[-1]
+        #last_linear_layer.weight.grad
+        #import pdb;pdb.set_trace()
         iter_end.record()
         torch.cuda.synchronize()
 
@@ -707,6 +725,7 @@ def training_report(use_wandb, iteration, Ll1, ssim_loss, loss, l1_loss, elapsed
                                 else:
                                     gt_image = viewpoint.fish_gt_image.cuda() * mask
                                 torchvision.utils.save_image(gt_image.cpu(), os.path.join(scene.model_path, 'training_val_{}/gt/masked_{}'.format(iteration, viewpoint.image_name) + "_" + name + ".png"))
+                                torchvision.utils.save_image(viewpoint.fish_gt_image, os.path.join(scene.model_path, 'training_val_{}/gt/{}'.format(iteration, viewpoint.image_name) + "_" + name + ".png"))
                                 torchvision.utils.save_image(image, os.path.join(scene.model_path, 'training_val_{}/renderred/distorted_{}'.format(iteration, viewpoint.image_name) + "_" + name + ".png"))
                                 if use_wandb and name == 'train':
                                     img_tensor = torch.cat((image.cpu(), gt_image.cpu()), dim=2)
@@ -733,7 +752,7 @@ def training_report(use_wandb, iteration, Ll1, ssim_loss, loss, l1_loss, elapsed
                             mask_fov90 = torch.zeros((1, viewpoint.image_height, viewpoint.image_width), dtype=torch.float32).cuda()
                             mask_fov90[:, viewpoint.image_height//2 - int(viewpoint.focal_y) - 1:viewpoint.image_height//2 + int(viewpoint.focal_y) + 1, viewpoint.image_width//2 - int(viewpoint.focal_x) - 1:viewpoint.image_width//2 + int(viewpoint.focal_x) + 1] = 1
                             torchvision.utils.save_image(mask_fov90.float(), os.path.join(scene.model_path, 'mask1.png'))
-                            img_list, img_perspective_list = render_cubemap(viewpoint, mask_fov90, 0., 0., scene.gaussians, *renderArgs, iteration, False, scene, validation=True)
+                            img_list, img_perspective_list = render_cubemap(viewpoint, lens_net, mask_fov90, 0., 0., scene.gaussians, *renderArgs, iteration, False, scene, validation=True)
                             direction_name = ['forward', 'up', 'down', 'left', 'right']
                             for i in range(5):
                                 torchvision.utils.save_image(img_perspective_list[i], os.path.join(scene.model_path, 'training_val_{}/renderred/{}/{}_perspective'.format(iteration, direction_name[i], viewpoint.image_name) + "_" + name + ".png"))
