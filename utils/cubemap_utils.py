@@ -20,13 +20,13 @@ def dehomogenize(X: torch.Tensor):
     assert X.shape[1] in (3, 4)
     return X[:, :-1] / X[:, -1:]
 
-def generate_pts_up_down_left_right(viewpoint_cam, shift_width=0, shift_height=0):
+def generate_pts_up_down_left_right(viewpoint_cam, shift_width=0, shift_height=0, sample_rate=1):
     width = viewpoint_cam.image_width
     height = viewpoint_cam.image_height
     K = viewpoint_cam.get_K
     i, j = np.meshgrid(
-        np.linspace(0 + shift_width * width, width + shift_width * width, width//1),
-        np.linspace(0 + shift_height * height, height + shift_height * height, height//1),
+        np.linspace(0 + shift_width * width, width + shift_width * width, width//sample_rate),
+        np.linspace(0 + shift_height * height, height + shift_height * height, height//sample_rate),
         indexing="ij",
     )
     i = i.T
@@ -45,7 +45,7 @@ def generate_pts_up_down_left_right(viewpoint_cam, shift_width=0, shift_height=0
     return P_view_insidelens_direction
 
 
-def apply_flow_up_down_left_right(viewpoint_cam, rays, img, types="forward", is_fisheye=False):
+def apply_flow_up_down_left_right(viewpoint_cam, lens_net, rays, rays_residual, img, types="forward", is_fisheye=False, iteration=None):
     width = viewpoint_cam.image_width
     height = viewpoint_cam.image_height
     K = viewpoint_cam.get_K
@@ -59,7 +59,15 @@ def apply_flow_up_down_left_right(viewpoint_cam, rays, img, types="forward", is_
         rays_dis = scale * rays
     else:
         rays_dis = rays
-    rays_dis_hom = homogenize(rays_dis)
+
+    #residual = torch.tensor([0., 0.])
+    residual = (lens_net.forward(rays_residual, sensor_to_frustum=True) - rays_residual).reshape(height//8, width//8, 2).permute(2, 0, 1).unsqueeze(0)
+
+    if torch.isnan(residual).any():
+        import pdb;pdb.set_trace()
+    upsampled_residual = F.interpolate(residual, size=(height, width), mode='bilinear', align_corners=False).squeeze(0).permute(1, 2, 0).reshape(-1, 2)
+    rays_dis_hom = homogenize(rays_dis + upsampled_residual)
+    #rays_dis_hom = homogenize(rays_dis)
 
     #xy_points = rays[:, :2].cpu().numpy()
     #plt.figure(figsize=(10, 10))
@@ -146,6 +154,8 @@ def apply_flow_up_down_left_right(viewpoint_cam, rays, img, types="forward", is_
     #torchvision.utils.save_image(distorted_img, "output/test/forward_pts____.png")
     #import pdb;pdb.set_trace()
 
+    if types == 'forward':
+        return distorted_img, img, residual
     return distorted_img, img
 
 
@@ -174,3 +184,4 @@ def mask_half(image: torch.Tensor, direction: str = "left") -> torch.Tensor:
     masked_image = image * mask
 
     return masked_image, mask
+

@@ -10,6 +10,7 @@
 #
 
 import os
+import io
 import sys
 import torch
 import torchvision
@@ -41,10 +42,11 @@ from io import BytesIO
 from torch import nn
 import torch.nn.functional as F
 from utils.util_distortion import homogenize, dehomogenize, colorize, plot_points, center_crop, init_from_colmap, apply_distortion, generate_control_pts
-from utils.cubemap_utils import apply_flow_up_down_left_right, generate_pts_up_down_left_right, mask_half
+from utils.cubemap_utils import apply_flow_up_down_left_right, generate_pts_up_down_left_right, mask_half, init_from_tan
 import copy
 from scene.cameras import Camera
 from scipy.ndimage import binary_erosion
+import matplotlib.pyplot as plt
 
 # set random seeds
 import numpy as np
@@ -215,15 +217,16 @@ def generate_circular_mask(image_shape: torch.Size, radius: int) -> torch.Tensor
     return mask
 
 
-def render_cubemap(viewpoint_cam, mask_fov90, shift_width, shift_height, gaussians, pipe, background, mlp_color, shift_factors, iteration, hybrid, scene, validation=False):
+def render_cubemap(viewpoint_cam, lens_net, mask_fov90, shift_width, shift_height, gaussians, pipe, background, mlp_color, shift_factors, iteration, hybrid, scene, validation=False):
     img_list, viewspace_point_tensor_list, visibility_filter_list, radii_list = [], [], [], []
     if validation:
         img_perspective_list = []
 
     rays_forward = generate_pts_up_down_left_right(viewpoint_cam, shift_width=0, shift_height=0)
+    rays_residual = generate_pts_up_down_left_right(viewpoint_cam, shift_width=0, shift_height=0, sample_rate=8)
     render_pkg = render(viewpoint_cam, gaussians, pipe, background, mlp_color, shift_factors, iteration=iteration, hybrid=hybrid, global_alignment=scene.getGlobalAlignment())
     img_forward, viewspace_point_tensor, visibility_filter, radii = render_pkg["render"] * mask_fov90, render_pkg["viewspace_points"], render_pkg["visibility_filter"], render_pkg["radii"]
-    img_distorted, img_perspective = apply_flow_up_down_left_right(viewpoint_cam, rays_forward, img_forward, types="forward", is_fisheye=True)
+    img_distorted, img_perspective, residual = apply_flow_up_down_left_right(viewpoint_cam, lens_net, rays_forward, rays_residual, img_forward, types="forward", is_fisheye=True, iteration=iteration)
     img_list.append(img_distorted)
     if validation:
         img_perspective_list.append(img_perspective)
@@ -238,13 +241,17 @@ def render_cubemap(viewpoint_cam, mask_fov90, shift_width, shift_height, gaussia
         img_up, viewspace_point_tensor, visibility_filter, radii = render_pkg["render"] * mask_fov90, render_pkg["viewspace_points"], render_pkg["visibility_filter"], render_pkg["radii"]
         if name[i] == 'up':
             rays_up = generate_pts_up_down_left_right(sub_camera, shift_width=0, shift_height=-shift_height)
+            rays_residual = generate_pts_up_down_left_right(sub_camera, shift_width=0, shift_height=-shift_height, sample_rate=8)
         elif name[i] == 'down':
             rays_up = generate_pts_up_down_left_right(sub_camera, shift_width=0, shift_height=shift_height)
+            rays_residual = generate_pts_up_down_left_right(sub_camera, shift_width=0, shift_height=-shift_height, sample_rate=8)
         elif name[i] == 'left':
             rays_up = generate_pts_up_down_left_right(sub_camera, shift_width=shift_width, shift_height=0)
+            rays_residual = generate_pts_up_down_left_right(sub_camera, shift_width=0, shift_height=-shift_height, sample_rate=8)
         elif name[i] == 'right':
             rays_up = generate_pts_up_down_left_right(sub_camera, shift_width=-shift_width, shift_height=0)
-        img_distorted, img_perspective = apply_flow_up_down_left_right(sub_camera, rays_up, img_up, types=name[i], is_fisheye=True)
+            rays_residual = generate_pts_up_down_left_right(sub_camera, shift_width=0, shift_height=-shift_height, sample_rate=8)
+        img_distorted, img_perspective = apply_flow_up_down_left_right(sub_camera, lens_net, rays_up, rays_residual, img_up, types=name[i], is_fisheye=True)
         img_distorted_masked, half_mask = mask_half(img_distorted, name[i])
 
         img_list.append(img_distorted_masked)
@@ -255,9 +262,57 @@ def render_cubemap(viewpoint_cam, mask_fov90, shift_width, shift_height, gaussia
             img_perspective_list.append(img_perspective)
 
     if not validation:
-        return img_list, viewspace_point_tensor_list, visibility_filter_list, radii_list
+        return img_list, viewspace_point_tensor_list, visibility_filter_list, radii_list, residual
     else:
         return img_list, img_perspective_list
+
+def log_vector_field_to_wandb(residual, magnification_factor=100000, step=None):
+    """
+    Logs a magnified vector field visualization to Weights & Biases.
+
+    Parameters:
+        residual (torch.Tensor): A tensor of shape [1, 2, 100, 100], storing (x, y) values.
+        magnification_factor (float): Factor to magnify the flow vectors.
+        step (int, optional): The current step or iteration for wandb logging.
+    """
+    # Get the x and y components of the vectors
+    U = residual.squeeze(0)[0].detach().cpu().numpy()  # X component
+    V = residual.squeeze(0)[1].detach().cpu().numpy()  # Y component
+
+    # Merge the flow into a 10x10 grid by averaging 10x10 blocks
+    U_small = U.reshape(10, 10, 10, 10).mean(axis=(2, 3))
+    V_small = V.reshape(10, 10, 10, 10).mean(axis=(2, 3))
+
+    # Magnify the flow for better visualization
+    U_small *= magnification_factor
+    V_small *= magnification_factor
+
+    # Create a grid for the vector field
+    x = np.arange(U_small.shape[1])
+    y = np.arange(U_small.shape[0])
+    X, Y = np.meshgrid(x, y)
+
+    # Plotting the vector field
+    plt.figure(figsize=(10, 10))
+    plt.quiver(X, Y, U_small, V_small, angles='xy', scale_units='xy', scale=1, color='b')
+    plt.title("Magnified Vector Field Visualization (10x10)")
+    plt.xlabel("X-axis")
+    plt.ylabel("Y-axis")
+    plt.gca().invert_yaxis()  # Optional: invert Y-axis to match image coordinates
+
+    # Save the plot to an in-memory file object
+    buf = io.BytesIO()
+    plt.savefig(buf, format='png', bbox_inches='tight', dpi=300)
+    buf.seek(0)
+    plt.close()
+
+    # Convert the in-memory file to a PIL Image
+    image = Image.open(buf)
+    image_array = np.array(image)
+
+    # Upload the image to wandb
+    wandb.log({"vector_field/fig": wandb.Image(image_array, caption="Magnified Vector Field Visualization (10x10)")}, step=step)
+    buf.close()
 
 def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoint_iterations, checkpoint, debug_from, use_wandb=False, random_init=False, hybrid=False, opt_cam=False, opt_shift=False, no_distortion_mask=False, opt_distortion=False, start_vignetting=10000000000, opt_intrinsic=False, r_t_noise=[0., 0.], r_t_lr=[0.001, 0.001], global_alignment_lr=0.001, extra_loss=False, start_opt_lens=1, extend_scale=2., control_point_sample_scale=8., outside_rasterizer=False, abs_grad=False, densi_num=0.0002, if_circular_mask=False, flow_scale=[1., 1.], render_resolution=1., apply2gt=False, iresnet_lr=1e-7, no_init_iresnet=False, opacity_threshold=0.005, mcmc=False, cubemap=False):
     if dataset.cap_max == -1 and mcmc:
@@ -273,6 +328,10 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
     l_lens_net = [{'params': lens_net.parameters(), 'lr': 1e-5}]
     optimizer_lens_net = torch.optim.Adam(l_lens_net, eps=1e-15)
     scheduler_lens_net = torch.optim.lr_scheduler.MultiStepLR(optimizer_lens_net, milestones=[7000], gamma=0.5)
+    def zero_weights(m):
+        if isinstance(m, nn.Linear):
+            nn.init.constant_(m.weight, 0.)
+            nn.init.constant_(m.bias, 0.)
     #lens_net.apply(zero_weights)
     #for param in lens_net.parameters():
     #    print(param)
@@ -285,6 +344,7 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
 
     shift_factors = nn.Parameter(torch.tensor([-0., -0., -0.], requires_grad=True, device='cuda'))
     shift_optimizer = torch.optim.Adam([shift_factors], lr=1e-3)
+    shift_scheduler = torch.optim.lr_scheduler.MultiStepLR(shift_optimizer, milestones=[6000], gamma=0.1)
 
 
     scene = Scene(dataset, gaussians, random_init=random_init, r_t_noise=r_t_noise, r_t_lr=r_t_lr, global_alignment_lr=global_alignment_lr, outside_rasterizer=outside_rasterizer, flow_scale=flow_scale, render_resolution=render_resolution, apply2gt=apply2gt, vis_pose=args.vis_pose, cubemap=cubemap)
@@ -322,6 +382,12 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
     # colmap init
     if outside_rasterizer and not no_init_iresnet:
         init_from_colmap(scene, dataset, optimizer_lens_net, lens_net, scheduler_lens_net, resume_training=checkpoint, iresnet_lr=iresnet_lr)
+    if cubemap:
+        #init_from_tan(scene, dataset, optimizer_lens_net, lens_net, scheduler_lens_net, resume_training=checkpoint, iresnet_lr=iresnet_lr)
+        #import pdb;pdb.set_trace()
+        for param_group in optimizer_lens_net.param_groups:
+            param_group['lr'] = iresnet_lr
+        print(f"The learning rate is reset to {param_group['lr']}")
 
     # circular mask
     if if_circular_mask:
@@ -381,12 +447,18 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
             mask_fov90 = torch.zeros((1, viewpoint_cam.image_height, viewpoint_cam.image_width), dtype=torch.float32).cuda()
             mask_fov90[:, viewpoint_cam.image_height//2 - int(viewpoint_cam.focal_y) - 1:viewpoint_cam.image_height//2 + int(viewpoint_cam.focal_y) + 1, viewpoint_cam.image_width//2 - int(viewpoint_cam.focal_x) - 1:viewpoint_cam.image_width//2 + int(viewpoint_cam.focal_x) + 1] = 1
 
-            img_list, viewspace_point_tensor_list, visibility_filter_list, radii_list = render_cubemap(viewpoint_cam, mask_fov90, 0., 0., gaussians, pipe, background, mlp_color, shift_factors, iteration, hybrid, scene)
+            img_list, viewspace_point_tensor_list, visibility_filter_list, radii_list, residual = render_cubemap(viewpoint_cam, lens_net, mask_fov90, 0., 0., gaussians, pipe, background, mlp_color, shift_factors, iteration, hybrid, scene)
 
             img_mask_list = []
             for img in img_list:
                 mask = (img[0] > 0.001) | (img[1] > 0.001) | (img[2] > 0.001).cuda()
                 img_mask_list.append(mask)
+
+            if iteration % 1000 == 2:
+                log_vector_field_to_wandb(residual, magnification_factor=500, step=iteration)
+            if iteration % 100 == 1:
+                wandb.log({"vector_field/status": residual.mean().item()}, step=iteration)
+
         else:
             render_pkg = render(viewpoint_cam, gaussians, pipe, background, mlp_color, shift_factors, iteration=iteration, hybrid=hybrid, global_alignment=scene.getGlobalAlignment())
             image, viewspace_point_tensor, visibility_filter, radii = render_pkg["render"], render_pkg["viewspace_points"], render_pkg["visibility_filter"], render_pkg["radii"]
@@ -484,6 +556,10 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
             loss = loss + args.scale_reg * torch.abs(gaussians.get_scaling).mean()
         loss.backward(retain_graph=True)
 
+        #last_linear_layer = lens_net.i_resnet_linear.module_list[-1].residual[-1]
+        #print(last_linear_layer.weight.grad)
+        #print(shift_factors.grad)
+        #import pdb;pdb.set_trace()
         iter_end.record()
         torch.cuda.synchronize()
 
@@ -607,8 +683,14 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
                     optimizer_lens_net.step()
                     optimizer_lens_net.zero_grad(set_to_none=True)
                 if opt_shift:
-                    shift_optimizer.step()
-                    shift_optimizer.zero_grad(set_to_none=True)
+                    if iteration % 100 == 1:
+                        wandb.log({"shift/0": shift_factors[0].item()}, step=iteration)
+                        wandb.log({"shift/1": shift_factors[1].item()}, step=iteration)
+                        wandb.log({"shift/2": shift_factors[2].item()}, step=iteration)
+                    if iteration > 4000:
+                        shift_optimizer.step()
+                        shift_optimizer.zero_grad(set_to_none=True)
+                        shift_scheduler.step()
                 if opt_cam:
                     scene.optimizer_rotation.step()
                     scene.optimizer_translation.step()
@@ -707,6 +789,7 @@ def training_report(use_wandb, iteration, Ll1, ssim_loss, loss, l1_loss, elapsed
                                 else:
                                     gt_image = viewpoint.fish_gt_image.cuda() * mask
                                 torchvision.utils.save_image(gt_image.cpu(), os.path.join(scene.model_path, 'training_val_{}/gt/masked_{}'.format(iteration, viewpoint.image_name) + "_" + name + ".png"))
+                                torchvision.utils.save_image(viewpoint.fish_gt_image, os.path.join(scene.model_path, 'training_val_{}/gt/{}'.format(iteration, viewpoint.image_name) + "_" + name + ".png"))
                                 torchvision.utils.save_image(image, os.path.join(scene.model_path, 'training_val_{}/renderred/distorted_{}'.format(iteration, viewpoint.image_name) + "_" + name + ".png"))
                                 if use_wandb and name == 'train':
                                     img_tensor = torch.cat((image.cpu(), gt_image.cpu()), dim=2)
@@ -733,7 +816,7 @@ def training_report(use_wandb, iteration, Ll1, ssim_loss, loss, l1_loss, elapsed
                             mask_fov90 = torch.zeros((1, viewpoint.image_height, viewpoint.image_width), dtype=torch.float32).cuda()
                             mask_fov90[:, viewpoint.image_height//2 - int(viewpoint.focal_y) - 1:viewpoint.image_height//2 + int(viewpoint.focal_y) + 1, viewpoint.image_width//2 - int(viewpoint.focal_x) - 1:viewpoint.image_width//2 + int(viewpoint.focal_x) + 1] = 1
                             torchvision.utils.save_image(mask_fov90.float(), os.path.join(scene.model_path, 'mask1.png'))
-                            img_list, img_perspective_list = render_cubemap(viewpoint, mask_fov90, 0., 0., scene.gaussians, *renderArgs, iteration, False, scene, validation=True)
+                            img_list, img_perspective_list = render_cubemap(viewpoint, lens_net, mask_fov90, 0., 0., scene.gaussians, *renderArgs, iteration, False, scene, validation=True)
                             direction_name = ['forward', 'up', 'down', 'left', 'right']
                             for i in range(5):
                                 torchvision.utils.save_image(img_perspective_list[i], os.path.join(scene.model_path, 'training_val_{}/renderred/{}/{}_perspective'.format(iteration, direction_name[i], viewpoint.image_name) + "_" + name + ".png"))
@@ -753,7 +836,7 @@ def training_report(use_wandb, iteration, Ll1, ssim_loss, loss, l1_loss, elapsed
                             gt_image = viewpoint.original_image.cuda()
                             torchvision.utils.save_image(gt_image, os.path.join(scene.model_path, 'training_val_{}/gt/{}_perspective'.format(iteration, viewpoint.image_name) + "_" + name + ".png"))
                             if use_wandb and name == 'train':
-                                img_tensor = torch.cat((final_image.cpu(), gt_image.cpu()), dim=2)
+                                img_tensor = torch.cat((final_image.clamp(0, 1).cpu(), gt_image.cpu()), dim=2)
                                 img_tensor = img_tensor.permute(1, 2, 0)
                                 img_numpy = img_tensor.cpu().numpy()
                                 wandb.log({f"images/gt_rendering_{viewpoint.image_name}": wandb.Image(img_numpy)})

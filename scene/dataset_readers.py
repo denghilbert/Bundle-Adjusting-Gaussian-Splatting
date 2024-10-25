@@ -302,6 +302,14 @@ def readColmapSceneInfo(path, images, eval, llffhold=8, init_type="sfm", num_pts
     except:
         pcd = None
 
+    #if 'netflix_garden' in ply_path:
+    #    print("filter sky in netflix garden")
+    #    print(pcd.points.shape)
+    #    points = pcd.points
+    #    idx = (points[:, 0] <= 10) & (points[:, 0] >= -10) & (points[:, 1] <= 10) & (points[:, 1] >= -10)
+    #    pcd = BasicPointCloud(points=pcd.points[idx], colors=pcd.colors[idx], normals=None)
+    #    print(pcd.points.shape)
+
     scene_info = SceneInfo(point_cloud=pcd,
                            train_cameras=train_cam_infos,
                            test_cameras=test_cam_infos,
