@@ -23,6 +23,8 @@ WARNED = False
 
 def loadCam(args, id, cam_info, resolution_scale, outside_rasterizer, flow_scale, apply2gt, render_resolution, cubemap, table1):
     orig_w, orig_h = cam_info.image.size
+    if outside_rasterizer:
+        orig_w, orig_h = cam_info.width, cam_info.height
 
     if args.resolution in [1, 2, 4, 8]:
         resolution = round(orig_w / (resolution_scale * args.resolution)), round(orig_h / (resolution_scale * args.resolution))
@@ -82,11 +84,12 @@ def loadCam(args, id, cam_info, resolution_scale, outside_rasterizer, flow_scale
         flow_scale=flow_scale,
         apply2gt=apply2gt,
         render_resolution=render_resolution,
-        cubemap=cubemap
+        cubemap=cubemap,
+        table1=table1
     )
 
 
-def cameraList_from_camInfos(cam_infos, resolution_scale, args, outside_rasterizer, flow_scale, apply2gt, render_resolution, cubemap, table1=False):
+def cameraList_from_camInfos(cam_infos, resolution_scale, args, outside_rasterizer, flow_scale, apply2gt, render_resolution, cubemap, table1):
     camera_list = []
 
     for id, c in enumerate(cam_infos):

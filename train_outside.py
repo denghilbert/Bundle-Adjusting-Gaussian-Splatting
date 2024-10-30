@@ -42,7 +42,7 @@ from io import BytesIO
 from torch import nn
 import torch.nn.functional as F
 from utils.util_distortion import homogenize, dehomogenize, colorize, plot_points, center_crop, init_from_colmap, apply_distortion, generate_control_pts
-from utils.cubemap_utils import apply_flow_up_down_left_right, generate_pts_up_down_left_right, mask_half, init_from_tan
+from utils.cubemap_utils import apply_flow_up_down_left_right, generate_pts_up_down_left_right, mask_half
 import copy
 from scene.cameras import Camera
 from scipy.ndimage import binary_erosion
@@ -314,7 +314,7 @@ def log_vector_field_to_wandb(residual, magnification_factor=100000, step=None):
     wandb.log({"vector_field/fig": wandb.Image(image_array, caption="Magnified Vector Field Visualization (10x10)")}, step=step)
     buf.close()
 
-def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoint_iterations, checkpoint, debug_from, use_wandb=False, random_init=False, hybrid=False, opt_cam=False, opt_shift=False, no_distortion_mask=False, opt_distortion=False, start_vignetting=10000000000, opt_intrinsic=False, r_t_noise=[0., 0.], r_t_lr=[0.001, 0.001], global_alignment_lr=0.001, extra_loss=False, start_opt_lens=1, extend_scale=2., control_point_sample_scale=8., outside_rasterizer=False, abs_grad=False, densi_num=0.0002, if_circular_mask=False, flow_scale=[1., 1.], render_resolution=1., apply2gt=False, iresnet_lr=1e-7, no_init_iresnet=False, opacity_threshold=0.005, mcmc=False, cubemap=False):
+def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoint_iterations, checkpoint, debug_from, use_wandb=False, random_init=False, hybrid=False, opt_cam=False, opt_shift=False, no_distortion_mask=False, opt_distortion=False, start_vignetting=10000000000, opt_intrinsic=False, r_t_noise=[0., 0.], r_t_lr=[0.001, 0.001], global_alignment_lr=0.001, extra_loss=False, start_opt_lens=1, extend_scale=2., control_point_sample_scale=8., outside_rasterizer=False, abs_grad=False, densi_num=0.0002, if_circular_mask=False, flow_scale=[1., 1.], render_resolution=1., apply2gt=False, iresnet_lr=1e-7, no_init_iresnet=False, opacity_threshold=0.005, mcmc=False, cubemap=False, table1=False):
     if dataset.cap_max == -1 and mcmc:
         print("Please specify the maximum number of Gaussians using --cap_max.")
         exit()
@@ -343,11 +343,10 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
     vignetting_scheduler = torch.optim.lr_scheduler.MultiStepLR(vignetting_optimizer, milestones=[1000], gamma=10)
 
     shift_factors = nn.Parameter(torch.tensor([-0., -0., -0.], requires_grad=True, device='cuda'))
-    shift_optimizer = torch.optim.Adam([shift_factors], lr=1e-3)
-    shift_scheduler = torch.optim.lr_scheduler.MultiStepLR(shift_optimizer, milestones=[6000], gamma=0.1)
+    shift_optimizer = torch.optim.Adam([shift_factors], lr=1e-5)
+    shift_scheduler = torch.optim.lr_scheduler.MultiStepLR(shift_optimizer, milestones=[30000], gamma=0.1)
 
-
-    scene = Scene(dataset, gaussians, random_init=random_init, r_t_noise=r_t_noise, r_t_lr=r_t_lr, global_alignment_lr=global_alignment_lr, outside_rasterizer=outside_rasterizer, flow_scale=flow_scale, render_resolution=render_resolution, apply2gt=apply2gt, vis_pose=args.vis_pose, cubemap=cubemap)
+    scene = Scene(dataset, gaussians, random_init=random_init, r_t_noise=r_t_noise, r_t_lr=r_t_lr, global_alignment_lr=global_alignment_lr, outside_rasterizer=outside_rasterizer, flow_scale=flow_scale, render_resolution=render_resolution, apply2gt=apply2gt, vis_pose=args.vis_pose, cubemap=cubemap, table1=table1)
 
     #pose_GT, pose_aligned = scene.loadAlignCameras(if_vis_train=True, path=scene.model_path)
     #torch.save(pose_GT, os.path.join(scene.model_path, 'gt.pt'))
@@ -454,10 +453,11 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
                 mask = (img[0] > 0.001) | (img[1] > 0.001) | (img[2] > 0.001).cuda()
                 img_mask_list.append(mask)
 
-            if iteration % 1000 == 2:
-                log_vector_field_to_wandb(residual, magnification_factor=500, step=iteration)
-            if iteration % 100 == 1:
-                wandb.log({"vector_field/status": residual.mean().item()}, step=iteration)
+            if opt_shift:
+                if iteration % 1000 == 2:
+                    log_vector_field_to_wandb(residual, magnification_factor=500, step=iteration)
+                if iteration % 100 == 1:
+                    wandb.log({"vector_field/status": residual.mean().item()}, step=iteration)
 
         else:
             render_pkg = render(viewpoint_cam, gaussians, pipe, background, mlp_color, shift_factors, iteration=iteration, hybrid=hybrid, global_alignment=scene.getGlobalAlignment())
@@ -581,7 +581,7 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
                 P_view_insidelens_direction = None
                 P_sensor = None
 
-            training_report(use_wandb, iteration, Ll1, ssim_loss, loss, l1_loss, iter_start.elapsed_time(iter_end), testing_iterations, scene, render, (pipe, background, mlp_color, shift_factors), lens_net, opt_distortion, no_distortion_mask, outside_rasterizer, flow_scale, control_point_sample_scale, flow_apply2_gt_or_img, apply2gt, cubemap)
+            training_report(use_wandb, iteration, Ll1, ssim_loss, loss, l1_loss, iter_start.elapsed_time(iter_end), testing_iterations, scene, render, (pipe, background, mlp_color, shift_factors), lens_net, opt_distortion, no_distortion_mask, outside_rasterizer, flow_scale, control_point_sample_scale, flow_apply2_gt_or_img, apply2gt, cubemap, table1)
 
             if (iteration in saving_iterations):
                 print("\n[ITER {}] Saving Gaussians".format(iteration))
@@ -687,10 +687,10 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
                         wandb.log({"shift/0": shift_factors[0].item()}, step=iteration)
                         wandb.log({"shift/1": shift_factors[1].item()}, step=iteration)
                         wandb.log({"shift/2": shift_factors[2].item()}, step=iteration)
-                    if iteration > 4000:
-                        shift_optimizer.step()
-                        shift_optimizer.zero_grad(set_to_none=True)
-                        shift_scheduler.step()
+
+                    shift_optimizer.step()
+                    shift_optimizer.zero_grad(set_to_none=True)
+                    shift_scheduler.step()
                 if opt_cam:
                     scene.optimizer_rotation.step()
                     scene.optimizer_translation.step()
@@ -715,7 +715,7 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
                     torch.save(scene.unnoisy_train_cameras, os.path.join(scene.model_path, 'gt_cams.pt'))
                     torch.save(scene.train_cameras, os.path.join(scene.model_path, f'cams_train{iteration}.pt'))
 
-def training_report(use_wandb, iteration, Ll1, ssim_loss, loss, l1_loss, elapsed, testing_iterations, scene : Scene, renderFunc, renderArgs, lens_net, opt_distortion, no_distortion_mask, outside_rasterizer, flow_scale, control_point_sample_scale, flow_apply2_gt_or_img, apply2gt, cubemap):
+def training_report(use_wandb, iteration, Ll1, ssim_loss, loss, l1_loss, elapsed, testing_iterations, scene : Scene, renderFunc, renderArgs, lens_net, opt_distortion, no_distortion_mask, outside_rasterizer, flow_scale, control_point_sample_scale, flow_apply2_gt_or_img, apply2gt, cubemap, table1):
     if use_wandb and iteration % 10 == 0:
         scalars = {
             f"loss/l1_loss": Ll1,
@@ -732,7 +732,7 @@ def training_report(use_wandb, iteration, Ll1, ssim_loss, loss, l1_loss, elapsed
 
         for camera in scene.getTestCameras()[:]:
             validation_configs[0]['cameras'].append(
-                Camera(camera.colmap_id, camera.R, camera.T, camera.intrinsic_matrix_numpy, camera.FoVx, camera.FoVy, camera.focal_x, camera.focal_y, camera.original_image_pil, None, camera.fish_gt_image_pil, camera.image_name, camera.uid, depth=None, ori_path=camera.ori_path, outside_rasterizer=camera.outside_rasterizer, test_outside_rasterizer=camera.test_outside_rasterizer, orig_fov_w=camera.orig_fov_w, orig_fov_h=camera.orig_fov_h, original_image_resolution=camera.original_image_resolution, fish_gt_image_resolution=camera.fish_gt_image_resolution, flow_scale=camera.flow_scale, apply2gt=camera.apply2gt, render_resolution=camera.render_resolution, cubemap=cubemap)
+                Camera(camera.colmap_id, camera.R, camera.T, camera.intrinsic_matrix_numpy, camera.FoVx, camera.FoVy, camera.focal_x, camera.focal_y, camera.original_image_pil, None, camera.fish_gt_image_pil, camera.image_name, camera.uid, depth=None, ori_path=camera.ori_path, outside_rasterizer=camera.outside_rasterizer, test_outside_rasterizer=camera.test_outside_rasterizer, orig_fov_w=camera.orig_fov_w, orig_fov_h=camera.orig_fov_h, original_image_resolution=camera.original_image_resolution, fish_gt_image_resolution=camera.fish_gt_image_resolution, flow_scale=camera.flow_scale, apply2gt=camera.apply2gt, render_resolution=camera.render_resolution, cubemap=cubemap, table1=table1)
             )
 
         for camera in scene.getTrainCameras()[:5]:
@@ -758,6 +758,8 @@ def training_report(use_wandb, iteration, Ll1, ssim_loss, loss, l1_loss, elapsed
                         os.makedirs(os.path.join(scene.model_path, 'training_val_{}/renderred/down').format(iteration), exist_ok=True)
                         os.makedirs(os.path.join(scene.model_path, 'training_val_{}/renderred/left').format(iteration), exist_ok=True)
                         os.makedirs(os.path.join(scene.model_path, 'training_val_{}/renderred/right').format(iteration), exist_ok=True)
+                    if table1:
+                        os.makedirs(os.path.join(scene.model_path, 'training_val_{}/table1').format(iteration), exist_ok=True)
                     for idx, viewpoint in enumerate(config['cameras']):
                         #if outside_rasterizer:
                         #    viewpoint.reset_intrinsic(
@@ -770,6 +772,16 @@ def training_report(use_wandb, iteration, Ll1, ssim_loss, loss, l1_loss, elapsed
                         #        #int(flow_scale[0] * viewpoint.image_width),
                         #        #int(flow_scale[1] * viewpoint.image_height)
                         #    )
+                        if table1 and name == 'test':
+                            gt_image = viewpoint.original_image.cuda()
+                            torchvision.utils.save_image(gt_image, os.path.join(scene.model_path, 'training_val_{}/table1/{}_gt'.format(iteration, viewpoint.image_name) + "_" + name + ".png"))
+                            image = torch.clamp(renderFunc(viewpoint, scene.gaussians, *renderArgs, global_alignment=scene.getGlobalAlignment())["render"], 0.0, 1.0)
+                            torchvision.utils.save_image(image, os.path.join(scene.model_path, 'training_val_{}/table1/{}_rendering'.format(iteration, viewpoint.image_name) + "_" + name + ".png"))
+                            l1_test += l1_loss(image, gt_image).mean().double()
+                            psnr_test += psnr(image, gt_image).mean().double()
+                            ssims.append(ssim(image, gt_image))
+                            lpipss.append(lpips(image, gt_image))
+                            continue
                         if not cubemap:
                             image = torch.clamp(renderFunc(viewpoint, scene.gaussians, *renderArgs, global_alignment=scene.getGlobalAlignment())["render"], 0.0, 1.0)
                             torchvision.utils.save_image(image, os.path.join(scene.model_path, 'training_val_{}/renderred/{}'.format(iteration, viewpoint.image_name) + "_" + name + ".png"))
@@ -953,6 +965,7 @@ if __name__ == "__main__":
     parser.add_argument("--mcmc", action="store_true", default=False)
     parser.add_argument("--no_init_iresnet", action="store_true", default=False)
     parser.add_argument("--cubemap", action="store_true", default=False)
+    parser.add_argument("--table1", action="store_true", default=False)
 
     args = parser.parse_args(sys.argv[1:])
     args.save_iterations.append(args.iterations)
@@ -985,8 +998,7 @@ if __name__ == "__main__":
         global_alignment_lr=args.global_alignment_lr, extra_loss=args.extra_loss, start_opt_lens=args.start_opt_lens,
         extend_scale=args.extend_scale, control_point_sample_scale=args.control_point_sample_scale, outside_rasterizer=args.outside_rasterizer,
         abs_grad=args.abs_grad, densi_num=args.densi_num, if_circular_mask=args.if_circular_mask, flow_scale=args.flow_scale,
-        render_resolution=args.render_resolution, apply2gt=args.apply2gt, iresnet_lr=args.iresnet_lr, no_init_iresnet=args.no_init_iresnet, opacity_threshold=args.opacity_threshold, mcmc=args.mcmc, cubemap=args.cubemap
-    )
+        render_resolution=args.render_resolution, apply2gt=args.apply2gt, iresnet_lr=args.iresnet_lr, no_init_iresnet=args.no_init_iresnet, opacity_threshold=args.opacity_threshold, mcmc=args.mcmc, cubemap=args.cubemap, table1=args.table1)
 
     # All done
     print("\nTraining complete.")

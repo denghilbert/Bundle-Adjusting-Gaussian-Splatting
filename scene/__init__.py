@@ -119,8 +119,8 @@ class Scene:
 
             generator = torch.Generator().manual_seed(55)
             if vis_pose:
-                self.unnoisy_train_cameras[resolution_scale] = cameraList_from_camInfos(scene_info.train_cameras, resolution_scale, args, outside_rasterizer, flow_scale, apply2gt, render_resolution, cubemap)
-                self.debug_cameras[resolution_scale] = cameraList_from_camInfos(scene_info.train_cameras, resolution_scale, args, outside_rasterizer, flow_scale, apply2gt, render_resolution, cubemap)
+                self.unnoisy_train_cameras[resolution_scale] = cameraList_from_camInfos(scene_info.train_cameras, resolution_scale, args, outside_rasterizer, flow_scale, apply2gt, render_resolution, cubemap, False)
+                self.debug_cameras[resolution_scale] = cameraList_from_camInfos(scene_info.train_cameras, resolution_scale, args, outside_rasterizer, flow_scale, apply2gt, render_resolution, cubemap, False)
             # simply add noise
             so3_noise = torch.randn((len(scene_info.train_cameras), 3), generator=generator) * r_t_noise[0]
             t_noise = (torch.randn((len(scene_info.train_cameras), 3), generator=generator) * r_t_noise[1]).numpy()
@@ -147,12 +147,11 @@ class Scene:
                 scene_info.train_cameras[index] = scene_info.train_cameras[index]._replace(T=tmp_T, R=tmp_R, FovX=tmp_fovx, FovY=tmp_fovy)
                 #import pdb; pdb.set_trace()
                 #print(scene_info.train_cameras[index])
-            #import pdb; pdb.set_trace()
-            self.train_cameras[resolution_scale] = cameraList_from_camInfos(scene_info.train_cameras, resolution_scale, args, outside_rasterizer, flow_scale, apply2gt, render_resolution, cubemap)
+            self.train_cameras[resolution_scale] = cameraList_from_camInfos(scene_info.train_cameras, resolution_scale, args, outside_rasterizer, flow_scale, apply2gt, render_resolution, cubemap, False)
             print("Loading Test Cameras")
-            self.test_cameras[resolution_scale] = cameraList_from_camInfos(scene_info.test_cameras, resolution_scale, args, outside_rasterizer, flow_scale, apply2gt, render_resolution, cubemap, table1=table1)
+            self.test_cameras[resolution_scale] = cameraList_from_camInfos(scene_info.test_cameras, resolution_scale, args, outside_rasterizer, flow_scale, apply2gt, render_resolution, cubemap, table1)
             if vis_pose:
-                self.unnoisy_test_cameras[resolution_scale] = cameraList_from_camInfos(scene_info.test_cameras, resolution_scale, args, outside_rasterizer, flow_scale, apply2gt, render_resolution, cubemap)
+                self.unnoisy_test_cameras[resolution_scale] = cameraList_from_camInfos(scene_info.test_cameras, resolution_scale, args, outside_rasterizer, flow_scale, apply2gt, render_resolution, cubemap, False)
 
         if self.loaded_iter:
             self.gaussians.load_ply(os.path.join(self.model_path, "point_cloud", "iteration_" + str(self.loaded_iter), "point_cloud.ply"))

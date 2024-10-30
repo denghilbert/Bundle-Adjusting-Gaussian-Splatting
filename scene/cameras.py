@@ -44,7 +44,7 @@ def rotate_camera(viewpoint_cam, deg_x, deg_y, deg_z):
     return R_new, T_new
 
 class Camera(nn.Module):
-    def __init__(self, colmap_id, R, T, intrinsic_matrix, FoVx, FoVy, focal_length_x, focal_length_y, image, gt_alpha_mask, fish_gt_image, image_name, uid, trans=np.array([0.0, 0.0, 0.0]), scale=1.0, data_device = "cuda", depth=None, ori_path=None, outside_rasterizer=False, test_outside_rasterizer=False, orig_fov_w=0, orig_fov_h=0, original_image_resolution=None, fish_gt_image_resolution=None, flow_scale=[1., 1.], apply2gt=False, render_resolution=1., is_sub_camera=False, cubemap=False):
+    def __init__(self, colmap_id, R, T, intrinsic_matrix, FoVx, FoVy, focal_length_x, focal_length_y, image, gt_alpha_mask, fish_gt_image, image_name, uid, trans=np.array([0.0, 0.0, 0.0]), scale=1.0, data_device = "cuda", depth=None, ori_path=None, outside_rasterizer=False, test_outside_rasterizer=False, orig_fov_w=0, orig_fov_h=0, original_image_resolution=None, fish_gt_image_resolution=None, flow_scale=[1., 1.], apply2gt=False, render_resolution=1., is_sub_camera=False, cubemap=False, table1=False):
         super(Camera, self).__init__()
         assert orig_fov_w !=0 and orig_fov_h !=0
         assert original_image_resolution != None
@@ -113,7 +113,7 @@ class Camera(nn.Module):
         self.camera_center = self.world_view_transform.inverse()[3, :3]
         self.cubemap = cubemap
 
-        if outside_rasterizer and not is_sub_camera and not cubemap:
+        if outside_rasterizer and not is_sub_camera and not cubemap and not table1:
             # eyeful and fisheyenerf
             self.reset_intrinsic(
                 focal2fov(self.focal_x, self.fish_gt_image_resolution[2]),
@@ -173,7 +173,7 @@ class Camera(nn.Module):
                     int(render_resolution * self.fish_gt_image_resolution[1])
                 )
 
-        if not is_sub_camera and cubemap:
+        if not is_sub_camera and cubemap and not table1:
             # up down left right
             self.sub_cameras = []
             for i in range(5):
