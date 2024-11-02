@@ -13,6 +13,7 @@ import os
 import io
 import sys
 import torch
+import cv2
 import torchvision
 import random
 import math
@@ -225,6 +226,7 @@ def render_cubemap(viewpoint_cam, lens_net, mask_fov90, shift_width, shift_heigh
     rays_forward = generate_pts_up_down_left_right(viewpoint_cam, shift_width=0, shift_height=0)
     rays_residual = generate_pts_up_down_left_right(viewpoint_cam, shift_width=0, shift_height=0, sample_rate=8)
     render_pkg = render(viewpoint_cam, gaussians, pipe, background, mlp_color, shift_factors, iteration=iteration, hybrid=hybrid, global_alignment=scene.getGlobalAlignment())
+    import pdb;pdb.set_trace()
     img_forward, viewspace_point_tensor, visibility_filter, radii = render_pkg["render"] * mask_fov90, render_pkg["viewspace_points"], render_pkg["visibility_filter"], render_pkg["radii"]
     img_distorted, img_perspective, residual = apply_flow_up_down_left_right(viewpoint_cam, lens_net, rays_forward, rays_residual, img_forward, types="forward", is_fisheye=True, iteration=iteration)
     img_list.append(img_distorted)
@@ -234,9 +236,8 @@ def render_cubemap(viewpoint_cam, lens_net, mask_fov90, shift_width, shift_heigh
     visibility_filter_list.append(visibility_filter)
     radii_list.append(radii)
 
-    name = ['up', 'down', 'left', 'right']
+    name = ['up', 'down', 'left', 'right', 'back']
     for i, sub_camera in enumerate(viewpoint_cam.sub_cameras):
-        if i == 4: break
         render_pkg = render(sub_camera, gaussians, pipe, background, mlp_color, shift_factors, iteration=iteration, hybrid=hybrid, global_alignment=scene.getGlobalAlignment())
         img_up, viewspace_point_tensor, visibility_filter, radii = render_pkg["render"] * mask_fov90, render_pkg["viewspace_points"], render_pkg["visibility_filter"], render_pkg["radii"]
         if name[i] == 'up':
@@ -251,13 +252,17 @@ def render_cubemap(viewpoint_cam, lens_net, mask_fov90, shift_width, shift_heigh
         elif name[i] == 'right':
             rays_up = generate_pts_up_down_left_right(sub_camera, shift_width=-shift_width, shift_height=0)
             rays_residual = generate_pts_up_down_left_right(sub_camera, shift_width=0, shift_height=-shift_height, sample_rate=8)
-        img_distorted, img_perspective = apply_flow_up_down_left_right(sub_camera, lens_net, rays_up, rays_residual, img_up, types=name[i], is_fisheye=True)
-        img_distorted_masked, half_mask = mask_half(img_distorted, name[i])
+        if name[i] != 'back':
+            img_distorted, img_perspective = apply_flow_up_down_left_right(sub_camera, lens_net, rays_up, rays_residual, img_up, types=name[i], is_fisheye=True)
+            img_distorted_masked, half_mask = mask_half(img_distorted, name[i])
+        else:
+            img_perspective = img_up
 
-        img_list.append(img_distorted_masked)
-        viewspace_point_tensor_list.append(viewspace_point_tensor)
-        visibility_filter_list.append(visibility_filter)
-        radii_list.append(radii)
+        if name[i] != 'back':
+            img_list.append(img_distorted_masked)
+            viewspace_point_tensor_list.append(viewspace_point_tensor)
+            visibility_filter_list.append(visibility_filter)
+            radii_list.append(radii)
         if validation:
             img_perspective_list.append(img_perspective)
 
@@ -266,6 +271,198 @@ def render_cubemap(viewpoint_cam, lens_net, mask_fov90, shift_width, shift_heigh
     else:
         return img_list, img_perspective_list
 
+def cubemap_to_panorama(path, img_fov90_list, count):
+    #img_forward = np.transpose(img_fov90_list[0], (1, 2, 0))[..., ::-1]
+    #img_up = np.transpose(img_fov90_list[1], (1, 2, 0))[..., ::-1]
+    #img_down = np.transpose(img_fov90_list[2], (1, 2, 0))[..., ::-1]
+    #img_left = np.transpose(img_fov90_list[3], (1, 2, 0))[..., ::-1]
+    #img_right = np.transpose(img_fov90_list[4], (1, 2, 0))[..., ::-1]
+    #img_back = np.transpose(img_fov90_list[5], (1, 2, 0))[..., ::-1]
+
+    img_forward = cv2.imread(os.path.join(path, f'trajectory/forward/perspective_{count}.png'))
+    img_up = cv2.imread(os.path.join(path, f'trajectory/up/perspective_{count}.png'))
+    img_down = cv2.imread(os.path.join(path, f'trajectory/down/perspective_{count}.png'))
+    img_left = cv2.imread(os.path.join(path, f'trajectory/left/perspective_{count}.png'))
+    img_right = cv2.imread(os.path.join(path, f'trajectory/right/perspective_{count}.png'))
+    img_back = cv2.imread(os.path.join(path, f'trajectory/back/perspective_{count}.png'))
+
+# Desired output image size (800x800)
+    output_width = img_forward.shape[0] * 4
+    output_height = img_forward.shape[1] * 4
+
+# Desired field of view
+    fov_h_deg = 360  # Horizontal FOV in degrees
+    fov_v_deg = 360  # Vertical FOV in degrees
+
+    fov_h_rad = math.radians(fov_h_deg)  # Convert FOV to radians
+    fov_v_rad = math.radians(fov_v_deg)
+
+# Create empty output image
+    output_image = np.zeros((output_height, output_width, 3), dtype=np.uint8)
+
+# Precompute variables
+    half_width = output_width / 2.0
+    half_height = output_height / 2.0
+
+# Generate grid of pixel coordinates
+    x = np.linspace(0, output_width - 1, output_width)
+    y = np.linspace(0, output_height - 1, output_height)
+    x_grid, y_grid = np.meshgrid(x, y)
+
+# Normalized device coordinates (from -1 to +1)
+    nx = (x_grid - half_width) / half_width
+    ny = (half_height - y_grid) / half_height  # Invert y-axis for image coordinates
+
+# Compute angles in camera space
+    theta = nx * (fov_h_rad / 2)  # Horizontal angle
+    phi = ny * (fov_v_rad / 2)    # Vertical angle
+
+# Compute ray directions in camera space
+    dir_x = np.sin(theta) * np.cos(phi)
+    dir_y = np.sin(phi)
+    dir_z = np.cos(theta) * np.cos(phi)
+
+# Normalize the direction vectors
+    norm = np.sqrt(dir_x**2 + dir_y**2 + dir_z**2)
+    dir_x /= norm
+    dir_y /= norm
+    dir_z /= norm
+
+# Function to sample pixels from an image using bilinear interpolation
+    def sample_image(img, u, v):
+        img_height, img_width, channels = img.shape
+
+        # Get the integer parts and the fractional parts
+        u0 = np.floor(u).astype(np.int32)
+        v0 = np.floor(v).astype(np.int32)
+        u1 = u0 + 1
+        v1 = v0 + 1
+
+        # Clip to valid indices
+        u0 = np.clip(u0, 0, img_width - 1)
+        u1 = np.clip(u1, 0, img_width - 1)
+        v0 = np.clip(v0, 0, img_height - 1)
+        v1 = np.clip(v1, 0, img_height - 1)
+
+        # The fractional parts
+        fu = u - u0
+        fv = v - v0
+
+        # Expand dims to allow broadcasting
+        fu = fu[:, None]
+        fv = fv[:, None]
+
+        # Get pixel values at the four corners
+        Ia = img[v0, u0]  # Shape (N, 3)
+        Ib = img[v1, u0]
+        Ic = img[v0, u1]
+        Id = img[v1, u1]
+
+        # Compute the bilinear interpolation
+        wa = (1 - fu) * (1 - fv)
+        wb = (1 - fu) * fv
+        wc = fu * (1 - fv)
+        wd = fu * fv
+
+        # Sum up the weighted contributions
+        pixels = wa * Ia + wb * Ib + wc * Ic + wd * Id
+
+        return pixels.astype(np.uint8)
+
+# Determine which face to sample from based on the direction vector components
+    abs_dir_x = np.abs(dir_x)
+    abs_dir_y = np.abs(dir_y)
+    abs_dir_z = np.abs(dir_z)
+
+# Find the maximum component to determine the face
+    max_dir = np.maximum.reduce([abs_dir_x, abs_dir_y, abs_dir_z])
+
+# Initialize the masks for each face
+    forward_mask = (max_dir == abs_dir_z) & (dir_z > 0)
+    back_mask = (max_dir == abs_dir_z) & (dir_z < 0)  # Mask for back face
+    right_mask = (max_dir == abs_dir_x) & (dir_x > 0)
+    left_mask = (max_dir == abs_dir_x) & (dir_x < 0)
+    up_mask = (max_dir == abs_dir_y) & (dir_y > 0)
+    down_mask = (max_dir == abs_dir_y) & (dir_y < 0)
+
+# Process each face
+    faces = [
+        ('forward', forward_mask, img_forward),
+        ('back', back_mask, img_back),  # Add the back face processing
+        ('right', right_mask, img_right),
+        ('left', left_mask, img_left),
+        ('up', up_mask, img_up),
+        ('down', down_mask, img_down)
+    ]
+
+    for face_name, face_mask, img_face in faces:
+        if np.any(face_mask):
+            # Get the indices of pixels where face_mask is True
+            y_indices, x_indices = np.where(face_mask)
+
+            # Extract the direction vectors for these pixels
+            dir_x_face = dir_x[face_mask]
+            dir_y_face = dir_y[face_mask]
+            dir_z_face = dir_z[face_mask]
+
+            # Map to face coordinate system
+            if face_name == 'forward':
+                dir_img_x = dir_x_face
+                dir_img_y = dir_y_face
+                dir_img_z = dir_z_face
+            elif face_name == 'back':
+                dir_img_x = -dir_x_face  # Flip for back face
+                dir_img_y = dir_y_face
+                dir_img_z = -dir_z_face
+            elif face_name == 'right':
+                dir_img_x = -dir_z_face
+                dir_img_y = dir_y_face
+                dir_img_z = dir_x_face
+            elif face_name == 'left':
+                dir_img_x = dir_z_face
+                dir_img_y = dir_y_face
+                dir_img_z = -dir_x_face
+            elif face_name == 'up':
+                dir_img_x = dir_x_face
+                dir_img_y = -dir_z_face
+                dir_img_z = dir_y_face
+            elif face_name == 'down':
+                dir_img_x = dir_x_face
+                dir_img_y = dir_z_face
+                dir_img_z = -dir_y_face
+
+            # Project onto the image plane
+            epsilon = 1e-6  # Small value to avoid division by zero
+            valid = np.abs(dir_img_z) > epsilon  # Use absolute value to handle near-zero z
+
+            if np.any(valid):
+                # Get valid indices
+                valid_indices = np.where(valid)[0]
+
+                dir_img_x = dir_img_x[valid]
+                dir_img_y = dir_img_y[valid]
+                dir_img_z = dir_img_z[valid]
+
+                u_img = dir_img_x / np.abs(dir_img_z)
+                v_img = dir_img_y / np.abs(dir_img_z)
+
+                # Convert to pixel coordinates in the input image
+                img_height, img_width, _ = img_face.shape
+
+                u = (u_img + 1) * (img_width - 1) / 2.0
+                v = (1 - v_img) * (img_height - 1) / 2.0  # Invert y-axis
+
+                # Clip coordinates to image bounds
+                u = np.clip(u, 0, img_width - 1)
+                v = np.clip(v, 0, img_height - 1)
+
+                # Sample pixels using bilinear interpolation
+                pixels = sample_image(img_face, u, v)
+
+                # Assign sampled pixels to output image
+                output_image[y_indices[valid_indices], x_indices[valid_indices]] = pixels
+
+    return output_image
 
 def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoint_iterations, checkpoint, debug_from, use_wandb=False, random_init=False, hybrid=False, opt_cam=False, opt_shift=False, no_distortion_mask=False, opt_distortion=False, start_vignetting=10000000000, opt_intrinsic=False, r_t_noise=[0., 0.], r_t_lr=[0.001, 0.001], global_alignment_lr=0.001, extra_loss=False, start_opt_lens=1, extend_scale=2., control_point_sample_scale=8., outside_rasterizer=False, abs_grad=False, densi_num=0.0002, if_circular_mask=False, flow_scale=[1., 1.], render_resolution=1., apply2gt=False, iresnet_lr=1e-7, no_init_iresnet=False, opacity_threshold=0.005, mcmc=False, cubemap=False, table1=False):
     if dataset.cap_max == -1 and mcmc:
@@ -322,16 +519,15 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
         gaussians.load_ply("netflix/netflix_garden_lr8_apply2render_res2_scale2.5_filtersky_/point_cloud/iteration_20000/point_cloud.ply")
 
     os.makedirs(os.path.join(scene.model_path, 'trajectory'), exist_ok=True)
+    os.makedirs(os.path.join(scene.model_path, 'trajectory/forward'), exist_ok=True)
+    os.makedirs(os.path.join(scene.model_path, 'trajectory/up'), exist_ok=True)
+    os.makedirs(os.path.join(scene.model_path, 'trajectory/down'), exist_ok=True)
+    os.makedirs(os.path.join(scene.model_path, 'trajectory/left'), exist_ok=True)
+    os.makedirs(os.path.join(scene.model_path, 'trajectory/right'), exist_ok=True)
+    os.makedirs(os.path.join(scene.model_path, 'trajectory/back'), exist_ok=True)
 
     with torch.no_grad():
-        viewpoint_cam = scene.getTestCameras()[0]
-        P_sensor, P_view_insidelens_direction = generate_control_pts(viewpoint_cam, control_point_sample_scale, flow_scale)
-        P_view_outsidelens_direction = lens_net.forward(P_view_insidelens_direction, sensor_to_frustum=apply2gt)
-        camera_directions_w_lens = homogenize(P_view_outsidelens_direction)
-        control_points = camera_directions_w_lens.reshape((P_sensor.shape[0], P_sensor.shape[1], 3))[:, :, :2]
-        projection_matrix = viewpoint_cam.projection_matrix
-        flow = control_points @ projection_matrix[:2, :2]
-        flow = nn.functional.interpolate(flow.permute(2, 0, 1).unsqueeze(0), size=(int(viewpoint_cam.fish_gt_image_resolution[1]*flow_scale[0]), int(viewpoint_cam.fish_gt_image_resolution[2]*flow_scale[1])), mode='bilinear', align_corners=False).permute(0, 2, 3, 1).squeeze(0)
+        viewpoint = scene.getTestCameras()[0]
 
         with open(os.path.join(scene.model_path, 'images.txt'), 'r') as f:
             lines = f.readlines()
@@ -348,56 +544,41 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
             quaternion_tensor = torch.tensor([qw, qx, qy, qz], dtype=torch.float32)
             R = quaternion_to_rotation_matrix(quaternion_tensor).t().cpu().numpy()
             T = torch.tensor([tx, ty, tz]).cpu().numpy()
-            viewpoint_cam.reset_extrinsic(R, T)
+            viewpoint.reset_extrinsic(R, T)
 
-            if count == 0:
-                # for garden
-                viewpoint_cam.reset_intrinsic(
-                    #viewpoint_cam.FoVx,
-                    #viewpoint_cam.FoVy,
-                    focal2fov(viewpoint_cam.focal_x, 0.9 * viewpoint_cam.image_width),
-                    focal2fov(viewpoint_cam.focal_y, 0.9 * viewpoint_cam.image_height),
-                    viewpoint_cam.focal_x,
-                    viewpoint_cam.focal_y,
-                    int(0.6 * viewpoint_cam.image_width),
-                    int(0.6 * viewpoint_cam.image_height)
-                )
-                # for room
-                #viewpoint_cam.reset_intrinsic(
-                #    #viewpoint_cam.FoVx,
-                #    #viewpoint_cam.FoVy,
-                #    focal2fov(viewpoint_cam.focal_x, 0.9 * viewpoint_cam.image_width),
-                #    focal2fov(viewpoint_cam.focal_y, 0.9 * viewpoint_cam.image_height),
-                #    viewpoint_cam.focal_x,
-                #    viewpoint_cam.focal_y,
-                #    int(1. * viewpoint_cam.image_width),
-                #    int(1. * viewpoint_cam.image_height)
-                #)
-            render_pkg = render(viewpoint_cam, gaussians, pipe, background, mlp_color, shift_factors, iteration=first_iter, hybrid=hybrid, global_alignment=scene.getGlobalAlignment())
-            image, viewspace_point_tensor, visibility_filter, radii = render_pkg["render"], render_pkg["viewspace_points"], render_pkg["visibility_filter"], render_pkg["radii"]
+            print(line)
+            mask_fov90 = torch.zeros((1, viewpoint.image_height, viewpoint.image_width), dtype=torch.float32).cuda()
+            mask_fov90[:, viewpoint.image_height//2 - int(viewpoint.focal_y) - 1:viewpoint.image_height//2 + int(viewpoint.focal_y) + 1, viewpoint.image_width//2 - int(viewpoint.focal_x) - 1:viewpoint.image_width//2 + int(viewpoint.focal_x) + 1] = 1
+            img_list, img_perspective_list = render_cubemap(viewpoint, lens_net, mask_fov90, 0., 0., scene.gaussians, pipe, background, mlp_color, shift_factors, 0, False, scene, validation=True)
+            img_fov90_list = [img[:, viewpoint.image_height//2 - int(viewpoint.focal_y) - 1:viewpoint.image_height//2 + int(viewpoint.focal_y) + 1, viewpoint.image_width//2 - int(viewpoint.focal_x) - 1:viewpoint.image_width//2 + int(viewpoint.focal_x) + 1] for img in img_perspective_list]
 
-            torchvision.utils.save_image(image, os.path.join(scene.model_path, f'trajectory/perspective_{count}.png'))
-            #torchvision.utils.save_image(viewpoint_cam.fish_gt_image, os.path.join(scene.model_path, f'trajectory/gt_{viewpoint_cam.image_name}.png'))
+            torchvision.utils.save_image(img_fov90_list[0], os.path.join(scene.model_path, f'trajectory/forward/perspective_{count}.png'))
+            torchvision.utils.save_image(img_fov90_list[1], os.path.join(scene.model_path, f'trajectory/up/perspective_{count}.png'))
+            torchvision.utils.save_image(img_fov90_list[2], os.path.join(scene.model_path, f'trajectory/down/perspective_{count}.png'))
+            torchvision.utils.save_image(img_fov90_list[3], os.path.join(scene.model_path, f'trajectory/left/perspective_{count}.png'))
+            torchvision.utils.save_image(img_fov90_list[4], os.path.join(scene.model_path, f'trajectory/right/perspective_{count}.png'))
+            torchvision.utils.save_image(img_fov90_list[5], os.path.join(scene.model_path, f'trajectory/back/perspective_{count}.png'))
+            torchvision.utils.save_image(img_list[0], os.path.join(scene.model_path, f'trajectory/forward/fish_{count}.png'))
+            torchvision.utils.save_image(img_list[1], os.path.join(scene.model_path, f'trajectory/up/fish_{count}.png'))
+            torchvision.utils.save_image(img_list[2], os.path.join(scene.model_path, f'trajectory/down/fish_{count}.png'))
+            torchvision.utils.save_image(img_list[3], os.path.join(scene.model_path, f'trajectory/left/fish_{count}.png'))
+            torchvision.utils.save_image(img_list[4], os.path.join(scene.model_path, f'trajectory/right/fish_{count}.png'))
 
-            image = F.grid_sample(
-                image.unsqueeze(0),
-                flow.unsqueeze(0),
-                mode="bilinear",
-                padding_mode="zeros",
-                align_corners=True,
-            )
-            image = center_crop(image, viewpoint_cam.fish_gt_image_resolution[1], viewpoint_cam.fish_gt_image_resolution[2]).squeeze(0)
-            mask = (~((image[0]==0.0000) & (image[1]==0.0000)).unsqueeze(0)).float()
-            torchvision.utils.save_image(image*mask, os.path.join(scene.model_path, f'trajectory/fisheye_{count}.png'))
-
-                #rays_forward = generate_pts_up_down_left_right(viewpoint_cam, shift_width=0, shift_height=0)
-                #rays_residual = generate_pts_up_down_left_right(viewpoint_cam, shift_width=0, shift_height=0, sample_rate=8)
-                #img_distorted, img_perspective, residual = apply_flow_up_down_left_right(viewpoint_cam, lens_net, rays_forward, rays_residual, image, types="forward", is_fisheye=True, iteration=0)
-                #torchvision.utils.save_image(img_distorted, os.path.join(scene.model_path, f'trajectory/fisheye_{count}.png'))
+            final_image = torch.zeros_like(img_list[0])
+            intensity_final = final_image.sum(dim=0, keepdim=True)  # Track the current intensities of the final image
+            for img in img_list:
+                intensity_img = img.sum(dim=0, keepdim=True)  # Calculate the intensity for the current image
+                mask = intensity_img > intensity_final  # Find pixels where the new image has a larger intensity
+                final_image = torch.where(mask, img, final_image)  # Update final image where intensity is larger
+                intensity_final = torch.where(mask, intensity_img, intensity_final)  # Update intensity tracker
+            torchvision.utils.save_image(final_image, os.path.join(scene.model_path, f'trajectory/img_final_{count}.png'))
+            torchvision.utils.save_image(intensity_final, os.path.join(scene.model_path, f'trajectory/intensity_final_{count}.png'))
+            for i in range(len(img_fov90_list)):
+                img_fov90_list[i] = (img_fov90_list[i] * 255).cpu().numpy().astype(np.uint8)
+            pano = cubemap_to_panorama(scene.model_path, img_fov90_list, count)[img_fov90_list[5].shape[-1] : img_fov90_list[5].shape[-1]*3, :, :]
+            cv2.imwrite(os.path.join(scene.model_path, f'trajectory/pano{count}.png'), pano)
+            import pdb;pdb.set_trace()
             count += 1
-            #if count == 20:
-            #    import pdb;pdb.set_trace()
-
 
 if __name__ == "__main__":
     # Set up command line argument parser

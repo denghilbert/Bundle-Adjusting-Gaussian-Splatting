@@ -112,6 +112,7 @@ class Camera(nn.Module):
         self.full_proj_transform = (self.world_view_transform.unsqueeze(0).bmm(self.projection_matrix.unsqueeze(0))).squeeze(0)
         self.camera_center = self.world_view_transform.inverse()[3, :3]
         self.cubemap = cubemap
+        self.is_sub_camera = is_sub_camera
 
         if outside_rasterizer and not is_sub_camera and not cubemap and not table1:
             # eyeful and fisheyenerf
@@ -201,8 +202,8 @@ class Camera(nn.Module):
 
 
 
-    def reset_intrinsic(self, FoVx, FoVy, focal_x, focal_y, width, height, is_sub_camera=False):
-        if not is_sub_camera and self.cubemap:
+    def reset_intrinsic(self, FoVx, FoVy, focal_x, focal_y, width, height):
+        if not self.is_sub_camera and self.cubemap:
             # get 270 fisheye
             #self.sub_cameras[0].reset_intrinsic(focal2fov(focal_x, width*1.6), FoVy, focal_x, focal_y, int(1.6*width), height, is_sub_camera=True)
             #self.sub_cameras[1].reset_intrinsic(focal2fov(focal_x, width*1.6), FoVy, focal_x, focal_y, int(1.6*width), height, is_sub_camera=True)
@@ -211,11 +212,11 @@ class Camera(nn.Module):
             # training should be fine...
             # the size of render images will change different from previous one for 270 fisheye
             # eyeful
-            self.sub_cameras[0].reset_intrinsic(FoVx, FoVy, focal_x, focal_y, width, height, is_sub_camera=True)
-            self.sub_cameras[1].reset_intrinsic(FoVx, FoVy, focal_x, focal_y, width, height, is_sub_camera=True)
-            self.sub_cameras[2].reset_intrinsic(FoVx, FoVy, focal_x, focal_y, width, height, is_sub_camera=True)
-            self.sub_cameras[3].reset_intrinsic(FoVx, FoVy, focal_x, focal_y, width, height, is_sub_camera=True)
-            self.sub_cameras[4].reset_intrinsic(FoVx, FoVy, focal_x, focal_y, width, height, is_sub_camera=True)
+            self.sub_cameras[0].reset_intrinsic(FoVx, FoVy, focal_x, focal_y, width, height)
+            self.sub_cameras[1].reset_intrinsic(FoVx, FoVy, focal_x, focal_y, width, height)
+            self.sub_cameras[2].reset_intrinsic(FoVx, FoVy, focal_x, focal_y, width, height)
+            self.sub_cameras[3].reset_intrinsic(FoVx, FoVy, focal_x, focal_y, width, height)
+            self.sub_cameras[4].reset_intrinsic(FoVx, FoVy, focal_x, focal_y, width, height)
 
         self.FoVx = FoVx
         self.FoVy = FoVy
@@ -254,6 +255,20 @@ class Camera(nn.Module):
         self.projection_matrix = getProjectionMatrix(znear=self.znear, zfar=self.zfar, fovX=self.learnable_fovx, fovY=self.learnable_fovy).transpose(0,1).cuda()
         self.full_proj_transform = (self.world_view_transform.unsqueeze(0).bmm(self.projection_matrix.unsqueeze(0))).squeeze(0)
         self.camera_center = self.world_view_transform.inverse()[3, :3]
+
+        if not self.is_sub_camera and self.cubemap:
+            for i in range(5):
+                self.sub_cameras[i] = Camera(self.colmap_id, self.R, self.T, self.intrinsic_matrix_numpy, self.FoVx, self.FoVy, self.focal_x, self.focal_y, self.original_image_pil, None, self.fish_gt_image_pil, self.image_name, self.uid, depth=None, ori_path=self.ori_path, outside_rasterizer=self.outside_rasterizer, test_outside_rasterizer=self.test_outside_rasterizer, orig_fov_w=self.orig_fov_w, orig_fov_h=self.orig_fov_h, original_image_resolution=self.original_image_resolution, fish_gt_image_resolution=self.fish_gt_image_resolution, flow_scale=self.flow_scale, apply2gt=self.apply2gt, render_resolution=self.render_resolution, is_sub_camera=True)
+            R_new, T_new = rotate_camera(self.sub_cameras[0], 90, 0, 0)
+            self.sub_cameras[0].reset_extrinsic(R_new.T, T_new)
+            R_new, T_new = rotate_camera(self.sub_cameras[1], -90, 0, 0)
+            self.sub_cameras[1].reset_extrinsic(R_new.T, T_new)
+            R_new, T_new = rotate_camera(self.sub_cameras[2], 0, -90, 0)
+            self.sub_cameras[2].reset_extrinsic(R_new.T, T_new)
+            R_new, T_new = rotate_camera(self.sub_cameras[3], 0, 90, 0)
+            self.sub_cameras[3].reset_extrinsic(R_new.T, T_new)
+            R_new, T_new = rotate_camera(self.sub_cameras[4], 0, 180, 0)
+            self.sub_cameras[4].reset_extrinsic(R_new.T, T_new)
 
 
     def rotate_at_current_location(self, R, cam_center):

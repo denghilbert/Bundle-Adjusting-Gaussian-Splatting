@@ -374,9 +374,9 @@ def readCamerasFromTransforms(path, transformsfile, white_background, extension=
         fovx = contents["camera_angle_x"]
 
         frames = contents["frames"]
-        #if len(frames) > 500:
-        #    random.shuffle(frames)
-        #    frames = frames[:300]
+
+        #random.shuffle(frames)
+        #frames = frames[:2]
 
         for idx, frame in enumerate(frames):
             if 'jpg' in frame["file_path"] or 'png' in frame["file_path"]:
