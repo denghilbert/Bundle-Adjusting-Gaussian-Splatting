@@ -346,6 +346,10 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
     shift_optimizer = torch.optim.Adam([shift_factors], lr=1e-5)
     shift_scheduler = torch.optim.lr_scheduler.MultiStepLR(shift_optimizer, milestones=[30000], gamma=0.1)
 
+    #shift_outside_factors = nn.Parameter(torch.tensor([0.002, 0.002, 0.002], requires_grad=True, device='cuda'))
+    shift_outside_factors = nn.Parameter(torch.tensor([0.002, 0.002, 0.002], requires_grad=True, device='cuda').repeat(1000000, 1))
+    shift_outside_optimizer = torch.optim.Adam([shift_outside_factors], lr=1e-5)
+
     scene = Scene(dataset, gaussians, random_init=random_init, r_t_noise=r_t_noise, r_t_lr=r_t_lr, global_alignment_lr=global_alignment_lr, outside_rasterizer=outside_rasterizer, flow_scale=flow_scale, render_resolution=render_resolution, apply2gt=apply2gt, vis_pose=args.vis_pose, cubemap=cubemap, table1=table1)
 
     #pose_GT, pose_aligned = scene.loadAlignCameras(if_vis_train=True, path=scene.model_path)
@@ -435,6 +439,22 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
             viewpoint_stack = scene.getTrainCameras().copy()
         viewpoint_cam = viewpoint_stack.pop(randint(0, len(viewpoint_stack)-1))
 
+        if opt_shift:
+            c2w = viewpoint_cam.get_c2w()
+            R = c2w[:3, :3]
+            cam_pos = viewpoint_cam.get_camera_center()
+            look_at_direction_camera = torch.tensor([0, 0, -1.], device=cam_pos.device)
+            look_at_direction_world = R @ look_at_direction_camera
+            direction_vectors = gaussians._xyz - cam_pos
+            look_at_direction = -look_at_direction_world
+            direction_vectors_normalized = direction_vectors / direction_vectors.norm(dim=1, keepdim=True)
+            look_at_direction_normalized = look_at_direction / look_at_direction.norm()
+            dot_products = torch.sum(direction_vectors_normalized * look_at_direction_normalized, dim=1)
+            angles = torch.acos(dot_products)
+            #shift = shift_outside_factors[0] * angles**3 + shift_outside_factors[1] * angles**5 + shift_outside_factors[2] * angles**7
+            shift = shift_outside_factors[:, 0] * angles**3 + shift_outside_factors[:, 1] * angles**5 + shift_outside_factors[:, 2] * angles**7
+            #gaussians._xyz = gaussians._xyz + shift.unsqueeze(1) * look_at_direction_world.detach()
+
         # Render
         if (iteration - 1) == debug_from:
             pipe.debug = True
@@ -462,6 +482,31 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
         else:
             render_pkg = render(viewpoint_cam, gaussians, pipe, background, mlp_color, shift_factors, iteration=iteration, hybrid=hybrid, global_alignment=scene.getGlobalAlignment())
             image, viewspace_point_tensor, visibility_filter, radii = render_pkg["render"], render_pkg["viewspace_points"], render_pkg["visibility_filter"], render_pkg["radii"]
+
+            #P_sensor, P_view_insidelens_direction = generate_control_pts(viewpoint_cam, control_point_sample_scale, flow_scale)
+            #image, mask, flow_apply2_gt_or_img = apply_distortion(lens_net, P_view_insidelens_direction, P_sensor, viewpoint_cam, image, apply2gt=False, flow_scale=flow_scale)
+            #torchvision.utils.save_image(image, os.path.join(scene.model_path, f'before.png'))
+
+            #c2w = viewpoint_cam.get_c2w()
+            #R = c2w[:3, :3]
+            #cam_pos = viewpoint_cam.get_camera_center()
+            #look_at_direction_camera = torch.tensor([0, 0, -1.], device=cam_pos.device)
+            #look_at_direction_world = R @ look_at_direction_camera
+            #direction_vectors = gaussians._xyz - cam_pos
+            #look_at_direction = -look_at_direction_world
+            #direction_vectors_normalized = direction_vectors / direction_vectors.norm(dim=1, keepdim=True)
+            #look_at_direction_normalized = look_at_direction / look_at_direction.norm()
+            #dot_products = torch.sum(direction_vectors_normalized * look_at_direction_normalized, dim=1)
+            #angles = torch.acos(dot_products)
+            #shift = shift_outside_factors[0] * angles**3 + shift_outside_factors[1] * angles**5 + shift_outside_factors[2] * angles**7
+            #gaussians._xyz = gaussians._xyz + look_at_direction_world.detach().unsqueeze(0).expand(shift.shape[0], -1) * shift.unsqueeze(1)
+
+            #render_pkg = render(viewpoint_cam, gaussians, pipe, background, mlp_color, shift_factors, iteration=iteration, hybrid=hybrid, global_alignment=scene.getGlobalAlignment())
+            #image, viewspace_point_tensor, visibility_filter, radii = render_pkg["render"], render_pkg["viewspace_points"], render_pkg["visibility_filter"], render_pkg["radii"]
+            #P_sensor, P_view_insidelens_direction = generate_control_pts(viewpoint_cam, control_point_sample_scale, flow_scale)
+            #image, mask, flow_apply2_gt_or_img = apply_distortion(lens_net, P_view_insidelens_direction, P_sensor, viewpoint_cam, image, apply2gt=False, flow_scale=flow_scale)
+            #torchvision.utils.save_image(image, os.path.join(scene.model_path, f'after.png'))
+            #import pdb;pdb.set_trace()
 
         flow_apply2_gt_or_img = None
         if outside_rasterizer and not cubemap:
@@ -554,7 +599,18 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
         if mcmc:
             loss = loss + args.opacity_reg * torch.abs(gaussians.get_opacity).mean()
             loss = loss + args.scale_reg * torch.abs(gaussians.get_scaling).mean()
+
+        #gaussians._xyz.retain_grad()
         loss.backward(retain_graph=True)
+        #if use_wandb:
+        #    scalars = {
+        #        f"gradient/3d_gradient": gaussians._xyz.grad.mean(),
+        #        f"gradient/3d_gradient_max": gaussians._xyz.grad.max(),
+        #        f"gradient/3d_gradient_min": gaussians._xyz.grad.min(),
+        #        f"gradient/nan": torch.isnan(gaussians._xyz.grad).sum(),
+        #        f"gradient/inf": torch.isinf(gaussians._xyz.grad).sum(),
+        #    }
+        #    wandb.log(scalars, step=iteration)
 
         #last_linear_layer = lens_net.i_resnet_linear.module_list[-1].residual[-1]
         #print(last_linear_layer.weight.grad)
@@ -581,7 +637,7 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
                 P_view_insidelens_direction = None
                 P_sensor = None
 
-            training_report(use_wandb, iteration, Ll1, ssim_loss, loss, l1_loss, iter_start.elapsed_time(iter_end), testing_iterations, scene, render, (pipe, background, mlp_color, shift_factors), lens_net, opt_distortion, no_distortion_mask, outside_rasterizer, flow_scale, control_point_sample_scale, flow_apply2_gt_or_img, apply2gt, cubemap, table1)
+            training_report(use_wandb, iteration, Ll1, ssim_loss, loss, l1_loss, iter_start.elapsed_time(iter_end), testing_iterations, scene, render, (pipe, background, mlp_color, shift_factors), lens_net, opt_distortion, no_distortion_mask, outside_rasterizer, flow_scale, control_point_sample_scale, flow_apply2_gt_or_img, apply2gt, cubemap, table1, opt_shift, shift_outside_factors)
 
             if (iteration in saving_iterations):
                 print("\n[ITER {}] Saving Gaussians".format(iteration))
@@ -620,7 +676,7 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
                         if iteration % opt.opacity_reset_interval == 0 or (dataset.white_background and iteration == opt.densify_from_iter):
                             gaussians.reset_opacity()
 
-                        if use_wandb and iteration % 10 == 0:
+                        if use_wandb and iteration % 1 == 0:
                             scalars = {
                                 f"gradient/2d_gradient": viewspace_point_tensor.grad.mean(),
                             }
@@ -645,9 +701,6 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
 
                         if iteration % opt.opacity_reset_interval == 0 or (dataset.white_background and iteration == opt.densify_from_iter):
                             gaussians.reset_opacity()
-
-
-
 
             # Optimizer step
             if iteration < opt.iterations:
@@ -687,10 +740,17 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
                         wandb.log({"shift/0": shift_factors[0].item()}, step=iteration)
                         wandb.log({"shift/1": shift_factors[1].item()}, step=iteration)
                         wandb.log({"shift/2": shift_factors[2].item()}, step=iteration)
-
-                    shift_optimizer.step()
-                    shift_optimizer.zero_grad(set_to_none=True)
-                    shift_scheduler.step()
+                        #wandb.log({"shift_outside/0": shift_outside_factors[0].item()}, step=iteration)
+                        #wandb.log({"shift_outside/1": shift_outside_factors[1].item()}, step=iteration)
+                        #wandb.log({"shift_outside/2": shift_outside_factors[2].item()}, step=iteration)
+                        wandb.log({"shift_outside/0": shift_outside_factors[0, 0].item()}, step=iteration)
+                        wandb.log({"shift_outside/1": shift_outside_factors[0, 1].item()}, step=iteration)
+                        wandb.log({"shift_outside/2": shift_outside_factors[0, 2].item()}, step=iteration)
+                    #shift_optimizer.step()
+                    #shift_optimizer.zero_grad(set_to_none=True)
+                    #shift_scheduler.step()
+                    shift_outside_optimizer.step()
+                    shift_outside_optimizer.zero_grad(set_to_none=True)
                 if opt_cam:
                     scene.optimizer_rotation.step()
                     scene.optimizer_translation.step()
@@ -715,7 +775,7 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
                     torch.save(scene.unnoisy_train_cameras, os.path.join(scene.model_path, 'gt_cams.pt'))
                     torch.save(scene.train_cameras, os.path.join(scene.model_path, f'cams_train{iteration}.pt'))
 
-def training_report(use_wandb, iteration, Ll1, ssim_loss, loss, l1_loss, elapsed, testing_iterations, scene : Scene, renderFunc, renderArgs, lens_net, opt_distortion, no_distortion_mask, outside_rasterizer, flow_scale, control_point_sample_scale, flow_apply2_gt_or_img, apply2gt, cubemap, table1):
+def training_report(use_wandb, iteration, Ll1, ssim_loss, loss, l1_loss, elapsed, testing_iterations, scene : Scene, renderFunc, renderArgs, lens_net, opt_distortion, no_distortion_mask, outside_rasterizer, flow_scale, control_point_sample_scale, flow_apply2_gt_or_img, apply2gt, cubemap, table1, opt_shift, shift_outside_factors):
     if use_wandb and iteration % 10 == 0:
         scalars = {
             f"loss/l1_loss": Ll1,
@@ -772,6 +832,21 @@ def training_report(use_wandb, iteration, Ll1, ssim_loss, loss, l1_loss, elapsed
                         #        #int(flow_scale[0] * viewpoint.image_width),
                         #        #int(flow_scale[1] * viewpoint.image_height)
                         #    )
+                        if opt_shift:
+                            c2w = viewpoint.get_c2w()
+                            R = c2w[:3, :3]
+                            cam_pos = viewpoint.get_camera_center()
+                            look_at_direction_camera = torch.tensor([0, 0, -1.], device=cam_pos.device)
+                            look_at_direction_world = R @ look_at_direction_camera
+                            direction_vectors = scene.gaussians._xyz - cam_pos
+                            look_at_direction = -look_at_direction_world
+                            direction_vectors_normalized = direction_vectors / direction_vectors.norm(dim=1, keepdim=True)
+                            look_at_direction_normalized = look_at_direction / look_at_direction.norm()
+                            dot_products = torch.sum(direction_vectors_normalized * look_at_direction_normalized, dim=1)
+                            angles = torch.acos(dot_products)
+                            #shift = shift_outside_factors[0] * angles**3 + shift_outside_factors[1] * angles**5 + shift_outside_factors[2] * angles**7
+                            shift = shift_outside_factors[:, 0] * angles**3 + shift_outside_factors[:, 1] * angles**5 + shift_outside_factors[:, 2] * angles**7
+                            scene.gaussians._xyz = scene.gaussians._xyz + shift.unsqueeze(1) * look_at_direction_world.detach()
                         if table1 and name == 'test':
                             gt_image = viewpoint.original_image.cuda()
                             torchvision.utils.save_image(gt_image, os.path.join(scene.model_path, 'training_val_{}/table1/{}_gt'.format(iteration, viewpoint.image_name) + "_" + name + ".png"))
