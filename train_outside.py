@@ -51,7 +51,7 @@ import matplotlib.pyplot as plt
 # set random seeds
 import numpy as np
 import random
-seed_value = 100  # Replace this with your desired seed value
+seed_value = 42  # Replace this with your desired seed value
 
 torch.manual_seed(seed_value)
 if torch.cuda.is_available():
@@ -320,7 +320,7 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
         exit()
     first_iter = 0
     tb_writer = prepare_output_and_logger(dataset)
-    gaussians = GaussianModel(dataset.sh_degree, dataset.asg_degree)
+    gaussians = GaussianModel(dataset.sh_degree, dataset.asg_degree, opt_shift)
     if hybrid:
         specular_mlp = SpecularModel()
         specular_mlp.train_setting(opt)
@@ -347,7 +347,7 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
     shift_scheduler = torch.optim.lr_scheduler.MultiStepLR(shift_optimizer, milestones=[30000], gamma=0.1)
 
     #shift_outside_factors = nn.Parameter(torch.tensor([0.002, 0.002, 0.002], requires_grad=True, device='cuda'))
-    shift_outside_factors = nn.Parameter(torch.tensor([0.002, 0.002, 0.002], requires_grad=True, device='cuda').repeat(1000000, 1))
+    shift_outside_factors = nn.Parameter(torch.tensor([0.00, 0.00, 0.00], requires_grad=True, device='cuda').repeat(1000000, 1))
     shift_outside_optimizer = torch.optim.Adam([shift_outside_factors], lr=1e-5)
 
     scene = Scene(dataset, gaussians, random_init=random_init, r_t_noise=r_t_noise, r_t_lr=r_t_lr, global_alignment_lr=global_alignment_lr, outside_rasterizer=outside_rasterizer, flow_scale=flow_scale, render_resolution=render_resolution, apply2gt=apply2gt, vis_pose=args.vis_pose, cubemap=cubemap, table1=table1)
@@ -453,6 +453,7 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
             angles = torch.acos(dot_products)
             #shift = shift_outside_factors[0] * angles**3 + shift_outside_factors[1] * angles**5 + shift_outside_factors[2] * angles**7
             shift = shift_outside_factors[:, 0] * angles**3 + shift_outside_factors[:, 1] * angles**5 + shift_outside_factors[:, 2] * angles**7
+            shift_3d_gaussians = shift.unsqueeze(1) * look_at_direction_world.detach()
             #gaussians._xyz = gaussians._xyz + shift.unsqueeze(1) * look_at_direction_world.detach()
 
         # Render
@@ -480,7 +481,7 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
                     wandb.log({"vector_field/status": residual.mean().item()}, step=iteration)
 
         else:
-            render_pkg = render(viewpoint_cam, gaussians, pipe, background, mlp_color, shift_factors, iteration=iteration, hybrid=hybrid, global_alignment=scene.getGlobalAlignment())
+            render_pkg = render(viewpoint_cam, gaussians, pipe, background, mlp_color, shift_factors, iteration=iteration, hybrid=hybrid, global_alignment=scene.getGlobalAlignment(), shift_3d_gaussians=shift_3d_gaussians)
             image, viewspace_point_tensor, visibility_filter, radii = render_pkg["render"], render_pkg["viewspace_points"], render_pkg["visibility_filter"], render_pkg["radii"]
 
             #P_sensor, P_view_insidelens_direction = generate_control_pts(viewpoint_cam, control_point_sample_scale, flow_scale)
@@ -543,8 +544,8 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
             ssim_loss = ssim(image, gt_image)
         elif cubemap:
             gt_image = viewpoint_cam.original_image.cuda()
-            #mask_gt_image = generate_circular_mask(gt_image.shape, min(gt_image.shape[-2:])//2).cuda()
-            mask_gt_image = generate_circular_mask(gt_image.shape, 400).cuda()
+            mask_gt_image = generate_circular_mask(gt_image.shape, min(gt_image.shape[-2:])//2).cuda()
+            #mask_gt_image = generate_circular_mask(gt_image.shape, 400).cuda()
 
             Ll1 = (
                 l1_loss(img_list[0]*mask_gt_image*img_mask_list[0], gt_image*mask_gt_image*img_mask_list[0]) +
@@ -600,8 +601,19 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
             loss = loss + args.opacity_reg * torch.abs(gaussians.get_opacity).mean()
             loss = loss + args.scale_reg * torch.abs(gaussians.get_scaling).mean()
 
-        #gaussians._xyz.retain_grad()
         loss.backward(retain_graph=True)
+        print("after loss")
+        print(gaussians._xyz.grad[898411])
+        if torch.isnan(gaussians._xyz.grad).any():
+            print(iteration)
+            nan_mask = torch.isnan(gaussians._xyz.grad)
+            nan_indices = torch.nonzero(nan_mask, as_tuple=True)
+            print(gaussians._xyz[nan_indices])
+            print(gaussians._xyz[898411])
+            import pdb;pdb.set_trace()
+
+        #if iteration == 2:
+        #    import pdb;pdb.set_trace()
         #if use_wandb:
         #    scalars = {
         #        f"gradient/3d_gradient": gaussians._xyz.grad.mean(),
@@ -735,7 +747,7 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
                 if opt_distortion:
                     optimizer_lens_net.step()
                     optimizer_lens_net.zero_grad(set_to_none=True)
-                if opt_shift:
+                if opt_shift and False:
                     if iteration % 100 == 1:
                         wandb.log({"shift/0": shift_factors[0].item()}, step=iteration)
                         wandb.log({"shift/1": shift_factors[1].item()}, step=iteration)
@@ -743,12 +755,14 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
                         #wandb.log({"shift_outside/0": shift_outside_factors[0].item()}, step=iteration)
                         #wandb.log({"shift_outside/1": shift_outside_factors[1].item()}, step=iteration)
                         #wandb.log({"shift_outside/2": shift_outside_factors[2].item()}, step=iteration)
-                        wandb.log({"shift_outside/0": shift_outside_factors[0, 0].item()}, step=iteration)
-                        wandb.log({"shift_outside/1": shift_outside_factors[0, 1].item()}, step=iteration)
-                        wandb.log({"shift_outside/2": shift_outside_factors[0, 2].item()}, step=iteration)
+                        wandb.log({"shift_outside/0": shift_outside_factors[:, 0].mean().item()}, step=iteration)
+                        wandb.log({"shift_outside/1": shift_outside_factors[:, 1].mean().item()}, step=iteration)
+                        wandb.log({"shift_outside/2": shift_outside_factors[:, 2].mean().item()}, step=iteration)
                     #shift_optimizer.step()
                     #shift_optimizer.zero_grad(set_to_none=True)
                     #shift_scheduler.step()
+                    if torch.isnan(shift_outside_factors.grad).any():
+                        shift_outside_factors.grad = torch.nan_to_num(shift_outside_factors.grad, nan=0.0)
                     shift_outside_optimizer.step()
                     shift_outside_optimizer.zero_grad(set_to_none=True)
                 if opt_cam:
@@ -918,7 +932,8 @@ def training_report(use_wandb, iteration, Ll1, ssim_loss, loss, l1_loss, elapsed
                                 intensity_final = torch.where(mask, intensity_img, intensity_final)  # Update intensity tracker
 
                             torchvision.utils.save_image(final_image, os.path.join(scene.model_path, 'training_val_{}/renderred/{}_distorted_stitch'.format(iteration, viewpoint.image_name) + "_" + name + ".png"))
-                            mask_gt_image = generate_circular_mask(viewpoint.original_image.shape, 400).cuda()
+                            mask_gt_image = generate_circular_mask(viewpoint.original_image.shape, min(viewpoint.original_image.shape[-2:])//2).cuda()
+                            #mask_gt_image = generate_circular_mask(viewpoint.original_image.shape, 400).cuda()
                             torchvision.utils.save_image(final_image*mask_gt_image, os.path.join(scene.model_path, 'training_val_{}/renderred/{}_distorted_stitch_masked'.format(iteration, viewpoint.image_name) + "_" + name + ".png"))
                             gt_image = viewpoint.original_image.cuda()
                             torchvision.utils.save_image(gt_image, os.path.join(scene.model_path, 'training_val_{}/gt/{}_perspective'.format(iteration, viewpoint.image_name) + "_" + name + ".png"))
@@ -942,8 +957,8 @@ def training_report(use_wandb, iteration, Ll1, ssim_loss, loss, l1_loss, elapsed
                             ssims.append(ssim(image, gt_image))
                             lpipss.append(lpips(image, gt_image))
                         elif cubemap:
-                            #mask_gt_image = generate_circular_mask(gt_image.shape, min(gt_image.shape[-2:])//2).cuda()
-                            mask_gt_image = generate_circular_mask(gt_image.shape, 400).cuda()
+                            mask_gt_image = generate_circular_mask(gt_image.shape, min(gt_image.shape[-2:])//2).cuda()
+                            #mask_gt_image = generate_circular_mask(gt_image.shape, 400).cuda()
                             l1_test += l1_loss(final_image*mask_gt_image, gt_image*mask_gt_image).mean().double()
                             psnr_test += psnr(final_image*mask_gt_image, gt_image*mask_gt_image).mean().double()
                             ssims.append(ssim(final_image*mask_gt_image, gt_image*mask_gt_image))

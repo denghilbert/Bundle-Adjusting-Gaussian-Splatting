@@ -27,7 +27,7 @@ def quaternion_multiply(q1, q2):
 
     return torch.stack((w, x, y, z), dim=-1)
 
-def render(viewpoint_camera, pc : GaussianModel, pipe, bg_color : torch.Tensor, mlp_color, shift_factors, hybrid=True, scaling_modifier = 1.0, override_color = None, iteration = None, global_alignment=None):
+def render(viewpoint_camera, pc : GaussianModel, pipe, bg_color : torch.Tensor, mlp_color, shift_factors, hybrid=True, scaling_modifier = 1.0, override_color = None, iteration = None, global_alignment=None, shift_3d_gaussians=None):
     """
     Render the scene.
 
@@ -66,7 +66,7 @@ def render(viewpoint_camera, pc : GaussianModel, pipe, bg_color : torch.Tensor, 
 
     rasterizer = GaussianRasterizer(raster_settings=raster_settings)
 
-    means3D = pc.get_xyz
+    means3D = pc.get_xyz + shift_3d_gaussians
     means2D = screenspace_points
     means2D_densify = screenspace_points_densify
     opacity = pc.get_opacity
