@@ -350,26 +350,45 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
             T = torch.tensor([tx, ty, tz]).cpu().numpy()
             viewpoint_cam.reset_extrinsic(R, T)
 
-            if count == 0:
-                viewpoint_cam.reset_intrinsic(focal2fov(viewpoint_cam.focal_x, 1. * viewpoint_cam.image_width), focal2fov(viewpoint_cam.focal_y, 1. * viewpoint_cam.image_height), viewpoint_cam.focal_x, viewpoint_cam.focal_y, 1.* viewpoint_cam.image_width, 1.* viewpoint_cam.image_height)
-            render_pkg = render(viewpoint_cam, gaussians, pipe, background, mlp_color, shift_factors, iteration=first_iter, hybrid=hybrid, global_alignment=scene.getGlobalAlignment())
-            image, viewspace_point_tensor, visibility_filter, radii = render_pkg["render"], render_pkg["viewspace_points"], render_pkg["visibility_filter"], render_pkg["radii"]
+            if outside_rasterizer:
+                if count == 0:
+                    viewpoint_cam.reset_intrinsic(
+                        focal2fov(viewpoint_cam.focal_x, 1.5 * viewpoint_cam.image_width),
+                        focal2fov(viewpoint_cam.focal_y, 1.5 * viewpoint_cam.image_height),
+                        viewpoint_cam.focal_x, viewpoint_cam.focal_y,
+                        1.5* viewpoint_cam.image_width,
+                        1.5* viewpoint_cam.image_height)
+                render_pkg = render(viewpoint_cam, gaussians, pipe, background, mlp_color, shift_factors, iteration=first_iter, hybrid=hybrid, global_alignment=scene.getGlobalAlignment())
+                image, viewspace_point_tensor, visibility_filter, radii = render_pkg["render"], render_pkg["viewspace_points"], render_pkg["visibility_filter"], render_pkg["radii"]
 
-            torchvision.utils.save_image(image, os.path.join(scene.model_path, f'trajectory/perspective_{count}.png'))
-            #torchvision.utils.save_image(viewpoint_cam.fish_gt_image, os.path.join(scene.model_path, f'trajectory/gt_{viewpoint_cam.image_name}.png'))
+                torchvision.utils.save_image(image, os.path.join(scene.model_path, f'trajectory/perspective_{count}.png'))
+                #torchvision.utils.save_image(viewpoint_cam.fish_gt_image, os.path.join(scene.model_path, f'trajectory/gt_{viewpoint_cam.image_name}.png'))
 
-            image = F.grid_sample(
-                image.unsqueeze(0),
-                flow.unsqueeze(0),
-                mode="bilinear",
-                padding_mode="zeros",
-                align_corners=True,
-            )
-            image = center_crop(image, viewpoint_cam.fish_gt_image_resolution[1], viewpoint_cam.fish_gt_image_resolution[2]).squeeze(0)
-            mask = (~((image[0]==0.0000) & (image[1]==0.0000)).unsqueeze(0)).float()
-            torchvision.utils.save_image(image*mask, os.path.join(scene.model_path, f'trajectory/fisheye_{count}.png'))
-            print(line)
-            count += 1
+                image = F.grid_sample(
+                    image.unsqueeze(0),
+                    flow.unsqueeze(0),
+                    mode="bilinear",
+                    padding_mode="zeros",
+                    align_corners=True,
+                )
+                image = center_crop(image, viewpoint_cam.fish_gt_image_resolution[1], viewpoint_cam.fish_gt_image_resolution[2]).squeeze(0)
+                mask = (~((image[0]==0.0000) & (image[1]==0.0000)).unsqueeze(0)).float()
+                torchvision.utils.save_image(image*mask, os.path.join(scene.model_path, f'trajectory/fisheye_{count}.png'))
+                print(line)
+                count += 1
+            else:
+                if count == 0:
+                    viewpoint_cam.reset_intrinsic(
+                        focal2fov(viewpoint_cam.focal_x, viewpoint_cam.fish_gt_image_resolution[2]),
+                        focal2fov(viewpoint_cam.focal_y, viewpoint_cam.fish_gt_image_resolution[1]),
+                        viewpoint_cam.focal_x, viewpoint_cam.focal_y,
+                        viewpoint_cam.fish_gt_image_resolution[2],
+                        viewpoint_cam.fish_gt_image_resolution[1])
+                render_pkg = render(viewpoint_cam, gaussians, pipe, background, mlp_color, shift_factors, iteration=first_iter, hybrid=hybrid, global_alignment=scene.getGlobalAlignment())
+                image, viewspace_point_tensor, visibility_filter, radii = render_pkg["render"], render_pkg["viewspace_points"], render_pkg["visibility_filter"], render_pkg["radii"]
+                torchvision.utils.save_image(image, os.path.join(scene.model_path, f'trajectory/perspective_{count}.png'))
+                print(line)
+                count += 1
 
 
 if __name__ == "__main__":

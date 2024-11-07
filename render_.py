@@ -241,7 +241,7 @@ def training_report(iteration, scene : Scene, renderFunc, renderArgs, lens_net, 
                 os.makedirs(os.path.join(scene.model_path, 'validation_{}/gt').format(name), exist_ok=True)
                 os.makedirs(os.path.join(scene.model_path, 'validation_{}/renderred').format(name), exist_ok=True)
                 for idx, viewpoint in enumerate(config['cameras']):
-                    # best qualitative number
+                    # best quantitative number
                     #viewpoint.reset_intrinsic(
                     #    viewpoint.FoVx,
                     #    viewpoint.FoVy,
@@ -252,16 +252,17 @@ def training_report(iteration, scene : Scene, renderFunc, renderArgs, lens_net, 
                     #)
                     # render for qualitative fisheyenerf
                     # you also need to set the control_point_sample_scale to a larger number
-                    if not table1:
-                        viewpoint.reset_intrinsic(
-                            viewpoint.FoVx,
-                            viewpoint.FoVy,
-                            viewpoint.focal_x,
-                            viewpoint.focal_y,
-                            1.2 * viewpoint.image_width,
-                            1.2 * viewpoint.image_height
-                        )
+                    #if not table1:
+                    #    viewpoint.reset_intrinsic(
+                    #        viewpoint.FoVx,
+                    #        viewpoint.FoVy,
+                    #        viewpoint.focal_x,
+                    #        viewpoint.focal_y,
+                    #        1.2 * viewpoint.image_width,
+                    #        1.2 * viewpoint.image_height
+                    #    )
 
+                    viewpoint.reset_intrinsic(focal2fov(viewpoint.focal_x, 2. * viewpoint.image_width), focal2fov(viewpoint.focal_y, 2. * viewpoint.image_height), viewpoint.focal_x, viewpoint.focal_y, 2.* viewpoint.image_width, 2.* viewpoint.image_height)
                     image = torch.clamp(renderFunc(viewpoint, scene.gaussians, *renderArgs, global_alignment=scene.getGlobalAlignment())["render"], 0.0, 1.0)
                     torchvision.utils.save_image(image, os.path.join(scene.model_path, 'validation_{}/renderred/{}'.format(name, viewpoint.image_name) + "_" + name + ".png"))
                     if outside_rasterizer:
@@ -297,6 +298,7 @@ def training_report(iteration, scene : Scene, renderFunc, renderArgs, lens_net, 
                     psnr_test += psnr(image, gt_image).mean().double()
                     ssims.append(ssim(image, gt_image))
                     lpipss.append(lpips(image, gt_image))
+                    import pdb;pdb.set_trace()
 
                 psnr_test /= len(config['cameras'])
                 l1_test /= len(config['cameras'])
