@@ -108,6 +108,28 @@ def generate_pts(scene, boundary_scale=4, sample_resolution=20):
 
     return P_sensor, P_view_insidelens_direction
 
+def read_colmap_coeff(dataset):
+    coeff = torch.tensor([0., 0, 0, 0]).cuda()
+    if 'fish' in dataset.source_path:
+        path = os.path.join(dataset.source_path, 'sparse/0/cameras.bin')
+    else:
+        path = os.path.join(dataset.source_path, 'fish/sparse/0/cameras.bin')
+    if os.path.exists(path):
+        cam_intrinsics = read_intrinsics_binary(os.path.join(dataset.source_path, 'fish/sparse/0/cameras.bin'))
+        for idx, key in enumerate(cam_intrinsics):
+            if 'RADIAL' in cam_intrinsics[key].model:
+                coeff = cam_intrinsics[key].params[-2:].tolist()
+            if 'FISHEYE' in cam_intrinsics[key].model:
+                coeff = cam_intrinsics[key].params[-4:].tolist()
+                break
+    elif os.path.exists(os.path.join(dataset.source_path, 'cameras.json')):
+        with open(os.path.join(dataset.source_path, 'cameras.json')) as json_file:
+            contents = json.load(json_file)
+            coeff = contents['KRT'][-1]['distortion']
+    print(f"using coeff: {coeff}")
+
+    return coeff
+
 def init_from_coeff(coeff, dataset, ref_points):
     r = torch.sqrt(torch.sum(ref_points**2, dim=-1, keepdim=True))
     inv_r = 1 / r
@@ -147,7 +169,7 @@ def init_from_coeff(coeff, dataset, ref_points):
     return ref_points
 
 def init_from_colmap(scene, dataset, optimizer_lens_net, lens_net, scheduler_lens_net, resume_training=None, iresnet_lr=1e-7):
-    P_sensor, P_view_insidelens_direction = generate_pts(scene, boundary_scale=5, sample_resolution=40)
+    P_sensor, P_view_insidelens_direction = generate_pts(scene, boundary_scale=4, sample_resolution=40)
     P_view_outsidelens_direction = P_view_insidelens_direction
     camera_directions_w_lens = homogenize(P_view_outsidelens_direction)
     ref_points = camera_directions_w_lens.reshape((P_sensor.shape[0], P_sensor.shape[1], 3))[:, :, :2]
@@ -173,14 +195,14 @@ def init_from_colmap(scene, dataset, optimizer_lens_net, lens_net, scheduler_len
     combine = torch.cat((ref_points, ref_points1), dim=0)
     plot_points(combine, os.path.join(scene.model_path, f"ref1_2.png"))
 
-    P_sensor0, P_view_insidelens_direction0 = generate_pts(scene, boundary_scale=5, sample_resolution=40)
+    P_sensor0, P_view_insidelens_direction0 = generate_pts(scene, boundary_scale=4, sample_resolution=40)
     P_sensor1, P_view_insidelens_direction1 = generate_pts(scene, boundary_scale=1.5, sample_resolution=40)
     P_sensor =torch.cat((P_sensor0, P_sensor1), dim=0)
     P_view_insidelens_direction =torch.cat((P_view_insidelens_direction0, P_view_insidelens_direction1), dim=0)
 
     if resume_training == None:
-        progress_bar_ires = tqdm(range(0, 10000), desc="Init Iresnet")
-        for i in range(10000):
+        progress_bar_ires = tqdm(range(0, 1), desc="Init Iresnet")
+        for i in range(1):
             P_view_outsidelens_direction = lens_net.forward(P_view_insidelens_direction, sensor_to_frustum=True)
             control_points = homogenize(P_view_outsidelens_direction)
             inf_mask = torch.isinf(control_points)
@@ -197,7 +219,7 @@ def init_from_colmap(scene, dataset, optimizer_lens_net, lens_net, scheduler_len
 
             if i % 2000 == 0:
                 control_points_np = control_points.cpu().detach().numpy()
-                ref_points_np = ref_points.reshape(-1, 2).cpu().detach().numpy()
+                #ref_points_np = ref_points.reshape(-1, 2).cpu().detach().numpy()
                 combine_np = combine.reshape(-1, 2).cpu().detach().numpy()
                 plt.figure(figsize=(10, 6))
                 plt.scatter(control_points_np[:, 0], control_points_np[:, 1], color='blue')
@@ -224,6 +246,7 @@ def apply_distortion(lens_net, P_view_insidelens_direction, P_sensor, viewpoint_
 
     if apply2gt:
         flow = nn.functional.interpolate(flow.permute(2, 0, 1).unsqueeze(0), size=(int(viewpoint_cam.image_height), int(viewpoint_cam.image_width)), mode='bilinear', align_corners=False).permute(0, 2, 3, 1).squeeze(0)
+        import pdb;pdb.set_trace()
         gt_image = F.grid_sample(
             viewpoint_cam.fish_gt_image.cuda().unsqueeze(0),
             flow.unsqueeze(0),

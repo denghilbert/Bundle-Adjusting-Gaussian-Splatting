@@ -44,15 +44,53 @@ def generate_pts_up_down_left_right(viewpoint_cam, shift_width=0, shift_height=0
     #print(K @ P_view_insidelens_direction_hom[-1:].T)
     return P_view_insidelens_direction
 
+def interpolate_with_control(control_r, control_theta, r):
+    """
+    Interpolates control_theta values at specified r locations using linear interpolation.
 
-def apply_flow_up_down_left_right(viewpoint_cam, lens_net, rays, rays_residual, img, types="forward", is_fisheye=False, iteration=None):
+    Parameters:
+    - control_r (torch.Tensor): 1D tensor of reference points for interpolation.
+    - control_theta (torch.Tensor): Function values at control_r points.
+    - r (torch.Tensor): Target points at which to interpolate control_theta.
+
+    Returns:
+    - torch.Tensor: Interpolated values at each point in r, with the same shape as r.
+    """
+    # Flatten control_r for easy indexing
+    control_r_flat = control_r.squeeze()
+
+    # Find indices of the two nearest control_r points for each value in r
+    indices = torch.searchsorted(control_r_flat, r.squeeze(), right=True)
+    indices = torch.clamp(indices, 1, len(control_r_flat) - 1)
+
+    # Get the lower and upper neighbors for each element in r
+    low_indices = indices - 1
+    high_indices = indices
+
+    # Fetch the corresponding values from control_r and control_theta
+    r_low = control_r_flat[low_indices]
+    r_high = control_r_flat[high_indices]
+    theta_low = control_theta[low_indices]
+    theta_high = control_theta[high_indices]
+
+    # Calculate weights and perform linear interpolation
+    weights = (r.squeeze() - r_low) / (r_high - r_low)
+    interpolated_theta = (1 - weights).unsqueeze(1) * theta_low + weights.unsqueeze(1) * theta_high
+
+    # Ensure output matches the shape of r
+    return interpolated_theta.view_as(r)
+
+def apply_flow_up_down_left_right(viewpoint_cam, rays, rays_residual, img, types="forward", is_fisheye=False, iteration=None, control_r=None, control_theta=None):
     width = viewpoint_cam.image_width
     height = viewpoint_cam.image_height
     K = viewpoint_cam.get_K
     r = torch.sqrt(torch.sum(rays**2, dim=-1, keepdim=True))
     if is_fisheye:
+        r[r > 1.392] = 1.392
+        theta = torch.tan(r) + interpolate_with_control(control_r, control_theta, r)
+        #theta = torch.tan(r)
         inv_r = 1 / (r + 1e-5)
-        theta = torch.tan(r)
+
         scale = theta * inv_r
         #scale[scale < 0] = 0 # including scale < 0 can extend to cameras more than 180 degree
         #scale[scale > 10] = 0
@@ -60,14 +98,14 @@ def apply_flow_up_down_left_right(viewpoint_cam, lens_net, rays, rays_residual, 
     else:
         rays_dis = rays
 
-    #residual = torch.tensor([0., 0.])
-    residual = (lens_net.forward(rays_residual, sensor_to_frustum=True) - rays_residual).reshape(height//8, width//8, 2).permute(2, 0, 1).unsqueeze(0)
+    residual = torch.zeros(1, 2, 128, 85)
+    #residual = (lens_net.forward(rays_residual, sensor_to_frustum=True) - rays_residual).reshape(height//8, width//8, 2).permute(2, 0, 1).unsqueeze(0)
 
-    if torch.isnan(residual).any():
-        import pdb;pdb.set_trace()
-    upsampled_residual = F.interpolate(residual, size=(height, width), mode='bilinear', align_corners=False).squeeze(0).permute(1, 2, 0).reshape(-1, 2)
-    rays_dis_hom = homogenize(rays_dis + upsampled_residual)
-    #rays_dis_hom = homogenize(rays_dis)
+    #if torch.isnan(residual).any():
+    #    import pdb;pdb.set_trace()
+    #upsampled_residual = F.interpolate(residual, size=(height, width), mode='bilinear', align_corners=False).squeeze(0).permute(1, 2, 0).reshape(-1, 2)
+    #rays_dis_hom = homogenize(rays_dis + upsampled_residual)
+    rays_dis_hom = homogenize(rays_dis)
 
     #xy_points = rays[:, :2].cpu().numpy()
     #plt.figure(figsize=(10, 10))
@@ -155,7 +193,7 @@ def apply_flow_up_down_left_right(viewpoint_cam, lens_net, rays, rays_residual, 
     #import pdb;pdb.set_trace()
 
     if types == 'forward':
-        return distorted_img, img, residual
+        return distorted_img, img, residual, control_theta
     return distorted_img, img
 
 

@@ -6,11 +6,11 @@ from torch import nn
 
 
 class iResNet(nn.Module):
-    def __init__(self):
+    def __init__(self, input_num=2):
         super().__init__()
         self.batch_size = 16
         self.tol = 1e-6
-        self.inp_size_linear = (2,)
+        self.inp_size_linear = (input_num,)
 
         torch.manual_seed(0)
         nodes = [Ff.graph_inn.InputNode(*self.inp_size_linear, name="input")]
@@ -48,6 +48,8 @@ class iResNet(nn.Module):
 
         y = self.i_resnet_linear(x, jac=False)[0]
         x_hat = self.i_resnet_linear(y, rev=True, jac=False)[0]
+        print(x)
+        print(x_hat)
 
         print("Check that inverse is close to input")
         assert torch.allclose(x, x_hat, atol=self.tol)

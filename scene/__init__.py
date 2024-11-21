@@ -101,11 +101,24 @@ class Scene:
             if scene_info.train_cameras:
                 camlist.extend(scene_info.train_cameras)
             for id, cam in enumerate(camlist):
+                R = torch.from_numpy(cam.R)
+                T = torch.from_numpy(cam.T).view(-1, 1)  # Reshape T to be a column vector
+                Rt = torch.cat((R, T), dim=1)  # Pass both tensors as a tuple
+                Rt_extended = torch.cat((Rt, torch.tensor([[0, 0, 0, 1]])), dim=0).float()
+                M = torch.tensor([[ 0.2401,  0.1013, -0.1561,  0.1582],
+                  [-0.1856,  0.1468, -0.1903, -0.2432],
+                  [ 0.0119,  0.2459,  0.1779, -0.3669],
+                  [ 0.0000,  0.0000,  0.0000,  1.0000]]).inverse()
+                Rt_transformed = torch.matmul(M, Rt_extended)
+                new_R = Rt_transformed[:3, :3].numpy()
+                new_T = Rt_transformed[:3, -1].numpy()
+                #cam = cam._replace(R=new_R)
+                #cam = cam._replace(T=new_T)
                 json_cams.append(camera_to_JSON(id, cam))
             with open(os.path.join(self.model_path, "cameras.json"), 'w') as file:
                 json.dump(json_cams, file)
 
-        if shuffle:
+        if shuffle and False:
             random.shuffle(scene_info.train_cameras)  # Multi-res consistent random shuffling
             random.shuffle(scene_info.test_cameras)  # Multi-res consistent random shuffling
         if len(scene_info.test_cameras) == 0:

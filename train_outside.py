@@ -26,6 +26,7 @@ from tqdm import tqdm
 from utils.image_utils import psnr
 from utils.loss_utils import ssim
 from utils.lpipsPyTorch import lpips
+from scipy.ndimage import zoom
 from utils.graphics_utils import fov2focal, focal2fov, getProjectionMatrix, cubemap_to_perspective
 from utils.visualization import wandb_image
 from utils.util_vis import vis_cameras
@@ -41,7 +42,7 @@ import time
 from io import BytesIO
 from torch import nn
 import torch.nn.functional as F
-from utils.util_distortion import homogenize, dehomogenize, colorize, plot_points, center_crop, init_from_colmap, apply_distortion, generate_control_pts
+from utils.util_distortion import homogenize, dehomogenize, colorize, plot_points, center_crop, init_from_colmap, apply_distortion, generate_control_pts, read_colmap_coeff
 from utils.cubemap_utils import apply_flow_up_down_left_right, generate_pts_up_down_left_right, mask_half
 import copy
 from scene.cameras import Camera
@@ -217,7 +218,22 @@ def generate_circular_mask(image_shape: torch.Size, radius: int) -> torch.Tensor
     return mask
 
 
-def render_cubemap(viewpoint_cam, lens_net, mask_fov90, shift_width, shift_height, gaussians, pipe, background, mlp_color, shift_factors, iteration, hybrid, scene, validation=False):
+def render_cubemap(viewpoint_cam, cubemap_net, mask_fov90, shift_width, shift_height, gaussians, pipe, background, mlp_color, shift_factors, iteration, hybrid, scene, validation=False, vis_cubemap_net=False):
+    control_r = torch.linspace(0, 1.392, 10000).unsqueeze(1).cuda()
+    control_theta = cubemap_net.forward(control_r, sensor_to_frustum=True)
+    if vis_cubemap_net:
+        control_r_cpu = control_r.squeeze(1).detach().cpu().numpy()
+        control_theta_cpu = control_theta.squeeze(1).detach().cpu().numpy()
+        plt.figure()
+        plt.plot(control_r_cpu, control_theta_cpu)
+        plt.xlabel("control_r")
+        plt.ylabel("control_theta")
+        plt.title("Control R vs. Control Theta")
+        visualize = plt.gcf()  # Get the current figure as `visualize`
+        wandb.log({f"cubemap_net/function": wandb.Image(visualize)})
+        plt.close()
+        wandb.log({"cubemap_net/status": control_theta.mean().item()})
+
     img_list, viewspace_point_tensor_list, visibility_filter_list, radii_list = [], [], [], []
     if validation:
         img_perspective_list = []
@@ -226,7 +242,7 @@ def render_cubemap(viewpoint_cam, lens_net, mask_fov90, shift_width, shift_heigh
     rays_residual = generate_pts_up_down_left_right(viewpoint_cam, shift_width=0, shift_height=0, sample_rate=8)
     render_pkg = render(viewpoint_cam, gaussians, pipe, background, mlp_color, shift_factors, iteration=iteration, hybrid=hybrid, global_alignment=scene.getGlobalAlignment())
     img_forward, viewspace_point_tensor, visibility_filter, radii = render_pkg["render"] * mask_fov90, render_pkg["viewspace_points"], render_pkg["visibility_filter"], render_pkg["radii"]
-    img_distorted, img_perspective, residual = apply_flow_up_down_left_right(viewpoint_cam, lens_net, rays_forward, rays_residual, img_forward, types="forward", is_fisheye=True, iteration=iteration)
+    img_distorted, img_perspective, residual, control_theta = apply_flow_up_down_left_right(viewpoint_cam, rays_forward, rays_residual, img_forward, types="forward", is_fisheye=True, iteration=iteration, control_theta=control_theta, control_r=control_r)
     img_list.append(img_distorted)
     if validation:
         img_perspective_list.append(img_perspective)
@@ -251,7 +267,7 @@ def render_cubemap(viewpoint_cam, lens_net, mask_fov90, shift_width, shift_heigh
         elif name[i] == 'right':
             rays_up = generate_pts_up_down_left_right(sub_camera, shift_width=-shift_width, shift_height=0)
             rays_residual = generate_pts_up_down_left_right(sub_camera, shift_width=0, shift_height=-shift_height, sample_rate=8)
-        img_distorted, img_perspective = apply_flow_up_down_left_right(sub_camera, lens_net, rays_up, rays_residual, img_up, types=name[i], is_fisheye=True)
+        img_distorted, img_perspective = apply_flow_up_down_left_right(sub_camera, rays_up, rays_residual, img_up, types=name[i], is_fisheye=True, control_theta=control_theta, control_r=control_r)
         img_distorted_masked, half_mask = mask_half(img_distorted, name[i])
 
         img_list.append(img_distorted_masked)
@@ -275,24 +291,24 @@ def log_vector_field_to_wandb(residual, magnification_factor=100000, step=None):
         magnification_factor (float): Factor to magnify the flow vectors.
         step (int, optional): The current step or iteration for wandb logging.
     """
-    # Get the x and y components of the vectors
+    # Assuming residual has the shape [1, 2, 128, 85]
     U = residual.squeeze(0)[0].detach().cpu().numpy()  # X component
     V = residual.squeeze(0)[1].detach().cpu().numpy()  # Y component
 
-    # Merge the flow into a 10x10 grid by averaging 10x10 blocks
-    U_small = U.reshape(10, 10, 10, 10).mean(axis=(2, 3))
-    V_small = V.reshape(10, 10, 10, 10).mean(axis=(2, 3))
+# Resize U and V to (10, 10) using interpolation
+    U_small = zoom(U, (10 / U.shape[0], 10 / U.shape[1]), order=1)
+    V_small = zoom(V, (10 / V.shape[0], 10 / V.shape[1]), order=1)
 
-    # Magnify the flow for better visualization
+# Apply magnification for better visualization
     U_small *= magnification_factor
     V_small *= magnification_factor
 
-    # Create a grid for the vector field
+# Create a grid for the vector field
     x = np.arange(U_small.shape[1])
     y = np.arange(U_small.shape[0])
     X, Y = np.meshgrid(x, y)
 
-    # Plotting the vector field
+# Plotting the vector field
     plt.figure(figsize=(10, 10))
     plt.quiver(X, Y, U_small, V_small, angles='xy', scale_units='xy', scale=1, color='b')
     plt.title("Magnified Vector Field Visualization (10x10)")
@@ -300,17 +316,15 @@ def log_vector_field_to_wandb(residual, magnification_factor=100000, step=None):
     plt.ylabel("Y-axis")
     plt.gca().invert_yaxis()  # Optional: invert Y-axis to match image coordinates
 
-    # Save the plot to an in-memory file object
+# Save the plot to an in-memory file object
     buf = io.BytesIO()
     plt.savefig(buf, format='png', bbox_inches='tight', dpi=300)
     buf.seek(0)
     plt.close()
 
-    # Convert the in-memory file to a PIL Image
+# Convert the in-memory file to a PIL Image and upload to wandb
     image = Image.open(buf)
     image_array = np.array(image)
-
-    # Upload the image to wandb
     wandb.log({"vector_field/fig": wandb.Image(image_array, caption="Magnified Vector Field Visualization (10x10)")}, step=step)
     buf.close()
 
@@ -327,14 +341,42 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
     lens_net = iResNet().cuda()
     l_lens_net = [{'params': lens_net.parameters(), 'lr': 1e-5}]
     optimizer_lens_net = torch.optim.Adam(l_lens_net, eps=1e-15)
-    scheduler_lens_net = torch.optim.lr_scheduler.MultiStepLR(optimizer_lens_net, milestones=[7000], gamma=0.5)
+    scheduler_lens_net = torch.optim.lr_scheduler.MultiStepLR(optimizer_lens_net, milestones=[4000], gamma=0.5)
     def zero_weights(m):
         if isinstance(m, nn.Linear):
-            nn.init.constant_(m.weight, 0.)
-            nn.init.constant_(m.bias, 0.)
+            nn.init.constant_(m.weight, 0.00001)
+            nn.init.constant_(m.bias, 0.00001)
     #lens_net.apply(zero_weights)
     #for param in lens_net.parameters():
     #    print(param)
+
+
+    #coeff = read_colmap_coeff(dataset)
+    y_train = torch.linspace(0, 15., 5000).unsqueeze(1).cuda()
+    x_train = torch.atan(y_train) - 0.03936274483986258 * torch.atan(y_train)**3 + 0.005866545097262303 * torch.atan(y_train)**5 - 0.0012988220238146179 * torch.atan(y_train)**7
+    cubemap_net = iResNet(input_num=1).cuda()
+    l_cubemap_net = [{'params': cubemap_net.parameters(), 'lr': 1e-5}]
+    optimizer_cubemap_net = torch.optim.Adam(l_cubemap_net, eps=1e-15)
+    scheduler_cubemap_net = torch.optim.lr_scheduler.MultiStepLR(optimizer_cubemap_net, milestones=[2000, 7000, 9000], gamma=0.5)
+    #x_train = torch.linspace(0, 1.5, 1000).unsqueeze(1).cuda()
+    #y_train = torch.tan(x_train).cuda()
+    criterion = nn.MSELoss()
+    progress_bar_ires = tqdm(range(0, 0), desc="Init cubemapnet")
+    for epoch in range(0):
+        y_pred = cubemap_net.forward(x_train, sensor_to_frustum=True) + torch.tan(x_train)
+        loss = criterion(y_pred, y_train)
+        optimizer_cubemap_net.zero_grad()
+        loss.backward()
+        optimizer_cubemap_net.step()
+        scheduler_cubemap_net.step()
+        progress_bar_ires.set_postfix(loss=loss.item())
+        progress_bar_ires.update(1)
+    for param_group in optimizer_cubemap_net.param_groups:
+        param_group['lr'] = iresnet_lr
+    print(f"The learning rate is reset to {param_group['lr']}")
+    #cubemap_net.forward(torch.tensor([[0.5], [1.2]]).cuda(), sensor_to_frustum=True)
+    #cubemap_net.forward(torch.tensor([[0.5], [1.2]]).cuda(), sensor_to_frustum=False)
+    #import pdb;pdb.set_trace()
 
     #vignetting_factors = nn.Parameter(torch.ones(100, requires_grad=True, device='cuda'))
     #vignetting_optimizer = torch.optim.Adam([vignetting_factors], lr=1e-3)
@@ -384,7 +426,7 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
 
     # colmap init
     if outside_rasterizer and not no_init_iresnet:
-        init_from_colmap(scene, dataset, optimizer_lens_net, lens_net, scheduler_lens_net, resume_training=checkpoint, iresnet_lr=iresnet_lr)
+        init_from_colmap(scene, dataset, optimizer_lens_net, lens_net, scheduler_lens_net, resume_training=checkpoint, iresnet_lr=1e-5)
     if cubemap:
         #init_from_tan(scene, dataset, optimizer_lens_net, lens_net, scheduler_lens_net, resume_training=checkpoint, iresnet_lr=iresnet_lr)
         #import pdb;pdb.set_trace()
@@ -464,19 +506,23 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
 
         if cubemap:
             mask_fov90 = torch.zeros((1, viewpoint_cam.image_height, viewpoint_cam.image_width), dtype=torch.float32).cuda()
-            mask_fov90[:, viewpoint_cam.image_height//2 - int(viewpoint_cam.focal_y) - 1:viewpoint_cam.image_height//2 + int(viewpoint_cam.focal_y) + 1, viewpoint_cam.image_width//2 - int(viewpoint_cam.focal_x) - 1:viewpoint_cam.image_width//2 + int(viewpoint_cam.focal_x) + 1] = 1
+            #mask_fov90[:, viewpoint_cam.image_height//2 - int(viewpoint_cam.focal_y) - 1:viewpoint_cam.image_height//2 + int(viewpoint_cam.focal_y) + 1, viewpoint_cam.image_width//2 - int(viewpoint_cam.focal_x) - 1:viewpoint_cam.image_width//2 + int(viewpoint_cam.focal_x) + 1] = 1
+            mask_fov90[:, viewpoint_cam.image_height//2 - int(viewpoint_cam.focal_y) - 2:viewpoint_cam.image_height//2 + int(viewpoint_cam.focal_y) + 2, viewpoint_cam.image_width//2 - int(viewpoint_cam.focal_x) - 2:viewpoint_cam.image_width//2 + int(viewpoint_cam.focal_x) + 2] = 1
 
-            img_list, viewspace_point_tensor_list, visibility_filter_list, radii_list, residual = render_cubemap(viewpoint_cam, lens_net, mask_fov90, 0., 0., gaussians, pipe, background, mlp_color, shift_factors, iteration, hybrid, scene)
+            if iteration % 3000 == 1:
+                vis_cubemap_net = True
+            img_list, viewspace_point_tensor_list, visibility_filter_list, radii_list, residual = render_cubemap(viewpoint_cam, cubemap_net, mask_fov90, 0., 0., gaussians, pipe, background, mlp_color, shift_factors, iteration, hybrid, scene, vis_cubemap_net=vis_cubemap_net)
+            vis_cubemap_net = False
 
             img_mask_list = []
             for img in img_list:
                 mask = (img[0] > 0.001) | (img[1] > 0.001) | (img[2] > 0.001).cuda()
                 img_mask_list.append(mask)
 
-            if opt_shift:
+            if residual != None:
                 if iteration % 1000 == 2:
-                    log_vector_field_to_wandb(residual, magnification_factor=500, step=iteration)
-                if iteration % 100 == 1:
+                    log_vector_field_to_wandb(residual, magnification_factor=5, step=iteration)
+                if iteration % 100 == 2:
                     wandb.log({"vector_field/status": residual.mean().item()}, step=iteration)
 
         else:
@@ -544,7 +590,7 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
         elif cubemap:
             gt_image = viewpoint_cam.original_image.cuda()
             #mask_gt_image = generate_circular_mask(gt_image.shape, min(gt_image.shape[-2:])//2).cuda()
-            mask_gt_image = generate_circular_mask(gt_image.shape, 400).cuda()
+            mask_gt_image = generate_circular_mask(gt_image.shape, 450).cuda()
 
             Ll1 = (
                 l1_loss(img_list[0]*mask_gt_image*img_mask_list[0], gt_image*mask_gt_image*img_mask_list[0]) +
@@ -600,8 +646,37 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
             loss = loss + args.opacity_reg * torch.abs(gaussians.get_opacity).mean()
             loss = loss + args.scale_reg * torch.abs(gaussians.get_scaling).mean()
 
+        #residual.retain_grad()
+        #control_theta.retain_grad()
         #gaussians._xyz.retain_grad()
         loss.backward(retain_graph=True)
+        #print(residual.grad)
+        #for name, param in lens_net.named_parameters():
+        #    if param.grad is not None:
+        #        print(f"Layer: {name} | Gradient: {param.grad}")
+        #    else:
+        #        print(f"Layer: {name} | Gradient: None")
+        #print(control_theta.grad)
+        #if iteration > 2000 and loss > 0.1:
+        #    import pdb;pdb.set_trace()
+        #    print(viewpoint_cam.image_name)
+
+        #if iteration % 100 == 1 and use_wandb:
+        #    scalars = {
+        #        f"cubemap_net/grad_layer0": cubemap_net.i_resnet_linear.module_list[0].residual[10].weight.grad.mean(),
+        #        f"cubemap_net/grad_layer1": cubemap_net.i_resnet_linear.module_list[1].residual[10].weight.grad.mean(),
+        #        f"cubemap_net/grad_layer2": cubemap_net.i_resnet_linear.module_list[2].residual[10].weight.grad.mean(),
+        #        f"cubemap_net/grad_layer3": cubemap_net.i_resnet_linear.module_list[3].residual[10].weight.grad.mean(),
+        #    }
+        #    wandb.log(scalars, step=iteration)
+
+        #for name, param in cubemap_net.named_parameters():
+        #    if param.grad is not None:
+        #        print(f"Layer: {name} | Gradient: {param.grad}")
+        #    else:
+        #        print(f"Layer: {name} | Gradient: None")
+        #import pdb;pdb.set_trace()
+
         #if use_wandb:
         #    scalars = {
         #        f"gradient/3d_gradient": gaussians._xyz.grad.mean(),
@@ -637,7 +712,7 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
                 P_view_insidelens_direction = None
                 P_sensor = None
 
-            training_report(use_wandb, iteration, Ll1, ssim_loss, loss, l1_loss, iter_start.elapsed_time(iter_end), testing_iterations, scene, render, (pipe, background, mlp_color, shift_factors), lens_net, opt_distortion, no_distortion_mask, outside_rasterizer, flow_scale, control_point_sample_scale, flow_apply2_gt_or_img, apply2gt, cubemap, table1, opt_shift, shift_outside_factors)
+            training_report(use_wandb, iteration, Ll1, ssim_loss, loss, l1_loss, iter_start.elapsed_time(iter_end), testing_iterations, scene, render, (pipe, background, mlp_color, shift_factors), lens_net, cubemap_net, opt_distortion, no_distortion_mask, outside_rasterizer, flow_scale, control_point_sample_scale, flow_apply2_gt_or_img, apply2gt, cubemap, table1, opt_shift, shift_outside_factors)
 
             if (iteration in saving_iterations):
                 print("\n[ITER {}] Saving Gaussians".format(iteration))
@@ -706,6 +781,8 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
             if iteration < opt.iterations:
                 gaussians.optimizer.step()
                 gaussians.optimizer.zero_grad(set_to_none = True)
+                optimizer_cubemap_net.step()
+                optimizer_cubemap_net.zero_grad(set_to_none = True)
 
                 if mcmc:
                     L = build_scaling_rotation(gaussians.get_scaling, gaussians.get_rotation)
@@ -775,7 +852,7 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
                     torch.save(scene.unnoisy_train_cameras, os.path.join(scene.model_path, 'gt_cams.pt'))
                     torch.save(scene.train_cameras, os.path.join(scene.model_path, f'cams_train{iteration}.pt'))
 
-def training_report(use_wandb, iteration, Ll1, ssim_loss, loss, l1_loss, elapsed, testing_iterations, scene : Scene, renderFunc, renderArgs, lens_net, opt_distortion, no_distortion_mask, outside_rasterizer, flow_scale, control_point_sample_scale, flow_apply2_gt_or_img, apply2gt, cubemap, table1, opt_shift, shift_outside_factors):
+def training_report(use_wandb, iteration, Ll1, ssim_loss, loss, l1_loss, elapsed, testing_iterations, scene : Scene, renderFunc, renderArgs, lens_net, cubemap_net, opt_distortion, no_distortion_mask, outside_rasterizer, flow_scale, control_point_sample_scale, flow_apply2_gt_or_img, apply2gt, cubemap, table1, opt_shift, shift_outside_factors):
     if use_wandb and iteration % 10 == 0:
         scalars = {
             f"loss/l1_loss": Ll1,
@@ -901,9 +978,10 @@ def training_report(use_wandb, iteration, Ll1, ssim_loss, loss, l1_loss, elapsed
                                     wandb.log({f"images/gt_rendering_{viewpoint.image_name}": wandb.Image(img_numpy)})
                         elif cubemap:
                             mask_fov90 = torch.zeros((1, viewpoint.image_height, viewpoint.image_width), dtype=torch.float32).cuda()
-                            mask_fov90[:, viewpoint.image_height//2 - int(viewpoint.focal_y) - 1:viewpoint.image_height//2 + int(viewpoint.focal_y) + 1, viewpoint.image_width//2 - int(viewpoint.focal_x) - 1:viewpoint.image_width//2 + int(viewpoint.focal_x) + 1] = 1
+                            #mask_fov90[:, viewpoint.image_height//2 - int(viewpoint.focal_y) - 1:viewpoint.image_height//2 + int(viewpoint.focal_y) + 1, viewpoint.image_width//2 - int(viewpoint.focal_x) - 1:viewpoint.image_width//2 + int(viewpoint.focal_x) + 1] = 1
+                            mask_fov90[:, viewpoint.image_height//2 - int(viewpoint.focal_y) - 2:viewpoint.image_height//2 + int(viewpoint.focal_y) + 2, viewpoint.image_width//2 - int(viewpoint.focal_x) - 2:viewpoint.image_width//2 + int(viewpoint.focal_x) + 2] = 1
                             torchvision.utils.save_image(mask_fov90.float(), os.path.join(scene.model_path, 'mask1.png'))
-                            img_list, img_perspective_list = render_cubemap(viewpoint, lens_net, mask_fov90, 0., 0., scene.gaussians, *renderArgs, iteration, False, scene, validation=True)
+                            img_list, img_perspective_list = render_cubemap(viewpoint, cubemap_net, mask_fov90, 0., 0., scene.gaussians, *renderArgs, iteration, False, scene, validation=True)
                             direction_name = ['forward', 'up', 'down', 'left', 'right']
                             for i in range(5):
                                 torchvision.utils.save_image(img_perspective_list[i], os.path.join(scene.model_path, 'training_val_{}/renderred/{}/{}_perspective'.format(iteration, direction_name[i], viewpoint.image_name) + "_" + name + ".png"))
@@ -918,7 +996,8 @@ def training_report(use_wandb, iteration, Ll1, ssim_loss, loss, l1_loss, elapsed
                                 intensity_final = torch.where(mask, intensity_img, intensity_final)  # Update intensity tracker
 
                             torchvision.utils.save_image(final_image, os.path.join(scene.model_path, 'training_val_{}/renderred/{}_distorted_stitch'.format(iteration, viewpoint.image_name) + "_" + name + ".png"))
-                            mask_gt_image = generate_circular_mask(viewpoint.original_image.shape, 400).cuda()
+                            #mask_gt_image = generate_circular_mask(viewpoint.original_image.shape, min(viewpoint.original_image.shape[-2:])//2).cuda()
+                            mask_gt_image = generate_circular_mask(viewpoint.original_image.shape, 450).cuda()
                             torchvision.utils.save_image(final_image*mask_gt_image, os.path.join(scene.model_path, 'training_val_{}/renderred/{}_distorted_stitch_masked'.format(iteration, viewpoint.image_name) + "_" + name + ".png"))
                             gt_image = viewpoint.original_image.cuda()
                             torchvision.utils.save_image(gt_image, os.path.join(scene.model_path, 'training_val_{}/gt/{}_perspective'.format(iteration, viewpoint.image_name) + "_" + name + ".png"))
@@ -943,7 +1022,7 @@ def training_report(use_wandb, iteration, Ll1, ssim_loss, loss, l1_loss, elapsed
                             lpipss.append(lpips(image, gt_image))
                         elif cubemap:
                             #mask_gt_image = generate_circular_mask(gt_image.shape, min(gt_image.shape[-2:])//2).cuda()
-                            mask_gt_image = generate_circular_mask(gt_image.shape, 400).cuda()
+                            mask_gt_image = generate_circular_mask(gt_image.shape, 450).cuda()
                             l1_test += l1_loss(final_image*mask_gt_image, gt_image*mask_gt_image).mean().double()
                             psnr_test += psnr(final_image*mask_gt_image, gt_image*mask_gt_image).mean().double()
                             ssims.append(ssim(final_image*mask_gt_image, gt_image*mask_gt_image))
