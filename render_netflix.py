@@ -318,8 +318,10 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
     bg_color = [1, 1, 1] if dataset.white_background else [0, 0, 0]
     background = torch.tensor(bg_color, dtype=torch.float32, device="cuda")
     mlp_color = 0
-    if 'garden' in scene.model_path:
-        gaussians.load_ply("netflix/netflix_garden_lr8_apply2render_res2_scale2.5_filtersky_/point_cloud/iteration_20000/point_cloud.ply")
+    #if 'garden' in scene.model_path:
+    #    gaussians.load_ply("netflix/netflix_garden_lr8_apply2render_res2_scale2.5_filtersky_/point_cloud/iteration_20000/point_cloud.ply")
+    if 'paul_garden' in scene.model_path:
+        gaussians.load_ply("/home/yd428/playaround_gaussian_platting/netflix/paul_garden_preprocess_lr8_apply2render/point_cloud_filter.ply")
 
     os.makedirs(os.path.join(scene.model_path, 'trajectory'), exist_ok=True)
 
@@ -336,8 +338,44 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
         with open(os.path.join(scene.model_path, 'images.txt'), 'r') as f:
             lines = f.readlines()
         count = 0
+        if count == 0:
+            # for garden
+            #viewpoint_cam.reset_intrinsic(
+            #    #viewpoint_cam.FoVx,
+            #    #viewpoint_cam.FoVy,
+            #    focal2fov(viewpoint_cam.focal_x, 0.9 * viewpoint_cam.image_width),
+            #    focal2fov(viewpoint_cam.focal_y, 0.9 * viewpoint_cam.image_height),
+            #    viewpoint_cam.focal_x,
+            #    viewpoint_cam.focal_y,
+            #    int(0.6 * viewpoint_cam.image_width),
+            #    int(0.6 * viewpoint_cam.image_height)
+            #)
+            # for room
+            viewpoint_cam.reset_intrinsic(
+                #viewpoint_cam.FoVx,
+                #viewpoint_cam.FoVy,
+                focal2fov(viewpoint_cam.focal_x, 1. * viewpoint_cam.image_width),
+                focal2fov(viewpoint_cam.focal_y, 1. * viewpoint_cam.image_height),
+                viewpoint_cam.focal_x,
+                viewpoint_cam.focal_y,
+                int(1. * viewpoint_cam.image_width),
+                int(1. * viewpoint_cam.image_height)
+            )
+            #viewpoint_cam.reset_intrinsic(
+            #    #viewpoint_cam.FoVx,
+            #    #viewpoint_cam.FoVy,
+            #    focal2fov(viewpoint_cam.focal_x, 2.5 * viewpoint_cam.image_width),
+            #    focal2fov(viewpoint_cam.focal_y, 2.5 * viewpoint_cam.image_height),
+            #    viewpoint_cam.focal_x,
+            #    viewpoint_cam.focal_y,
+            #    int(1. * viewpoint_cam.image_width),
+            #    int(1. * viewpoint_cam.image_height)
+            #)
         for line in lines:
             if line.startswith("#") or not line.strip():
+                continue
+            if count < 50 or count > 100:
+                count += 1
                 continue
             parts = line.split()
             image_id = int(parts[0])
@@ -350,34 +388,14 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
             T = torch.tensor([tx, ty, tz]).cpu().numpy()
             viewpoint_cam.reset_extrinsic(R, T)
 
-            if count == 0:
-                # for garden
-                viewpoint_cam.reset_intrinsic(
-                    #viewpoint_cam.FoVx,
-                    #viewpoint_cam.FoVy,
-                    focal2fov(viewpoint_cam.focal_x, 0.9 * viewpoint_cam.image_width),
-                    focal2fov(viewpoint_cam.focal_y, 0.9 * viewpoint_cam.image_height),
-                    viewpoint_cam.focal_x,
-                    viewpoint_cam.focal_y,
-                    int(0.6 * viewpoint_cam.image_width),
-                    int(0.6 * viewpoint_cam.image_height)
-                )
-                # for room
-                #viewpoint_cam.reset_intrinsic(
-                #    #viewpoint_cam.FoVx,
-                #    #viewpoint_cam.FoVy,
-                #    focal2fov(viewpoint_cam.focal_x, 0.9 * viewpoint_cam.image_width),
-                #    focal2fov(viewpoint_cam.focal_y, 0.9 * viewpoint_cam.image_height),
-                #    viewpoint_cam.focal_x,
-                #    viewpoint_cam.focal_y,
-                #    int(1. * viewpoint_cam.image_width),
-                #    int(1. * viewpoint_cam.image_height)
-                #)
             render_pkg = render(viewpoint_cam, gaussians, pipe, background, mlp_color, shift_factors, iteration=first_iter, hybrid=hybrid, global_alignment=scene.getGlobalAlignment())
             image, viewspace_point_tensor, visibility_filter, radii = render_pkg["render"], render_pkg["viewspace_points"], render_pkg["visibility_filter"], render_pkg["radii"]
 
             torchvision.utils.save_image(image, os.path.join(scene.model_path, f'trajectory/perspective_{count}.png'))
             #torchvision.utils.save_image(viewpoint_cam.fish_gt_image, os.path.join(scene.model_path, f'trajectory/gt_{viewpoint_cam.image_name}.png'))
+            count += 1
+            print(count)
+            continue
 
             image = F.grid_sample(
                 image.unsqueeze(0),
@@ -394,7 +412,6 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
                 #rays_residual = generate_pts_up_down_left_right(viewpoint_cam, shift_width=0, shift_height=0, sample_rate=8)
                 #img_distorted, img_perspective, residual = apply_flow_up_down_left_right(viewpoint_cam, lens_net, rays_forward, rays_residual, image, types="forward", is_fisheye=True, iteration=0)
                 #torchvision.utils.save_image(img_distorted, os.path.join(scene.model_path, f'trajectory/fisheye_{count}.png'))
-            count += 1
             #if count == 20:
             #    import pdb;pdb.set_trace()
 
