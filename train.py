@@ -19,7 +19,7 @@ import math
 from random import randint
 from utils.loss_utils import l1_loss, ssim, kl_divergence, l2_loss
 from gaussian_renderer import render, network_gui
-from scene import Scene, GaussianModel, SpecularModel, iResNet
+from scene import Scene, GaussianModel, SpecularModel, iResNet, VignettingModel
 from scene.gaussian_model import build_scaling_rotation
 from utils.general_utils import safe_state, get_linear_noise_func, linear_to_srgb
 from tqdm import tqdm
@@ -28,7 +28,7 @@ from utils.loss_utils import ssim
 from utils.lpipsPyTorch import lpips
 from utils.graphics_utils import fov2focal, focal2fov, getProjectionMatrix, cubemap_to_perspective
 from utils.visualization import wandb_image
-from utils.util_vis import vis_cameras
+from utils.util_vis import vis_cameras, log_vector_field_to_wandb
 from utils.util import check_socket_open, prepare_output_and_logger, init_wandb
 from utils.camera_utils import rotate_camera
 from argparse import ArgumentParser
@@ -41,8 +41,8 @@ import time
 from io import BytesIO
 from torch import nn
 import torch.nn.functional as F
-from utils.util_distortion import homogenize, dehomogenize, colorize, plot_points, center_crop, init_from_colmap, apply_distortion, generate_control_pts
-from utils.cubemap_utils import apply_flow_up_down_left_right, generate_pts_up_down_left_right, mask_half
+from utils.util_distortion import homogenize, dehomogenize, colorize, plot_points, center_crop, init_iresnet, apply_distortion, generate_control_pts
+from utils.cubemap_utils import apply_flow_up_down_left_right, generate_pts_up_down_left_right, mask_half, generate_circular_mask, render_cubemap
 import copy
 from scene.cameras import Camera
 from scipy.ndimage import binary_erosion
@@ -63,300 +63,40 @@ if torch.cuda.is_available():
 np.random.seed(seed_value)
 random.seed(seed_value)
 
-def create_differentiable_vignetting_mask(image_tensor, scaling_factors):
-    # Step 1: Get the height and width of the image
-    _, width, height = image_tensor.shape  # Assume image_tensor is of shape (C, H, W)
-
-    # Step 2: Create a grid of distances from the center
-    x = torch.arange(width).float().to(image_tensor.device) - (width - 1) / 2
-    y = torch.arange(height).float().to(image_tensor.device) - (height - 1) / 2
-    X, Y = torch.meshgrid(x, y, indexing="ij")
-
-    # Calculate Euclidean distance from the center
-    distances = torch.sqrt(X**2 + Y**2)
-
-    # Step 3: Normalize distances to the range [0, N-1]
-    max_distance = distances.max()
-    distances_normalized = distances / max_distance * (scaling_factors.size(0) - 1)
-
-    # Step 4: Perform linear interpolation for differentiable mask creation
-    lower_indices = distances_normalized.floor().long().clamp(0, scaling_factors.size(0) - 2)
-    upper_indices = lower_indices + 1
-
-    lower_weights = (upper_indices - distances_normalized).cuda()  # weight for lower index
-    upper_weights = (distances_normalized - lower_indices).cuda()  # weight for upper index
-
-    # Get the scaling factors for the lower and upper indices
-    scaling_mask = lower_weights * scaling_factors[lower_indices] + upper_weights * scaling_factors[upper_indices]
-
-    return scaling_mask
-
-class VignettingModel(torch.nn.Module):
-    def __init__(self, n_terms=4, device='cuda'):
-        super(VignettingModel, self).__init__()
-
-        # Number of terms in the summation (higher order model)
-        self.n_terms = n_terms
-
-        # Initialize learnable parameters (requires_grad=True for optimization)
-        # Initialize a_k close to zero for minimal vignetting effect at the start
-        self.a_k = torch.nn.Parameter(torch.full((n_terms,), 0.01, device=device))  # Coefficients a_k initialized near 0
-
-        # Initialize beta_k to a small value but ensuring it gives a smooth falloff
-        self.beta_k = torch.nn.Parameter(torch.linspace(2.0, 8.0, n_terms).to(device))
-
-        # Initialize gamma to 1 for neutral global exponentiation
-        #self.gamma = torch.nn.Parameter(torch.tensor(1.0).to(device))
-        self.gamma = 1.
-
-        # Store the device (e.g., 'cuda' or 'cpu')
-        self.device = device
-
-    def bak_forward(self, image_size):
-        # Get image dimensions
-        height, width = image_size
-
-        # Compute the image center
-        x_c, y_c = width / 2, height / 2
-
-        # Compute the maximum possible distance from the center (diagonal distance)
-        r_max = torch.sqrt(torch.tensor((x_c ** 2 + y_c ** 2), dtype=torch.float32).to(self.device))
-
-        # Create a meshgrid of pixel coordinates on the specified device
-        y, x = torch.meshgrid(torch.arange(height, dtype=torch.float32).to(self.device),
-                              torch.arange(width, dtype=torch.float32).to(self.device))
-
-        # Calculate the distance of each pixel from the image center
-        d = torch.sqrt((x - x_c) ** 2 + (y - y_c) ** 2)
-
-        # Normalize the distance by r_max
-        d_normalized = d / r_max
-
-        # Initialize the vignetting mask
-        mask = torch.zeros_like(d_normalized)
-
-        # Sum over the higher-order terms to compute the vignetting mask
-        for k in range(self.n_terms):
-            mask += self.a_k[k] * d_normalized ** self.beta_k[k]
-
-        # Apply the global exponent gamma
-        mask = 1 - mask.clamp(0, 1) ** self.gamma
-
-        return mask
-
-    def forward(self, image_size):
-        # Get image dimensions
-        height, width = image_size
-
-        # Compute the image center
-        x_c, y_c = width / 2, height / 2
-
-        # Create a meshgrid of pixel coordinates on the specified device
-        y, x = torch.meshgrid(torch.arange(height, dtype=torch.float32).to(self.device),
-                              torch.arange(width, dtype=torch.float32).to(self.device))
-
-        # Calculate the distance of each pixel from the image center
-        r = torch.sqrt((x - x_c) ** 2 + (y - y_c) ** 2)
-
-        # Apply the arctan(r)/r normalization
-        #r_normalized = torch.arctan(r) / r
-        r_normalized = torch.arctan(r)
-
-        # Replace NaNs from division by zero at the center (r=0) with 1
-        r_normalized[r == 0] = 1
-
-        # Initialize the vignetting mask
-        mask = torch.zeros_like(r_normalized)
-
-        # Sum over the higher-order terms to compute the vignetting mask
-        for k in range(self.n_terms):
-            mask += self.a_k[k] * r_normalized ** self.beta_k[k]
-
-        # Apply the global exponent gamma
-        mask = 1 - mask.clamp(0, 1) ** self.gamma
-
-        return mask
-
-def mask_img(img):
-    black_mask = (img == 0).all(dim=0)  # Shape: [684, 228], True where all RGB values are 0
-    alpha_channel = (~black_mask).float()  # Shape: [684, 228], 1 for non-black, 0 for black
-    new_img_with_alpha = torch.cat([img, alpha_channel.unsqueeze(0)], dim=0)  # Shape: [4, 684, 228]
-    new_img_with_alpha = new_img_with_alpha.clamp(0, 1)  # Ensure the values are in [0, 1]
-    new_img_with_alpha = (new_img_with_alpha * 255).byte()  # Convert to 0-255 range
-    img_pil = torchvision.transforms.functional.to_pil_image(new_img_with_alpha)
-    return img_pil
-
-
-def generate_circular_mask(image_shape: torch.Size, radius: int) -> torch.Tensor:
-    """
-    Generates a circular mask based on the provided radius.
-
-    Args:
-    - image_shape (torch.Size): The shape of the image (C, H, W).
-    - radius (int): The radius of the circular mask.
-
-    Returns:
-    - torch.Tensor: A circular mask with shape (C, H, W) where the area inside the
-      radius from the center is 1 and outside is 0.
-    """
-    _, h, w = image_shape
-
-    # Create a coordinate grid centered at the image center
-    y_center, x_center = h // 2, w // 2
-    y_grid, x_grid = torch.meshgrid(torch.arange(h), torch.arange(w), indexing="ij")
-
-    # Calculate the distance of each point from the center
-    dist_from_center = torch.sqrt((x_grid - x_center) ** 2 + (y_grid - y_center) ** 2)
-
-    # Create the circular mask
-    mask = (dist_from_center <= radius).float()
-
-    # Expand the mask to match the shape of the image (C, H, W)
-    mask = mask.unsqueeze(0).repeat(3, 1, 1)
-
-    return mask
-
-
-def render_cubemap(viewpoint_cam, lens_net, mask_fov90, shift_width, shift_height, gaussians, pipe, background, mlp_color, shift_factors, iteration, hybrid, scene, validation=False):
-    img_list, viewspace_point_tensor_list, visibility_filter_list, radii_list = [], [], [], []
-    if validation:
-        img_perspective_list = []
-
-    rays_forward = generate_pts_up_down_left_right(viewpoint_cam, shift_width=0, shift_height=0)
-    rays_residual = generate_pts_up_down_left_right(viewpoint_cam, shift_width=0, shift_height=0, sample_rate=8)
-    render_pkg = render(viewpoint_cam, gaussians, pipe, background, mlp_color, shift_factors, iteration=iteration, hybrid=hybrid, global_alignment=scene.getGlobalAlignment())
-    img_forward, viewspace_point_tensor, visibility_filter, radii = render_pkg["render"] * mask_fov90, render_pkg["viewspace_points"], render_pkg["visibility_filter"], render_pkg["radii"]
-    img_distorted, img_perspective, residual = apply_flow_up_down_left_right(viewpoint_cam, lens_net, rays_forward, rays_residual, img_forward, types="forward", is_fisheye=True, iteration=iteration)
-    img_list.append(img_distorted)
-    if validation:
-        img_perspective_list.append(img_perspective)
-    viewspace_point_tensor_list.append(viewspace_point_tensor)
-    visibility_filter_list.append(visibility_filter)
-    radii_list.append(radii)
-
-    name = ['up', 'down', 'left', 'right']
-    for i, sub_camera in enumerate(viewpoint_cam.sub_cameras):
-        if i == 4: break
-        render_pkg = render(sub_camera, gaussians, pipe, background, mlp_color, shift_factors, iteration=iteration, hybrid=hybrid, global_alignment=scene.getGlobalAlignment())
-        img_up, viewspace_point_tensor, visibility_filter, radii = render_pkg["render"] * mask_fov90, render_pkg["viewspace_points"], render_pkg["visibility_filter"], render_pkg["radii"]
-        if name[i] == 'up':
-            rays_up = generate_pts_up_down_left_right(sub_camera, shift_width=0, shift_height=-shift_height)
-            rays_residual = generate_pts_up_down_left_right(sub_camera, shift_width=0, shift_height=-shift_height, sample_rate=8)
-        elif name[i] == 'down':
-            rays_up = generate_pts_up_down_left_right(sub_camera, shift_width=0, shift_height=shift_height)
-            rays_residual = generate_pts_up_down_left_right(sub_camera, shift_width=0, shift_height=-shift_height, sample_rate=8)
-        elif name[i] == 'left':
-            rays_up = generate_pts_up_down_left_right(sub_camera, shift_width=shift_width, shift_height=0)
-            rays_residual = generate_pts_up_down_left_right(sub_camera, shift_width=0, shift_height=-shift_height, sample_rate=8)
-        elif name[i] == 'right':
-            rays_up = generate_pts_up_down_left_right(sub_camera, shift_width=-shift_width, shift_height=0)
-            rays_residual = generate_pts_up_down_left_right(sub_camera, shift_width=0, shift_height=-shift_height, sample_rate=8)
-        img_distorted, img_perspective = apply_flow_up_down_left_right(sub_camera, lens_net, rays_up, rays_residual, img_up, types=name[i], is_fisheye=True)
-        img_distorted_masked, half_mask = mask_half(img_distorted, name[i])
-
-        img_list.append(img_distorted_masked)
-        viewspace_point_tensor_list.append(viewspace_point_tensor)
-        visibility_filter_list.append(visibility_filter)
-        radii_list.append(radii)
-        if validation:
-            img_perspective_list.append(img_perspective)
-
-    if not validation:
-        return img_list, viewspace_point_tensor_list, visibility_filter_list, radii_list, residual
-    else:
-        return img_list, img_perspective_list
-
-def log_vector_field_to_wandb(residual, magnification_factor=100000, step=None):
-    """
-    Logs a magnified vector field visualization to Weights & Biases.
-
-    Parameters:
-        residual (torch.Tensor): A tensor of shape [1, 2, 100, 100], storing (x, y) values.
-        magnification_factor (float): Factor to magnify the flow vectors.
-        step (int, optional): The current step or iteration for wandb logging.
-    """
-    # Get the x and y components of the vectors
-    U = residual.squeeze(0)[0].detach().cpu().numpy()  # X component
-    V = residual.squeeze(0)[1].detach().cpu().numpy()  # Y component
-
-    # Merge the flow into a 10x10 grid by averaging 10x10 blocks
-    U_small = U.reshape(10, 10, 10, 10).mean(axis=(2, 3))
-    V_small = V.reshape(10, 10, 10, 10).mean(axis=(2, 3))
-
-    # Magnify the flow for better visualization
-    U_small *= magnification_factor
-    V_small *= magnification_factor
-
-    # Create a grid for the vector field
-    x = np.arange(U_small.shape[1])
-    y = np.arange(U_small.shape[0])
-    X, Y = np.meshgrid(x, y)
-
-    # Plotting the vector field
-    plt.figure(figsize=(10, 10))
-    plt.quiver(X, Y, U_small, V_small, angles='xy', scale_units='xy', scale=1, color='b')
-    plt.title("Magnified Vector Field Visualization (10x10)")
-    plt.xlabel("X-axis")
-    plt.ylabel("Y-axis")
-    plt.gca().invert_yaxis()  # Optional: invert Y-axis to match image coordinates
-
-    # Save the plot to an in-memory file object
-    buf = io.BytesIO()
-    plt.savefig(buf, format='png', bbox_inches='tight', dpi=300)
-    buf.seek(0)
-    plt.close()
-
-    # Convert the in-memory file to a PIL Image
-    image = Image.open(buf)
-    image_array = np.array(image)
-
-    # Upload the image to wandb
-    wandb.log({"vector_field/fig": wandb.Image(image_array, caption="Magnified Vector Field Visualization (10x10)")}, step=step)
-    buf.close()
-
 def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoint_iterations, checkpoint, debug_from, use_wandb=False, random_init=False, hybrid=False, opt_cam=False, opt_shift=False, no_distortion_mask=False, opt_distortion=False, start_vignetting=10000000000, opt_intrinsic=False, r_t_noise=[0., 0.], r_t_lr=[0.001, 0.001], global_alignment_lr=0.001, extra_loss=False, start_opt_lens=1, extend_scale=2., control_point_sample_scale=8., outside_rasterizer=False, abs_grad=False, densi_num=0.0002, if_circular_mask=False, flow_scale=[1., 1.], render_resolution=1., apply2gt=False, iresnet_lr=1e-7, no_init_iresnet=False, opacity_threshold=0.005, mcmc=False, cubemap=False, table1=False):
     if dataset.cap_max == -1 and mcmc:
         print("Please specify the maximum number of Gaussians using --cap_max.")
         exit()
+
     first_iter = 0
     tb_writer = prepare_output_and_logger(dataset)
     gaussians = GaussianModel(dataset.sh_degree, dataset.asg_degree)
+    scene = Scene(dataset, gaussians, random_init=random_init, r_t_noise=r_t_noise, r_t_lr=r_t_lr, global_alignment_lr=global_alignment_lr, outside_rasterizer=outside_rasterizer, flow_scale=flow_scale, render_resolution=render_resolution, apply2gt=apply2gt, vis_pose=args.vis_pose, cubemap=cubemap, table1=table1)
+    gaussians.training_setup(opt)
+
+    # never use but don't delete this...
     if hybrid:
         specular_mlp = SpecularModel()
         specular_mlp.train_setting(opt)
+
+    # modeling lens distortion
     lens_net = iResNet().cuda()
     l_lens_net = [{'params': lens_net.parameters(), 'lr': 1e-5}]
     optimizer_lens_net = torch.optim.Adam(l_lens_net, eps=1e-15)
     scheduler_lens_net = torch.optim.lr_scheduler.MultiStepLR(optimizer_lens_net, milestones=[7000], gamma=0.5)
-    def zero_weights(m):
-        if isinstance(m, nn.Linear):
-            nn.init.constant_(m.weight, 0.)
-            nn.init.constant_(m.bias, 0.)
-    #lens_net.apply(zero_weights)
-    #for param in lens_net.parameters():
-    #    print(param)
 
-    #vignetting_factors = nn.Parameter(torch.ones(100, requires_grad=True, device='cuda'))
-    #vignetting_optimizer = torch.optim.Adam([vignetting_factors], lr=1e-3)
+    # modeling vignetting
     vignetting_model = VignettingModel(n_terms=4, device='cuda')
     vignetting_optimizer = torch.optim.Adam(vignetting_model.parameters(), lr=0.01)
     vignetting_scheduler = torch.optim.lr_scheduler.MultiStepLR(vignetting_optimizer, milestones=[1000], gamma=10)
 
+    # modeling entrance pupil shift
     shift_factors = nn.Parameter(torch.tensor([-0., -0., -0.], requires_grad=True, device='cuda'))
     shift_optimizer = torch.optim.Adam([shift_factors], lr=1e-5)
     shift_scheduler = torch.optim.lr_scheduler.MultiStepLR(shift_optimizer, milestones=[30000], gamma=0.1)
-
-    #shift_outside_factors = nn.Parameter(torch.tensor([0.002, 0.002, 0.002], requires_grad=True, device='cuda'))
     shift_outside_factors = nn.Parameter(torch.tensor([0.002, 0.002, 0.002], requires_grad=True, device='cuda').repeat(1000000, 1))
     shift_outside_optimizer = torch.optim.Adam([shift_outside_factors], lr=1e-5)
 
-    scene = Scene(dataset, gaussians, random_init=random_init, r_t_noise=r_t_noise, r_t_lr=r_t_lr, global_alignment_lr=global_alignment_lr, outside_rasterizer=outside_rasterizer, flow_scale=flow_scale, render_resolution=render_resolution, apply2gt=apply2gt, vis_pose=args.vis_pose, cubemap=cubemap, table1=table1)
-
-    #pose_GT, pose_aligned = scene.loadAlignCameras(if_vis_train=True, path=scene.model_path)
-    #torch.save(pose_GT, os.path.join(scene.model_path, 'gt.pt'))
-    #torch.save(pose_aligned, os.path.join(scene.model_path, 'align.pt'))
-    #import pdb;pdb.set_trace()
-    gaussians.training_setup(opt)
     if checkpoint:
         (model_params, first_iter) = torch.load(checkpoint)
         print(f'loading iteraton {first_iter}')
@@ -384,10 +124,8 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
 
     # colmap init
     if outside_rasterizer and not no_init_iresnet:
-        init_from_colmap(scene, dataset, optimizer_lens_net, lens_net, scheduler_lens_net, resume_training=checkpoint, iresnet_lr=iresnet_lr)
+        init_iresnet(scene, dataset, optimizer_lens_net, lens_net, scheduler_lens_net, resume_training=checkpoint, iresnet_lr=iresnet_lr)
     if cubemap:
-        #init_from_tan(scene, dataset, optimizer_lens_net, lens_net, scheduler_lens_net, resume_training=checkpoint, iresnet_lr=iresnet_lr)
-        #import pdb;pdb.set_trace()
         for param_group in optimizer_lens_net.param_groups:
             param_group['lr'] = iresnet_lr
         print(f"The learning rate is reset to {param_group['lr']}")
@@ -451,9 +189,7 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
             look_at_direction_normalized = look_at_direction / look_at_direction.norm()
             dot_products = torch.sum(direction_vectors_normalized * look_at_direction_normalized, dim=1)
             angles = torch.acos(dot_products)
-            #shift = shift_outside_factors[0] * angles**3 + shift_outside_factors[1] * angles**5 + shift_outside_factors[2] * angles**7
             shift = shift_outside_factors[:, 0] * angles**3 + shift_outside_factors[:, 1] * angles**5 + shift_outside_factors[:, 2] * angles**7
-            #gaussians._xyz = gaussians._xyz + shift.unsqueeze(1) * look_at_direction_world.detach()
 
         # Render
         if (iteration - 1) == debug_from:
@@ -466,7 +202,7 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
             mask_fov90 = torch.zeros((1, viewpoint_cam.image_height, viewpoint_cam.image_width), dtype=torch.float32).cuda()
             mask_fov90[:, viewpoint_cam.image_height//2 - int(viewpoint_cam.focal_y) - 1:viewpoint_cam.image_height//2 + int(viewpoint_cam.focal_y) + 1, viewpoint_cam.image_width//2 - int(viewpoint_cam.focal_x) - 1:viewpoint_cam.image_width//2 + int(viewpoint_cam.focal_x) + 1] = 1
 
-            img_list, viewspace_point_tensor_list, visibility_filter_list, radii_list, residual = render_cubemap(viewpoint_cam, lens_net, mask_fov90, 0., 0., gaussians, pipe, background, mlp_color, shift_factors, iteration, hybrid, scene)
+            img_list, viewspace_point_tensor_list, visibility_filter_list, radii_list, residual = render_cubemap(render, viewpoint_cam, lens_net, mask_fov90, 0., 0., gaussians, pipe, background, mlp_color, shift_factors, iteration, hybrid, scene)
 
             img_mask_list = []
             for img in img_list:
@@ -482,31 +218,6 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
         else:
             render_pkg = render(viewpoint_cam, gaussians, pipe, background, mlp_color, shift_factors, iteration=iteration, hybrid=hybrid, global_alignment=scene.getGlobalAlignment())
             image, viewspace_point_tensor, visibility_filter, radii = render_pkg["render"], render_pkg["viewspace_points"], render_pkg["visibility_filter"], render_pkg["radii"]
-
-            #P_sensor, P_view_insidelens_direction = generate_control_pts(viewpoint_cam, control_point_sample_scale, flow_scale)
-            #image, mask, flow_apply2_gt_or_img = apply_distortion(lens_net, P_view_insidelens_direction, P_sensor, viewpoint_cam, image, apply2gt=False, flow_scale=flow_scale)
-            #torchvision.utils.save_image(image, os.path.join(scene.model_path, f'before.png'))
-
-            #c2w = viewpoint_cam.get_c2w()
-            #R = c2w[:3, :3]
-            #cam_pos = viewpoint_cam.get_camera_center()
-            #look_at_direction_camera = torch.tensor([0, 0, -1.], device=cam_pos.device)
-            #look_at_direction_world = R @ look_at_direction_camera
-            #direction_vectors = gaussians._xyz - cam_pos
-            #look_at_direction = -look_at_direction_world
-            #direction_vectors_normalized = direction_vectors / direction_vectors.norm(dim=1, keepdim=True)
-            #look_at_direction_normalized = look_at_direction / look_at_direction.norm()
-            #dot_products = torch.sum(direction_vectors_normalized * look_at_direction_normalized, dim=1)
-            #angles = torch.acos(dot_products)
-            #shift = shift_outside_factors[0] * angles**3 + shift_outside_factors[1] * angles**5 + shift_outside_factors[2] * angles**7
-            #gaussians._xyz = gaussians._xyz + look_at_direction_world.detach().unsqueeze(0).expand(shift.shape[0], -1) * shift.unsqueeze(1)
-
-            #render_pkg = render(viewpoint_cam, gaussians, pipe, background, mlp_color, shift_factors, iteration=iteration, hybrid=hybrid, global_alignment=scene.getGlobalAlignment())
-            #image, viewspace_point_tensor, visibility_filter, radii = render_pkg["render"], render_pkg["viewspace_points"], render_pkg["visibility_filter"], render_pkg["radii"]
-            #P_sensor, P_view_insidelens_direction = generate_control_pts(viewpoint_cam, control_point_sample_scale, flow_scale)
-            #image, mask, flow_apply2_gt_or_img = apply_distortion(lens_net, P_view_insidelens_direction, P_sensor, viewpoint_cam, image, apply2gt=False, flow_scale=flow_scale)
-            #torchvision.utils.save_image(image, os.path.join(scene.model_path, f'after.png'))
-            #import pdb;pdb.set_trace()
 
         flow_apply2_gt_or_img = None
         if outside_rasterizer and not cubemap:
@@ -543,7 +254,6 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
             ssim_loss = ssim(image, gt_image)
         elif cubemap:
             gt_image = viewpoint_cam.original_image.cuda()
-            #mask_gt_image = generate_circular_mask(gt_image.shape, min(gt_image.shape[-2:])//2).cuda()
             mask_gt_image = generate_circular_mask(gt_image.shape, 400).cuda()
 
             Ll1 = (
@@ -560,25 +270,6 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
                 ssim(img_list[3]*mask_gt_image*img_mask_list[3], gt_image*mask_gt_image*img_mask_list[3]) +
                 ssim(img_list[4]*mask_gt_image*img_mask_list[4], gt_image*mask_gt_image*img_mask_list[4])
             )
-
-            #torchvision.utils.save_image(gt_image * mask_gt_image * img_mask_list[0], os.path.join(scene.model_path, f'gt_0.png'))
-            #torchvision.utils.save_image(gt_image * mask_gt_image * img_mask_list[1], os.path.join(scene.model_path, f'gt_1.png'))
-            #torchvision.utils.save_image(gt_image * mask_gt_image * img_mask_list[2], os.path.join(scene.model_path, f'gt_2.png'))
-            #torchvision.utils.save_image(gt_image * mask_gt_image * img_mask_list[3], os.path.join(scene.model_path, f'gt_3.png'))
-            #torchvision.utils.save_image(gt_image * mask_gt_image * img_mask_list[4], os.path.join(scene.model_path, f'gt_4.png'))
-            #torchvision.utils.save_image(img_list[0] * mask_gt_image * img_mask_list[0], os.path.join(scene.model_path, f'img_0.png'))
-            #torchvision.utils.save_image(img_list[1] * mask_gt_image * img_mask_list[1], os.path.join(scene.model_path, f'img_1.png'))
-            #torchvision.utils.save_image(img_list[2] * mask_gt_image * img_mask_list[2], os.path.join(scene.model_path, f'img_2.png'))
-            #torchvision.utils.save_image(img_list[3] * mask_gt_image * img_mask_list[3], os.path.join(scene.model_path, f'img_3.png'))
-            #torchvision.utils.save_image(img_list[4] * mask_gt_image * img_mask_list[4], os.path.join(scene.model_path, f'img_4.png'))
-
-            #torchvision.utils.save_image(mask_gt_image, os.path.join(scene.model_path, f'mask_gt.png'))
-            #torchvision.utils.save_image(img_mask_list[0].float(), os.path.join(scene.model_path, f'mask_0.png'))
-            #torchvision.utils.save_image(img_mask_list[1].float(), os.path.join(scene.model_path, f'mask_1.png'))
-            #torchvision.utils.save_image(img_mask_list[2].float(), os.path.join(scene.model_path, f'mask_2.png'))
-            #torchvision.utils.save_image(img_mask_list[3].float(), os.path.join(scene.model_path, f'mask_3.png'))
-            #torchvision.utils.save_image(img_mask_list[4].float(), os.path.join(scene.model_path, f'mask_4.png'))
-            #import pdb;pdb.set_trace()
         else:
             gt_image = viewpoint_cam.original_image.cuda()
             Ll1 = l1_loss(image, gt_image)
@@ -600,22 +291,7 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
             loss = loss + args.opacity_reg * torch.abs(gaussians.get_opacity).mean()
             loss = loss + args.scale_reg * torch.abs(gaussians.get_scaling).mean()
 
-        #gaussians._xyz.retain_grad()
         loss.backward(retain_graph=True)
-        #if use_wandb:
-        #    scalars = {
-        #        f"gradient/3d_gradient": gaussians._xyz.grad.mean(),
-        #        f"gradient/3d_gradient_max": gaussians._xyz.grad.max(),
-        #        f"gradient/3d_gradient_min": gaussians._xyz.grad.min(),
-        #        f"gradient/nan": torch.isnan(gaussians._xyz.grad).sum(),
-        #        f"gradient/inf": torch.isinf(gaussians._xyz.grad).sum(),
-        #    }
-        #    wandb.log(scalars, step=iteration)
-
-        #last_linear_layer = lens_net.i_resnet_linear.module_list[-1].residual[-1]
-        #print(last_linear_layer.weight.grad)
-        #print(shift_factors.grad)
-        #import pdb;pdb.set_trace()
         iter_end.record()
         torch.cuda.synchronize()
 
@@ -671,7 +347,6 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
                                 gaussians.densify_and_prune(opt.abs_densify_grad_threshold, opacity_threshold, scene.cameras_extent, size_threshold)
                             else:
                                 gaussians.densify_and_prune(opt.densify_grad_threshold, opacity_threshold, scene.cameras_extent, size_threshold)
-                                #gaussians.densify_and_prune(densi_num, 0.005, scene.cameras_extent, size_threshold)
 
                         if iteration % opt.opacity_reset_interval == 0 or (dataset.white_background and iteration == opt.densify_from_iter):
                             gaussians.reset_opacity()
@@ -697,7 +372,6 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
                                 gaussians.densify_and_prune(opt.abs_densify_grad_threshold, opacity_threshold, scene.cameras_extent, size_threshold)
                             else:
                                 gaussians.densify_and_prune(opt.densify_grad_threshold, opacity_threshold, scene.cameras_extent, size_threshold)
-                                #gaussians.densify_and_prune(densi_num, 0.005, scene.cameras_extent, size_threshold)
 
                         if iteration % opt.opacity_reset_interval == 0 or (dataset.white_background and iteration == opt.densify_from_iter):
                             gaussians.reset_opacity()
@@ -729,7 +403,6 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
                             f"vignetting_model/beta_k1": vignetting_model.beta_k[1].cpu().item(),
                             f"vignetting_model/beta_k2": vignetting_model.beta_k[2].cpu().item(),
                             f"vignetting_model/beta_k3": vignetting_model.beta_k[3].cpu().item(),
-                            #f"vignetting_model/gamma": vignetting_model.gamma.cpu().item()
                         }
                         wandb.log(scalars, step=iteration)
                 if opt_distortion:
@@ -740,15 +413,9 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
                         wandb.log({"shift/0": shift_factors[0].item()}, step=iteration)
                         wandb.log({"shift/1": shift_factors[1].item()}, step=iteration)
                         wandb.log({"shift/2": shift_factors[2].item()}, step=iteration)
-                        #wandb.log({"shift_outside/0": shift_outside_factors[0].item()}, step=iteration)
-                        #wandb.log({"shift_outside/1": shift_outside_factors[1].item()}, step=iteration)
-                        #wandb.log({"shift_outside/2": shift_outside_factors[2].item()}, step=iteration)
                         wandb.log({"shift_outside/0": shift_outside_factors[0, 0].item()}, step=iteration)
                         wandb.log({"shift_outside/1": shift_outside_factors[0, 1].item()}, step=iteration)
                         wandb.log({"shift_outside/2": shift_outside_factors[0, 2].item()}, step=iteration)
-                    #shift_optimizer.step()
-                    #shift_optimizer.zero_grad(set_to_none=True)
-                    #shift_scheduler.step()
                     shift_outside_optimizer.step()
                     shift_outside_optimizer.zero_grad(set_to_none=True)
                 if opt_cam:
@@ -821,17 +488,6 @@ def training_report(use_wandb, iteration, Ll1, ssim_loss, loss, l1_loss, elapsed
                     if table1:
                         os.makedirs(os.path.join(scene.model_path, 'training_val_{}/table1').format(iteration), exist_ok=True)
                     for idx, viewpoint in enumerate(config['cameras']):
-                        #if outside_rasterizer:
-                        #    viewpoint.reset_intrinsic(
-                        #        viewpoint.FoVx,
-                        #        viewpoint.FoVy,
-                        #        viewpoint.focal_x,
-                        #        viewpoint.focal_y,
-                        #        int(2. * viewpoint.image_width),
-                        #        int(2. * viewpoint.image_height)
-                        #        #int(flow_scale[0] * viewpoint.image_width),
-                        #        #int(flow_scale[1] * viewpoint.image_height)
-                        #    )
                         if opt_shift:
                             c2w = viewpoint.get_c2w()
                             R = c2w[:3, :3]
@@ -844,7 +500,6 @@ def training_report(use_wandb, iteration, Ll1, ssim_loss, loss, l1_loss, elapsed
                             look_at_direction_normalized = look_at_direction / look_at_direction.norm()
                             dot_products = torch.sum(direction_vectors_normalized * look_at_direction_normalized, dim=1)
                             angles = torch.acos(dot_products)
-                            #shift = shift_outside_factors[0] * angles**3 + shift_outside_factors[1] * angles**5 + shift_outside_factors[2] * angles**7
                             shift = shift_outside_factors[:, 0] * angles**3 + shift_outside_factors[:, 1] * angles**5 + shift_outside_factors[:, 2] * angles**7
                             scene.gaussians._xyz = scene.gaussians._xyz + shift.unsqueeze(1) * look_at_direction_world.detach()
                         if table1 and name == 'test':
@@ -903,11 +558,10 @@ def training_report(use_wandb, iteration, Ll1, ssim_loss, loss, l1_loss, elapsed
                             mask_fov90 = torch.zeros((1, viewpoint.image_height, viewpoint.image_width), dtype=torch.float32).cuda()
                             mask_fov90[:, viewpoint.image_height//2 - int(viewpoint.focal_y) - 1:viewpoint.image_height//2 + int(viewpoint.focal_y) + 1, viewpoint.image_width//2 - int(viewpoint.focal_x) - 1:viewpoint.image_width//2 + int(viewpoint.focal_x) + 1] = 1
                             torchvision.utils.save_image(mask_fov90.float(), os.path.join(scene.model_path, 'mask1.png'))
-                            img_list, img_perspective_list = render_cubemap(viewpoint, lens_net, mask_fov90, 0., 0., scene.gaussians, *renderArgs, iteration, False, scene, validation=True)
+                            img_list, img_perspective_list = render_cubemap(render, viewpoint, lens_net, mask_fov90, 0., 0., scene.gaussians, *renderArgs, iteration, False, scene, validation=True)
                             direction_name = ['forward', 'up', 'down', 'left', 'right']
                             for i in range(5):
                                 torchvision.utils.save_image(img_perspective_list[i], os.path.join(scene.model_path, 'training_val_{}/renderred/{}/{}_perspective'.format(iteration, direction_name[i], viewpoint.image_name) + "_" + name + ".png"))
-                                #torchvision.utils.save_image(img_list[i], os.path.join(scene.model_path, 'training_val_{}/renderred/{}'.format(iteration, i) + "_" + name + ".png"))
                             final_image = torch.zeros_like(img_list[0])
                             intensity_final = final_image.sum(dim=0, keepdim=True)  # Track the current intensities of the final image
 
@@ -942,7 +596,6 @@ def training_report(use_wandb, iteration, Ll1, ssim_loss, loss, l1_loss, elapsed
                             ssims.append(ssim(image, gt_image))
                             lpipss.append(lpips(image, gt_image))
                         elif cubemap:
-                            #mask_gt_image = generate_circular_mask(gt_image.shape, min(gt_image.shape[-2:])//2).cuda()
                             mask_gt_image = generate_circular_mask(gt_image.shape, 400).cuda()
                             l1_test += l1_loss(final_image*mask_gt_image, gt_image*mask_gt_image).mean().double()
                             psnr_test += psnr(final_image*mask_gt_image, gt_image*mask_gt_image).mean().double()
@@ -972,8 +625,6 @@ def training_report(use_wandb, iteration, Ll1, ssim_loss, loss, l1_loss, elapsed
 
     if use_wandb and iteration % 10 == 0:
         wandb.log({"stats/gs_num": scene.gaussians.get_xyz.shape[0]}, step=iteration)
-        #opacity_numpy = scene.gaussians.get_opacity.view(-1).cpu().numpy()
-        #wandb.log({"stats/opacity_histogram": wandb.Histogram(opacity_numpy)})
 
 
 if __name__ == "__main__":

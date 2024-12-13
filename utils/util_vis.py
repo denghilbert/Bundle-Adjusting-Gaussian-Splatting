@@ -9,8 +9,56 @@ from mpl_toolkits.mplot3d.art3d import Poly3DCollection
 import PIL
 import imageio
 from easydict import EasyDict as edict
-
+import io
 from utils.camera import cam2world
+
+def log_vector_field_to_wandb(residual, magnification_factor=100000, step=None):
+    """
+    Logs a magnified vector field visualization to Weights & Biases.
+
+    Parameters:
+        residual (torch.Tensor): A tensor of shape [1, 2, 100, 100], storing (x, y) values.
+        magnification_factor (float): Factor to magnify the flow vectors.
+        step (int, optional): The current step or iteration for wandb logging.
+    """
+    # Get the x and y components of the vectors
+    U = residual.squeeze(0)[0].detach().cpu().numpy()  # X component
+    V = residual.squeeze(0)[1].detach().cpu().numpy()  # Y component
+
+    # Merge the flow into a 10x10 grid by averaging 10x10 blocks
+    U_small = U.reshape(10, 10, 10, 10).mean(axis=(2, 3))
+    V_small = V.reshape(10, 10, 10, 10).mean(axis=(2, 3))
+
+    # Magnify the flow for better visualization
+    U_small *= magnification_factor
+    V_small *= magnification_factor
+
+    # Create a grid for the vector field
+    x = np.arange(U_small.shape[1])
+    y = np.arange(U_small.shape[0])
+    X, Y = np.meshgrid(x, y)
+
+    # Plotting the vector field
+    plt.figure(figsize=(10, 10))
+    plt.quiver(X, Y, U_small, V_small, angles='xy', scale_units='xy', scale=1, color='b')
+    plt.title("Magnified Vector Field Visualization (10x10)")
+    plt.xlabel("X-axis")
+    plt.ylabel("Y-axis")
+    plt.gca().invert_yaxis()  # Optional: invert Y-axis to match image coordinates
+
+    # Save the plot to an in-memory file object
+    buf = io.BytesIO()
+    plt.savefig(buf, format='png', bbox_inches='tight', dpi=300)
+    buf.seek(0)
+    plt.close()
+
+    # Convert the in-memory file to a PIL Image
+    image = Image.open(buf)
+    image_array = np.array(image)
+
+    # Upload the image to wandb
+    wandb.log({"vector_field/fig": wandb.Image(image_array, caption="Magnified Vector Field Visualization (10x10)")}, step=step)
+    buf.close()
 
 @torch.no_grad()
 def tb_image(opt,tb,step,group,name,images,num_vis=None,from_range=(0,1),cmap="gray"):

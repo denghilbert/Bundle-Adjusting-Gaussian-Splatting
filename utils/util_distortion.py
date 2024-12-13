@@ -146,7 +146,7 @@ def init_from_coeff(coeff, dataset, ref_points):
 
     return ref_points
 
-def init_from_colmap(scene, dataset, optimizer_lens_net, lens_net, scheduler_lens_net, resume_training=None, iresnet_lr=1e-7):
+def init_iresnet(scene, dataset, optimizer_lens_net, lens_net, scheduler_lens_net, resume_training=None, iresnet_lr=1e-7):
     P_sensor, P_view_insidelens_direction = generate_pts(scene, boundary_scale=5, sample_resolution=40)
     P_view_outsidelens_direction = P_view_insidelens_direction
     camera_directions_w_lens = homogenize(P_view_outsidelens_direction)

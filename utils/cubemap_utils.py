@@ -45,6 +45,35 @@ def generate_pts_up_down_left_right(viewpoint_cam, shift_width=0, shift_height=0
     return P_view_insidelens_direction
 
 
+def generate_circular_mask(image_shape: torch.Size, radius: int) -> torch.Tensor:
+    """
+    Generates a circular mask based on the provided radius.
+
+    Args:
+    - image_shape (torch.Size): The shape of the image (C, H, W).
+    - radius (int): The radius of the circular mask.
+
+    Returns:
+    - torch.Tensor: A circular mask with shape (C, H, W) where the area inside the
+      radius from the center is 1 and outside is 0.
+    """
+    _, h, w = image_shape
+
+    # Create a coordinate grid centered at the image center
+    y_center, x_center = h // 2, w // 2
+    y_grid, x_grid = torch.meshgrid(torch.arange(h), torch.arange(w), indexing="ij")
+
+    # Calculate the distance of each point from the center
+    dist_from_center = torch.sqrt((x_grid - x_center) ** 2 + (y_grid - y_center) ** 2)
+
+    # Create the circular mask
+    mask = (dist_from_center <= radius).float()
+
+    # Expand the mask to match the shape of the image (C, H, W)
+    mask = mask.unsqueeze(0).repeat(3, 1, 1)
+
+    return mask
+
 def apply_flow_up_down_left_right(viewpoint_cam, lens_net, rays, rays_residual, img, types="forward", is_fisheye=False, iteration=None):
     width = viewpoint_cam.image_width
     height = viewpoint_cam.image_height
@@ -184,4 +213,54 @@ def mask_half(image: torch.Tensor, direction: str = "left") -> torch.Tensor:
     masked_image = image * mask
 
     return masked_image, mask
+
+
+def render_cubemap(render, viewpoint_cam, lens_net, mask_fov90, shift_width, shift_height, gaussians, pipe, background, mlp_color, shift_factors, iteration, hybrid, scene, validation=False):
+    img_list, viewspace_point_tensor_list, visibility_filter_list, radii_list = [], [], [], []
+    if validation:
+        img_perspective_list = []
+
+    rays_forward = generate_pts_up_down_left_right(viewpoint_cam, shift_width=0, shift_height=0)
+    rays_residual = generate_pts_up_down_left_right(viewpoint_cam, shift_width=0, shift_height=0, sample_rate=8)
+    render_pkg = render(viewpoint_cam, gaussians, pipe, background, mlp_color, shift_factors, iteration=iteration, hybrid=hybrid, global_alignment=scene.getGlobalAlignment())
+    img_forward, viewspace_point_tensor, visibility_filter, radii = render_pkg["render"] * mask_fov90, render_pkg["viewspace_points"], render_pkg["visibility_filter"], render_pkg["radii"]
+    img_distorted, img_perspective, residual = apply_flow_up_down_left_right(viewpoint_cam, lens_net, rays_forward, rays_residual, img_forward, types="forward", is_fisheye=True, iteration=iteration)
+    img_list.append(img_distorted)
+    if validation:
+        img_perspective_list.append(img_perspective)
+    viewspace_point_tensor_list.append(viewspace_point_tensor)
+    visibility_filter_list.append(visibility_filter)
+    radii_list.append(radii)
+
+    name = ['up', 'down', 'left', 'right']
+    for i, sub_camera in enumerate(viewpoint_cam.sub_cameras):
+        if i == 4: break
+        render_pkg = render(sub_camera, gaussians, pipe, background, mlp_color, shift_factors, iteration=iteration, hybrid=hybrid, global_alignment=scene.getGlobalAlignment())
+        img_up, viewspace_point_tensor, visibility_filter, radii = render_pkg["render"] * mask_fov90, render_pkg["viewspace_points"], render_pkg["visibility_filter"], render_pkg["radii"]
+        if name[i] == 'up':
+            rays_up = generate_pts_up_down_left_right(sub_camera, shift_width=0, shift_height=-shift_height)
+            rays_residual = generate_pts_up_down_left_right(sub_camera, shift_width=0, shift_height=-shift_height, sample_rate=8)
+        elif name[i] == 'down':
+            rays_up = generate_pts_up_down_left_right(sub_camera, shift_width=0, shift_height=shift_height)
+            rays_residual = generate_pts_up_down_left_right(sub_camera, shift_width=0, shift_height=-shift_height, sample_rate=8)
+        elif name[i] == 'left':
+            rays_up = generate_pts_up_down_left_right(sub_camera, shift_width=shift_width, shift_height=0)
+            rays_residual = generate_pts_up_down_left_right(sub_camera, shift_width=0, shift_height=-shift_height, sample_rate=8)
+        elif name[i] == 'right':
+            rays_up = generate_pts_up_down_left_right(sub_camera, shift_width=-shift_width, shift_height=0)
+            rays_residual = generate_pts_up_down_left_right(sub_camera, shift_width=0, shift_height=-shift_height, sample_rate=8)
+        img_distorted, img_perspective = apply_flow_up_down_left_right(sub_camera, lens_net, rays_up, rays_residual, img_up, types=name[i], is_fisheye=True)
+        img_distorted_masked, half_mask = mask_half(img_distorted, name[i])
+
+        img_list.append(img_distorted_masked)
+        viewspace_point_tensor_list.append(viewspace_point_tensor)
+        visibility_filter_list.append(visibility_filter)
+        radii_list.append(radii)
+        if validation:
+            img_perspective_list.append(img_perspective)
+
+    if not validation:
+        return img_list, viewspace_point_tensor_list, visibility_filter_list, radii_list, residual
+    else:
+        return img_list, img_perspective_list
 

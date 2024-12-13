@@ -17,6 +17,7 @@ from utils.system_utils import searchForMaxIteration
 from scene.dataset_readers import sceneLoadTypeCallbacks
 from scene.gaussian_model import GaussianModel
 from scene.specular_model import SpecularModel
+from scene.vignetting import VignettingModel, create_differentiable_vignetting_mask
 from scene.cameras import quaternion_to_rotation_matrix, rotation_matrix_to_quaternion
 from scene.iresnet import iResNet
 from scene.cameras import Camera

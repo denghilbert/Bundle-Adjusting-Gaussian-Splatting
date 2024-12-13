@@ -42,7 +42,7 @@ import time
 from io import BytesIO
 from torch import nn
 import torch.nn.functional as F
-from utils.util_distortion import homogenize, dehomogenize, colorize, plot_points, center_crop, init_from_colmap, apply_distortion, generate_control_pts
+from utils.util_distortion import homogenize, dehomogenize, colorize, plot_points, center_crop, apply_distortion, generate_control_pts
 from utils.cubemap_utils import apply_flow_up_down_left_right, generate_pts_up_down_left_right, mask_half
 import copy
 from scene.cameras import Camera, quaternion_to_rotation_matrix
