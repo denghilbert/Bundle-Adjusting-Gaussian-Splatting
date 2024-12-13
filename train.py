@@ -63,7 +63,7 @@ if torch.cuda.is_available():
 np.random.seed(seed_value)
 random.seed(seed_value)
 
-def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoint_iterations, checkpoint, debug_from, use_wandb=False, random_init=False, hybrid=False, opt_cam=False, opt_shift=False, no_distortion_mask=False, opt_distortion=False, start_vignetting=10000000000, opt_intrinsic=False, r_t_noise=[0., 0.], r_t_lr=[0.001, 0.001], global_alignment_lr=0.001, extra_loss=False, start_opt_lens=1, extend_scale=2., control_point_sample_scale=8., outside_rasterizer=False, abs_grad=False, densi_num=0.0002, if_circular_mask=False, flow_scale=[1., 1.], render_resolution=1., apply2gt=False, iresnet_lr=1e-7, no_init_iresnet=False, opacity_threshold=0.005, mcmc=False, cubemap=False, table1=False):
+def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoint_iterations, checkpoint, debug_from, use_wandb=False, random_init=False, hybrid=False, opt_cam=False, opt_shift=False, no_distortion_mask=False, opt_distortion=False, start_vignetting=10000000000, opt_intrinsic=False, r_t_noise=[0., 0.], r_t_lr=[0.001, 0.001], global_alignment_lr=0.001, extra_loss=False, start_opt_lens=1, extend_scale=2., control_point_sample_scale=8., outside_rasterizer=False, abs_grad=False, densi_num=0.0002, if_circular_mask=False, flow_scale=[1., 1.], render_resolution=1., apply2gt=False, iresnet_lr=1e-7, iresnet_opt_duration=[0, 30000], no_init_iresnet=False, opacity_threshold=0.005, mcmc=False, cubemap=False, table1=False):
     if dataset.cap_max == -1 and mcmc:
         print("Please specify the maximum number of Gaussians using --cap_max.")
         exit()
@@ -219,16 +219,17 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
             render_pkg = render(viewpoint_cam, gaussians, pipe, background, mlp_color, shift_factors, iteration=iteration, hybrid=hybrid, global_alignment=scene.getGlobalAlignment())
             image, viewspace_point_tensor, visibility_filter, radii = render_pkg["render"], render_pkg["viewspace_points"], render_pkg["visibility_filter"], render_pkg["radii"]
 
-        flow_apply2_gt_or_img = None
+        if iteration == 1 or (iteration > iresnet_opt_duration[0] and iteration < iresnet_opt_duration[1]):
+            flow_apply2_gt_or_img = None
         if outside_rasterizer and not cubemap:
             P_sensor, P_view_insidelens_direction = generate_control_pts(viewpoint_cam, control_point_sample_scale, flow_scale)
             if not apply2gt:
-                image, mask, flow_apply2_gt_or_img = apply_distortion(lens_net, P_view_insidelens_direction, P_sensor, viewpoint_cam, image, apply2gt=apply2gt, flow_scale=flow_scale)
+                image, mask, flow_apply2_gt_or_img = apply_distortion(flow_apply2_gt_or_img, lens_net, P_view_insidelens_direction, P_sensor, viewpoint_cam, image, apply2gt=apply2gt, flow_scale=flow_scale)
                 if if_circular_mask:
                     mask = mask * circular_mask
 
             if apply2gt:
-                gt_image, mask, flow_apply2_gt_or_img = apply_distortion(lens_net, P_view_insidelens_direction, P_sensor, viewpoint_cam, image, apply2gt=apply2gt)
+                gt_image, mask, flow_apply2_gt_or_img = apply_distortion(flow_apply2_gt_or_img, lens_net, P_view_insidelens_direction, P_sensor, viewpoint_cam, image, apply2gt=apply2gt)
 
         if start_vignetting < iteration:
             vignetting_mask = vignetting_model((image.shape[1], image.shape[2]))
@@ -405,7 +406,7 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
                             f"vignetting_model/beta_k3": vignetting_model.beta_k[3].cpu().item(),
                         }
                         wandb.log(scalars, step=iteration)
-                if opt_distortion:
+                if opt_distortion and iteration > iresnet_opt_duration[0] and iteration < iresnet_opt_duration[1]:
                     optimizer_lens_net.step()
                     optimizer_lens_net.zero_grad(set_to_none=True)
                 if opt_shift:
@@ -683,6 +684,8 @@ if __name__ == "__main__":
     parser.add_argument("--flow_scale", nargs="+", type=float, default=[1., 1.])
     parser.add_argument("--render_resolution", type=float, default=1.)
     parser.add_argument('--iresnet_lr', type=float, default=1e-7)
+    # the optimization duration of iresnet
+    parser.add_argument("--iresnet_opt_duration", nargs="+", type=int, default=[0, 30000])
     parser.add_argument('--opacity_threshold', type=float, default=0.005)
 
     parser.add_argument("--opt_shift", action="store_true", default=False)
@@ -692,6 +695,7 @@ if __name__ == "__main__":
     parser.add_argument("--no_init_iresnet", action="store_true", default=False)
     parser.add_argument("--cubemap", action="store_true", default=False)
     parser.add_argument("--table1", action="store_true", default=False)
+
 
     args = parser.parse_args(sys.argv[1:])
     args.save_iterations.append(args.iterations)
@@ -724,7 +728,7 @@ if __name__ == "__main__":
         global_alignment_lr=args.global_alignment_lr, extra_loss=args.extra_loss, start_opt_lens=args.start_opt_lens,
         extend_scale=args.extend_scale, control_point_sample_scale=args.control_point_sample_scale, outside_rasterizer=args.outside_rasterizer,
         abs_grad=args.abs_grad, densi_num=args.densi_num, if_circular_mask=args.if_circular_mask, flow_scale=args.flow_scale,
-        render_resolution=args.render_resolution, apply2gt=args.apply2gt, iresnet_lr=args.iresnet_lr, no_init_iresnet=args.no_init_iresnet, opacity_threshold=args.opacity_threshold, mcmc=args.mcmc, cubemap=args.cubemap, table1=args.table1)
+        render_resolution=args.render_resolution, apply2gt=args.apply2gt, iresnet_lr=args.iresnet_lr, iresnet_opt_duration=args.iresnet_opt_duration, no_init_iresnet=args.no_init_iresnet, opacity_threshold=args.opacity_threshold, mcmc=args.mcmc, cubemap=args.cubemap, table1=args.table1)
 
     # All done
     print("\nTraining complete.")

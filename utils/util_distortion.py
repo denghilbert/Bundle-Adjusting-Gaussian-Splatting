@@ -211,19 +211,23 @@ def init_iresnet(scene, dataset, optimizer_lens_net, lens_net, scheduler_lens_ne
         param_group['lr'] = iresnet_lr
     print(f"The learning rate is reset to {param_group['lr']}")
 
-def apply_distortion(lens_net, P_view_insidelens_direction, P_sensor, viewpoint_cam, image, apply2gt=False, flow_scale=None):
-    P_view_outsidelens_direction = lens_net.forward(P_view_insidelens_direction, sensor_to_frustum=apply2gt)
-    camera_directions_w_lens = homogenize(P_view_outsidelens_direction)
-    control_points = camera_directions_w_lens.reshape((P_sensor.shape[0], P_sensor.shape[1], 3))[:, :, :2]
+def apply_distortion(flow_apply2_gt_or_img, lens_net, P_view_insidelens_direction, P_sensor, viewpoint_cam, image, apply2gt=False, flow_scale=None):
+    if flow_apply2_gt_or_img == None:
+        P_view_outsidelens_direction = lens_net.forward(P_view_insidelens_direction, sensor_to_frustum=apply2gt)
+        camera_directions_w_lens = homogenize(P_view_outsidelens_direction)
+        control_points = camera_directions_w_lens.reshape((P_sensor.shape[0], P_sensor.shape[1], 3))[:, :, :2]
+
+        if apply2gt:
+            projection_matrix = viewpoint_cam.flow4gt
+        else:
+            projection_matrix = viewpoint_cam.projection_matrix
+        flow = control_points @ projection_matrix[:2, :2]
 
     if apply2gt:
-        projection_matrix = viewpoint_cam.flow4gt
-    else:
-        projection_matrix = viewpoint_cam.projection_matrix
-    flow = control_points @ projection_matrix[:2, :2]
-
-    if apply2gt:
-        flow = nn.functional.interpolate(flow.permute(2, 0, 1).unsqueeze(0), size=(int(viewpoint_cam.image_height), int(viewpoint_cam.image_width)), mode='bilinear', align_corners=False).permute(0, 2, 3, 1).squeeze(0)
+        if flow_apply2_gt_or_img == None:
+            flow = nn.functional.interpolate(flow.permute(2, 0, 1).unsqueeze(0), size=(int(viewpoint_cam.image_height), int(viewpoint_cam.image_width)), mode='bilinear', align_corners=False).permute(0, 2, 3, 1).squeeze(0)
+        else:
+            flow = flow_apply2_gt_or_img
         gt_image = F.grid_sample(
             viewpoint_cam.fish_gt_image.cuda().unsqueeze(0),
             flow.unsqueeze(0),
@@ -234,7 +238,10 @@ def apply_distortion(lens_net, P_view_insidelens_direction, P_sensor, viewpoint_
         mask = (~((gt_image[0]<0.00001) & (gt_image[1]<0.00001)).unsqueeze(0)).float()
         return gt_image, mask, flow
     else:
-        flow = nn.functional.interpolate(flow.permute(2, 0, 1).unsqueeze(0), size=(int(viewpoint_cam.fish_gt_image_resolution[1]*flow_scale[0]), int(viewpoint_cam.fish_gt_image_resolution[2]*flow_scale[1])), mode='bilinear', align_corners=False).permute(0, 2, 3, 1).squeeze(0)
+        if flow_apply2_gt_or_img == None:
+            flow = nn.functional.interpolate(flow.permute(2, 0, 1).unsqueeze(0), size=(int(viewpoint_cam.fish_gt_image_resolution[1]*flow_scale[0]), int(viewpoint_cam.fish_gt_image_resolution[2]*flow_scale[1])), mode='bilinear', align_corners=False).permute(0, 2, 3, 1).squeeze(0)
+        else:
+            flow = flow_apply2_gt_or_img
         image = F.grid_sample(
             image.unsqueeze(0),
             flow.unsqueeze(0),
