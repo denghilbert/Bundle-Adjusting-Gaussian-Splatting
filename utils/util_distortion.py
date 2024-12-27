@@ -108,6 +108,27 @@ def generate_pts(scene, boundary_scale=4, sample_resolution=20):
 
     return P_sensor, P_view_insidelens_direction
 
+def read_colmap_coeff(dataset):
+    coeff = torch.tensor([0., 0, 0, 0]).cuda()
+    if 'fish' in dataset.source_path:
+        path = os.path.join(dataset.source_path, 'sparse/0/cameras.bin')
+    else:
+        path = os.path.join(dataset.source_path, 'fish/sparse/0/cameras.bin')
+    if os.path.exists(path):
+        cam_intrinsics = read_intrinsics_binary(os.path.join(dataset.source_path, 'fish/sparse/0/cameras.bin'))
+        for idx, key in enumerate(cam_intrinsics):
+            if 'RADIAL' in cam_intrinsics[key].model:
+                coeff = cam_intrinsics[key].params[-2:].tolist()
+            if 'FISHEYE' in cam_intrinsics[key].model:
+                coeff = cam_intrinsics[key].params[-4:].tolist()
+                break
+    elif os.path.exists(os.path.join(dataset.source_path, 'cameras.json')):
+        with open(os.path.join(dataset.source_path, 'cameras.json')) as json_file:
+            contents = json.load(json_file)
+            coeff = contents['KRT'][-1]['distortion']
+    print(f"using coeff: {coeff}")
+    return coeff
+
 def init_from_coeff(coeff, dataset, ref_points):
     r = torch.sqrt(torch.sum(ref_points**2, dim=-1, keepdim=True))
     inv_r = 1 / r
@@ -146,7 +167,49 @@ def init_from_coeff(coeff, dataset, ref_points):
 
     return ref_points
 
-def init_iresnet(scene, dataset, optimizer_lens_net, lens_net, scheduler_lens_net, resume_training=None, iresnet_lr=1e-7):
+def generate_circle_points(min_radius=0.0, max_radius=2.0, radius_step=0.2, num_angles=100):
+    radii = torch.arange(min_radius, max_radius + 1e-7, radius_step)  # 1e-7 to ensure inclusive
+    angles = torch.linspace(0, 2 * torch.pi, num_angles)  # [num_angles]
+    R, Theta = torch.meshgrid(radii, angles, indexing='ij')
+
+    X = R * torch.cos(Theta)
+    Y = R * torch.sin(Theta)
+    circle_points = torch.stack([X.flatten(), Y.flatten()], dim=-1)  # [n, 2]
+    radii = torch.sqrt(torch.sum(circle_points ** 2, dim=1))
+
+    return circle_points, radii
+
+def init_cubemap(scene, dataset, optimizer_lens_net, lens_net, scheduler_lens_net, resume_training=None, iresnet_lr=1e-7, cubemap=False):
+    #try:
+    #    coeff = read_colmap_coeff(scene)
+    #except:
+    #    coeff = [0., 0., 0., 0.]
+
+    coeff = [-0.03936274483986258, 0.0058665450972623032, -0.0012988220238146179, 0.]
+
+    points_n, r_n = generate_circle_points(min_radius=0.05, max_radius=23.0, radius_step=0.05, num_angles=100)
+    r_d = torch.atan(r_n) + coeff[0] * torch.atan(r_n)**3 + coeff[1] * torch.atan(r_n)**5 + coeff[2] * torch.atan(r_n)**7 + coeff[3] * torch.atan(r_n)**9
+    inv_r_n = 1 / (r_n + 1e-5)
+    points_d = (r_d * inv_r_n).unsqueeze(-1) * points_n
+
+    inv_r_d = 1 / (r_d + 1e-5)
+    r_n_ = torch.tan(r_d)
+    scale_ = r_n * inv_r_d
+    train_x = (points_d * scale_.unsqueeze(-1)).cuda()
+    train_y = points_n.cuda()
+    progress_bar_ires = tqdm(range(0, 1000), desc="Init Iresnet")
+    for i in range(1000):
+        pred_x = lens_net.forward(train_x, sensor_to_frustum=True)
+        loss = ((pred_x - train_y)**2).mean()
+        progress_bar_ires.set_postfix(loss=loss.item())
+        progress_bar_ires.update(1)
+        loss.backward()
+        optimizer_lens_net.step()
+        optimizer_lens_net.zero_grad(set_to_none = True)
+        scheduler_lens_net.step()
+    progress_bar_ires.close()
+
+def init_iresnet(scene, dataset, optimizer_lens_net, lens_net, scheduler_lens_net, resume_training=None, iresnet_lr=1e-7, cubemap=False):
     P_sensor, P_view_insidelens_direction = generate_pts(scene, boundary_scale=5, sample_resolution=40)
     P_view_outsidelens_direction = P_view_insidelens_direction
     camera_directions_w_lens = homogenize(P_view_outsidelens_direction)
@@ -206,10 +269,6 @@ def init_iresnet(scene, dataset, optimizer_lens_net, lens_net, scheduler_lens_ne
                 plt.close()
 
         progress_bar_ires.close()
-
-    for param_group in optimizer_lens_net.param_groups:
-        param_group['lr'] = iresnet_lr
-    print(f"The learning rate is reset to {param_group['lr']}")
 
 def apply_distortion(flow_apply2_gt_or_img, lens_net, P_view_insidelens_direction, P_sensor, viewpoint_cam, image, apply2gt=False, flow_scale=None):
     if flow_apply2_gt_or_img == None:

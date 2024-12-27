@@ -195,6 +195,8 @@ def readColmapCameras(cam_extrinsics, cam_intrinsics, images_folder):
             assert False, "Colmap camera model not handled: only undistorted datasets (PINHOLE or SIMPLE_PINHOLE cameras) supported!"
 
         image_path = os.path.join(images_folder, os.path.basename(extr.name))
+        if not os.path.exists(image_path):
+            image_path = image_path.replace('png', 'jpg')
         image_name = os.path.basename(image_path).split(".")[0]
         if 'paul_garden' in images_folder:
             image = Image.open(image_path.replace('png', 'jpg'))
@@ -252,8 +254,15 @@ def readColmapSceneInfo(path, images, eval, llffhold=8, init_type="sfm", num_pts
         cam_intrinsics = read_intrinsics_text(cameras_intrinsic_file)
 
     #items = list(cam_extrinsics.items())
-    #items = items[:2]
+    #items = items[:200]
     #cam_extrinsics = dict(items)
+
+    if 'eyeful' in path:
+        print(len(cam_extrinsics))
+        cam_extrinsics = {key: value for key, value in cam_extrinsics.items() if not value.name.startswith("0_REN")}
+        cam_extrinsics = {key: value for key, value in cam_extrinsics.items() if not value.name.startswith("2_REN")}
+        print(len(cam_extrinsics))
+        print('remove the cam0 in eyeful dataset')
 
     reading_dir = "images" if images == None else images
     cam_infos_unsorted = readColmapCameras(cam_extrinsics=cam_extrinsics, cam_intrinsics=cam_intrinsics, images_folder=os.path.join(path, reading_dir))

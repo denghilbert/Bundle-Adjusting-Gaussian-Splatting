@@ -74,52 +74,72 @@ def generate_circular_mask(image_shape: torch.Size, radius: int) -> torch.Tensor
 
     return mask
 
-def apply_flow_up_down_left_right(viewpoint_cam, lens_net, rays, rays_residual, img, types="forward", is_fisheye=False, iteration=None):
+def interpolate_with_control(control_r, control_theta, r):
+    # Flatten control_r for easy indexing
+    control_r_flat = control_r.squeeze()
+
+    # Find indices of the two nearest control_r points for each value in r
+    indices = torch.searchsorted(control_r_flat, r.squeeze(), right=True)
+    indices = torch.clamp(indices, 1, len(control_r_flat) - 1)
+
+    # Get the lower and upper neighbors for each element in r
+    low_indices = indices - 1
+    high_indices = indices
+
+    # Fetch the corresponding values from control_r and control_theta
+    r_low = control_r_flat[low_indices]
+    r_high = control_r_flat[high_indices]
+    theta_low = control_theta[low_indices]
+    theta_high = control_theta[high_indices]
+
+    # Calculate weights and perform linear interpolation
+    weights = (r.squeeze() - r_low) / (r_high - r_low)
+    interpolated_theta = (1 - weights).unsqueeze(1) * theta_low + weights.unsqueeze(1) * theta_high
+
+    # Ensure output matches the shape of r
+    return interpolated_theta.view_as(r)
+
+def differentiable_interpolation(r, control_r, control_theta):
+    # Expand dimensions for broadcasting
+    r_expanded = r.unsqueeze(1)  # [N, 1, 1]
+    control_r_expanded = control_r.unsqueeze(0)  # [1, M, 1]
+    
+    # Calculate differences between r and control points
+    diffs = r_expanded - control_r_expanded  # [N, M, 1]
+    
+    # Create masks for finding points that bracket each r value
+    lower_mask = (diffs >= 0).float()
+    upper_mask = (diffs < 0).float()
+    
+    # Find indices of closest lower and upper control points
+    # We use a trick here to get differentiable "argmax-like" behavior
+    lower_indices = (lower_mask * torch.arange(control_r.shape[0], device=r.device).float().unsqueeze(0).unsqueeze(-1)).sum(dim=1)
+    upper_indices = control_r.shape[0] - 1 - (upper_mask * torch.arange(control_r.shape[0]-1, -1, -1, device=r.device).float().unsqueeze(0).unsqueeze(-1)).sum(dim=1)
+    
+    # Handle edge cases
+    lower_indices = torch.clamp(lower_indices, 0, control_r.shape[0]-2)
+    upper_indices = torch.clamp(upper_indices, 1, control_r.shape[0]-1)
+    
+    # Convert indices to integer for gathering
+    lower_indices = lower_indices.long()
+    upper_indices = upper_indices.long()
+    
+    # Gather the bracketing control points and their corresponding theta values
+    r1 = control_r[lower_indices]
+    r2 = control_r[upper_indices]
+    theta1 = control_theta[lower_indices]
+    theta2 = control_theta[upper_indices]
+    
+    # Perform linear interpolation
+    # (r - r1) * (theta2 - theta1) / (r2 - r1) + theta1
+    result = (r - r1) * (theta2 - theta1) / (r2 - r1) + theta1
+    
+    return result
+
+def apply_flow_up_down_left_right(viewpoint_cam, rays_dis_hom, img, types="forward", is_fisheye=False, iteration=None):
     width = viewpoint_cam.image_width
     height = viewpoint_cam.image_height
     K = viewpoint_cam.get_K
-    r = torch.sqrt(torch.sum(rays**2, dim=-1, keepdim=True))
-    if is_fisheye:
-        inv_r = 1 / (r + 1e-5)
-        theta = torch.tan(r)
-        scale = theta * inv_r
-        #scale[scale < 0] = 0 # including scale < 0 can extend to cameras more than 180 degree
-        #scale[scale > 10] = 0
-        rays_dis = scale * rays
-    else:
-        rays_dis = rays
-
-    #residual = torch.tensor([0., 0.])
-    residual = (lens_net.forward(rays_residual, sensor_to_frustum=True) - rays_residual).reshape(height//8, width//8, 2).permute(2, 0, 1).unsqueeze(0)
-
-    if torch.isnan(residual).any():
-        import pdb;pdb.set_trace()
-    upsampled_residual = F.interpolate(residual, size=(height, width), mode='bilinear', align_corners=False).squeeze(0).permute(1, 2, 0).reshape(-1, 2)
-    rays_dis_hom = homogenize(rays_dis + upsampled_residual)
-    #rays_dis_hom = homogenize(rays_dis)
-
-    #xy_points = rays[:, :2].cpu().numpy()
-    #plt.figure(figsize=(10, 10))
-    #plt.scatter(xy_points[:, 0], xy_points[:, 1], s=10, alpha=0.8)
-    #plt.title('2D Scatter Plot of Rays')
-    #plt.xlabel('X')
-    #plt.ylabel('Y')
-    #plt.axis('equal')
-    #output_image_path = "output/test/forward_pts.png"
-    #plt.savefig(output_image_path, dpi=300, bbox_inches='tight')
-    #plt.close()
-
-    #xy_points = rays_dis_hom[:, :2].cpu().numpy()
-    #plt.figure(figsize=(10, 10))
-    #plt.scatter(xy_points[:, 0], xy_points[:, 1], s=10, alpha=0.8)
-    #plt.title('2D Scatter Plot of Rays')
-    #plt.xlabel('X')
-    #plt.ylabel('Y')
-    #plt.axis('equal')
-    #output_image_path = "output/test/forward_pts_.png"
-    #plt.savefig(output_image_path, dpi=300, bbox_inches='tight')
-    #plt.close()
-
     if types == 'left':
         x = rays_dis_hom[:, 0]  # First column (x)
         y = rays_dis_hom[:, 1]  # Second column (y)
@@ -146,19 +166,6 @@ def apply_flow_up_down_left_right(viewpoint_cam, lens_net, rays, rays_residual, 
         P_down = torch.stack((x / y, -z / y), dim=1)  # Shape: [N, 2]
         rays_dis_hom = homogenize(P_down)
 
-        #xy_points = rays_dis_hom[:, :2].cpu().numpy()
-        #xy_points[xy_points>10] = 0
-        #xy_points[xy_points<-10] = 0
-        #plt.figure(figsize=(10, 10))
-        #plt.scatter(xy_points[:, 0], xy_points[:, 1], s=10, alpha=0.8)
-        #plt.title('2D Scatter Plot of Rays')
-        #plt.xlabel('X')
-        #plt.ylabel('Y')
-        #plt.axis('equal')
-        #output_image_path = "output/test/forward_pts__.png"
-        #plt.savefig(output_image_path, dpi=300, bbox_inches='tight')
-        #plt.close()
-
     rays_dis_inside = dehomogenize((K @ rays_dis_hom.T).T).reshape(height, width, 2)
 
     # apply flow field
@@ -178,13 +185,7 @@ def apply_flow_up_down_left_right(viewpoint_cam, lens_net, rays, rays_residual, 
         padding_mode='zeros',
         align_corners=True)
     distorted_img = distorted_img.squeeze(0)  # Shape: [3, 800, 800]
-    #import torchvision
-    #torchvision.utils.save_image(img, "output/test/forward_pts___.png")
-    #torchvision.utils.save_image(distorted_img, "output/test/forward_pts____.png")
-    #import pdb;pdb.set_trace()
 
-    if types == 'forward':
-        return distorted_img, img, residual
     return distorted_img, img
 
 
@@ -215,16 +216,35 @@ def mask_half(image: torch.Tensor, direction: str = "left") -> torch.Tensor:
     return masked_image, mask
 
 
-def render_cubemap(render, viewpoint_cam, lens_net, mask_fov90, shift_width, shift_height, gaussians, pipe, background, mlp_color, shift_factors, iteration, hybrid, scene, validation=False):
+def render_cubemap(render, viewpoint_cam, cubemap_net, mask_fov90, shift_width, shift_height, gaussians, pipe, background, mlp_color, shift_factors, iteration, hybrid, scene, validation=False, control_theta=None):
     img_list, viewspace_point_tensor_list, visibility_filter_list, radii_list = [], [], [], []
     if validation:
         img_perspective_list = []
 
-    rays_forward = generate_pts_up_down_left_right(viewpoint_cam, shift_width=0, shift_height=0)
-    rays_residual = generate_pts_up_down_left_right(viewpoint_cam, shift_width=0, shift_height=0, sample_rate=8)
+    rays = generate_pts_up_down_left_right(viewpoint_cam, shift_width=0, shift_height=0, sample_rate=8)
     render_pkg = render(viewpoint_cam, gaussians, pipe, background, mlp_color, shift_factors, iteration=iteration, hybrid=hybrid, global_alignment=scene.getGlobalAlignment())
     img_forward, viewspace_point_tensor, visibility_filter, radii = render_pkg["render"] * mask_fov90, render_pkg["viewspace_points"], render_pkg["visibility_filter"], render_pkg["radii"]
-    img_distorted, img_perspective, residual = apply_flow_up_down_left_right(viewpoint_cam, lens_net, rays_forward, rays_residual, img_forward, types="forward", is_fisheye=True, iteration=iteration)
+
+    width = viewpoint_cam.image_width
+    height = viewpoint_cam.image_height
+    r_d = torch.sqrt(torch.sum(rays**2, dim=-1, keepdim=True))
+    inv_r_d = 1 / (r_d + 1e-5)
+    r_d[r_d > 1.54] = 1.54
+    #theta = torch.tan(r) + interpolate_with_control(control_r, control_theta, r)
+    #theta = torch.tan(r) + differentiable_interpolation(r, control_r, control_theta)
+
+    r_n = torch.tan(r_d)
+    scale = r_n * inv_r_d
+    rays_dis = scale * rays
+
+    residual = (cubemap_net.forward(rays_dis, sensor_to_frustum=True)).reshape(height//8, width//8, 2).permute(2, 0, 1).unsqueeze(0)
+    residual = (rays_dis).reshape(height//8, width//8, 2).permute(2, 0, 1).unsqueeze(0)
+    if torch.isnan(residual).any():
+        import pdb;pdb.set_trace()
+    upsampled_residual = F.interpolate(residual, size=(height, width), mode='bilinear', align_corners=False).squeeze(0).permute(1, 2, 0).reshape(-1, 2)
+    rays_dis_hom = homogenize(upsampled_residual)
+
+    img_distorted, img_perspective = apply_flow_up_down_left_right(viewpoint_cam, rays_dis_hom, img_forward, types="forward", is_fisheye=True, iteration=iteration)
     img_list.append(img_distorted)
     if validation:
         img_perspective_list.append(img_perspective)
@@ -237,19 +257,15 @@ def render_cubemap(render, viewpoint_cam, lens_net, mask_fov90, shift_width, shi
         if i == 4: break
         render_pkg = render(sub_camera, gaussians, pipe, background, mlp_color, shift_factors, iteration=iteration, hybrid=hybrid, global_alignment=scene.getGlobalAlignment())
         img_up, viewspace_point_tensor, visibility_filter, radii = render_pkg["render"] * mask_fov90, render_pkg["viewspace_points"], render_pkg["visibility_filter"], render_pkg["radii"]
-        if name[i] == 'up':
-            rays_up = generate_pts_up_down_left_right(sub_camera, shift_width=0, shift_height=-shift_height)
-            rays_residual = generate_pts_up_down_left_right(sub_camera, shift_width=0, shift_height=-shift_height, sample_rate=8)
-        elif name[i] == 'down':
-            rays_up = generate_pts_up_down_left_right(sub_camera, shift_width=0, shift_height=shift_height)
-            rays_residual = generate_pts_up_down_left_right(sub_camera, shift_width=0, shift_height=-shift_height, sample_rate=8)
-        elif name[i] == 'left':
-            rays_up = generate_pts_up_down_left_right(sub_camera, shift_width=shift_width, shift_height=0)
-            rays_residual = generate_pts_up_down_left_right(sub_camera, shift_width=0, shift_height=-shift_height, sample_rate=8)
-        elif name[i] == 'right':
-            rays_up = generate_pts_up_down_left_right(sub_camera, shift_width=-shift_width, shift_height=0)
-            rays_residual = generate_pts_up_down_left_right(sub_camera, shift_width=0, shift_height=-shift_height, sample_rate=8)
-        img_distorted, img_perspective = apply_flow_up_down_left_right(sub_camera, lens_net, rays_up, rays_residual, img_up, types=name[i], is_fisheye=True)
+        #if name[i] == 'up':
+        #    rays_up = generate_pts_up_down_left_right(sub_camera, shift_width=0, shift_height=-shift_height, sample_rate=8)
+        #elif name[i] == 'down':
+        #    rays_up = generate_pts_up_down_left_right(sub_camera, shift_width=0, shift_height=shift_height, sample_rate=8)
+        #elif name[i] == 'left':
+        #    rays_up = generate_pts_up_down_left_right(sub_camera, shift_width=shift_width, shift_height=0, sample_rate=8)
+        #elif name[i] == 'right':
+        #    rays_up = generate_pts_up_down_left_right(sub_camera, shift_width=-shift_width, shift_height=0, sample_rate=8)
+        img_distorted, img_perspective = apply_flow_up_down_left_right(sub_camera, rays_dis_hom, img_up, types=name[i], is_fisheye=True)
         img_distorted_masked, half_mask = mask_half(img_distorted, name[i])
 
         img_list.append(img_distorted_masked)
@@ -260,7 +276,7 @@ def render_cubemap(render, viewpoint_cam, lens_net, mask_fov90, shift_width, shi
             img_perspective_list.append(img_perspective)
 
     if not validation:
-        return img_list, viewspace_point_tensor_list, visibility_filter_list, radii_list, residual
+        return img_list, viewspace_point_tensor_list, visibility_filter_list, radii_list
     else:
         return img_list, img_perspective_list
 

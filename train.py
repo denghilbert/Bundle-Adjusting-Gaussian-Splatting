@@ -41,7 +41,7 @@ import time
 from io import BytesIO
 from torch import nn
 import torch.nn.functional as F
-from utils.util_distortion import homogenize, dehomogenize, colorize, plot_points, center_crop, init_iresnet, apply_distortion, generate_control_pts
+from utils.util_distortion import homogenize, dehomogenize, colorize, plot_points, center_crop, init_iresnet, init_cubemap, apply_distortion, generate_control_pts, read_colmap_coeff
 from utils.cubemap_utils import apply_flow_up_down_left_right, generate_pts_up_down_left_right, mask_half, generate_circular_mask, render_cubemap
 import copy
 from scene.cameras import Camera
@@ -85,6 +85,16 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
     optimizer_lens_net = torch.optim.Adam(l_lens_net, eps=1e-15)
     scheduler_lens_net = torch.optim.lr_scheduler.MultiStepLR(optimizer_lens_net, milestones=[7000], gamma=0.5)
 
+    # cubemap network 
+    cubemap_net = iResNet(input_num=2).cuda()
+    l_cubemap_net = [{'params': cubemap_net.parameters(), 'lr': 1e-5}]
+    optimizer_cubemap_net = torch.optim.Adam(l_cubemap_net, eps=1e-15)
+    scheduler_cubemap_net = torch.optim.lr_scheduler.MultiStepLR(optimizer_cubemap_net, milestones=[2000, 7000, 9000], gamma=0.5)
+    init_cubemap(scene, dataset, optimizer_cubemap_net, cubemap_net, scheduler_cubemap_net, resume_training=checkpoint, iresnet_lr=iresnet_lr, cubemap=cubemap)
+    for param_group in optimizer_cubemap_net.param_groups:
+        param_group['lr'] = iresnet_lr
+    print(f"The learning rate is reset to {param_group['lr']}")
+
     # modeling vignetting
     vignetting_model = VignettingModel(n_terms=4, device='cuda')
     vignetting_optimizer = torch.optim.Adam(vignetting_model.parameters(), lr=0.01)
@@ -125,7 +135,6 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
     # colmap init
     if outside_rasterizer and not no_init_iresnet:
         init_iresnet(scene, dataset, optimizer_lens_net, lens_net, scheduler_lens_net, resume_training=checkpoint, iresnet_lr=iresnet_lr)
-    if cubemap:
         for param_group in optimizer_lens_net.param_groups:
             param_group['lr'] = iresnet_lr
         print(f"The learning rate is reset to {param_group['lr']}")
@@ -202,7 +211,8 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
             mask_fov90 = torch.zeros((1, viewpoint_cam.image_height, viewpoint_cam.image_width), dtype=torch.float32).cuda()
             mask_fov90[:, viewpoint_cam.image_height//2 - int(viewpoint_cam.focal_y) - 1:viewpoint_cam.image_height//2 + int(viewpoint_cam.focal_y) + 1, viewpoint_cam.image_width//2 - int(viewpoint_cam.focal_x) - 1:viewpoint_cam.image_width//2 + int(viewpoint_cam.focal_x) + 1] = 1
 
-            img_list, viewspace_point_tensor_list, visibility_filter_list, radii_list, residual = render_cubemap(render, viewpoint_cam, lens_net, mask_fov90, 0., 0., gaussians, pipe, background, mlp_color, shift_factors, iteration, hybrid, scene)
+            img_list, viewspace_point_tensor_list, visibility_filter_list, radii_list = render_cubemap(render, viewpoint_cam, cubemap_net, mask_fov90, 0., 0., gaussians, pipe, background, mlp_color, shift_factors, iteration, hybrid, scene)
+
 
             img_mask_list = []
             for img in img_list:
@@ -255,7 +265,7 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
             ssim_loss = ssim(image, gt_image)
         elif cubemap:
             gt_image = viewpoint_cam.original_image.cuda()
-            mask_gt_image = generate_circular_mask(gt_image.shape, 400).cuda()
+            mask_gt_image = generate_circular_mask(gt_image.shape, 512).cuda()
 
             Ll1 = (
                 l1_loss(img_list[0]*mask_gt_image*img_mask_list[0], gt_image*mask_gt_image*img_mask_list[0]) +
@@ -314,7 +324,7 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
                 P_view_insidelens_direction = None
                 P_sensor = None
 
-            training_report(use_wandb, iteration, Ll1, ssim_loss, loss, l1_loss, iter_start.elapsed_time(iter_end), testing_iterations, scene, render, (pipe, background, mlp_color, shift_factors), lens_net, opt_distortion, no_distortion_mask, outside_rasterizer, flow_scale, control_point_sample_scale, flow_apply2_gt_or_img, apply2gt, cubemap, table1, opt_shift, shift_outside_factors)
+            training_report(use_wandb, iteration, Ll1, ssim_loss, loss, l1_loss, iter_start.elapsed_time(iter_end), testing_iterations, scene, render, (pipe, background, mlp_color, shift_factors), lens_net, cubemap_net, opt_distortion, no_distortion_mask, outside_rasterizer, flow_scale, control_point_sample_scale, flow_apply2_gt_or_img, apply2gt, cubemap, table1, opt_shift, shift_outside_factors)
 
             if (iteration in saving_iterations):
                 print("\n[ITER {}] Saving Gaussians".format(iteration))
@@ -382,6 +392,10 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
                 gaussians.optimizer.step()
                 gaussians.optimizer.zero_grad(set_to_none = True)
 
+                if cubemap and iteration > iresnet_opt_duration[0] and iteration < iresnet_opt_duration[1]:
+                    optimizer_cubemap_net.step()
+                    optimizer_cubemap_net.zero_grad(set_to_none = True)
+
                 if mcmc:
                     L = build_scaling_rotation(gaussians.get_scaling, gaussians.get_rotation)
                     actual_covariance = L @ L.transpose(1, 2)
@@ -406,6 +420,7 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
                             f"vignetting_model/beta_k3": vignetting_model.beta_k[3].cpu().item(),
                         }
                         wandb.log(scalars, step=iteration)
+
                 if opt_distortion and iteration > iresnet_opt_duration[0] and iteration < iresnet_opt_duration[1]:
                     optimizer_lens_net.step()
                     optimizer_lens_net.zero_grad(set_to_none=True)
@@ -443,7 +458,7 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
                     torch.save(scene.unnoisy_train_cameras, os.path.join(scene.model_path, 'gt_cams.pt'))
                     torch.save(scene.train_cameras, os.path.join(scene.model_path, f'cams_train{iteration}.pt'))
 
-def training_report(use_wandb, iteration, Ll1, ssim_loss, loss, l1_loss, elapsed, testing_iterations, scene : Scene, renderFunc, renderArgs, lens_net, opt_distortion, no_distortion_mask, outside_rasterizer, flow_scale, control_point_sample_scale, flow_apply2_gt_or_img, apply2gt, cubemap, table1, opt_shift, shift_outside_factors):
+def training_report(use_wandb, iteration, Ll1, ssim_loss, loss, l1_loss, elapsed, testing_iterations, scene : Scene, renderFunc, renderArgs, lens_net, cubemap_net, opt_distortion, no_distortion_mask, outside_rasterizer, flow_scale, control_point_sample_scale, flow_apply2_gt_or_img, apply2gt, cubemap, table1, opt_shift, shift_outside_factors):
     if use_wandb and iteration % 10 == 0:
         scalars = {
             f"loss/l1_loss": Ll1,
@@ -559,7 +574,7 @@ def training_report(use_wandb, iteration, Ll1, ssim_loss, loss, l1_loss, elapsed
                             mask_fov90 = torch.zeros((1, viewpoint.image_height, viewpoint.image_width), dtype=torch.float32).cuda()
                             mask_fov90[:, viewpoint.image_height//2 - int(viewpoint.focal_y) - 1:viewpoint.image_height//2 + int(viewpoint.focal_y) + 1, viewpoint.image_width//2 - int(viewpoint.focal_x) - 1:viewpoint.image_width//2 + int(viewpoint.focal_x) + 1] = 1
                             torchvision.utils.save_image(mask_fov90.float(), os.path.join(scene.model_path, 'mask1.png'))
-                            img_list, img_perspective_list = render_cubemap(render, viewpoint, lens_net, mask_fov90, 0., 0., scene.gaussians, *renderArgs, iteration, False, scene, validation=True)
+                            img_list, img_perspective_list = render_cubemap(render, viewpoint, cubemap_net, mask_fov90, 0., 0., scene.gaussians, *renderArgs, iteration, False, scene, validation=True)
                             direction_name = ['forward', 'up', 'down', 'left', 'right']
                             for i in range(5):
                                 torchvision.utils.save_image(img_perspective_list[i], os.path.join(scene.model_path, 'training_val_{}/renderred/{}/{}_perspective'.format(iteration, direction_name[i], viewpoint.image_name) + "_" + name + ".png"))
@@ -573,7 +588,7 @@ def training_report(use_wandb, iteration, Ll1, ssim_loss, loss, l1_loss, elapsed
                                 intensity_final = torch.where(mask, intensity_img, intensity_final)  # Update intensity tracker
 
                             torchvision.utils.save_image(final_image, os.path.join(scene.model_path, 'training_val_{}/renderred/{}_distorted_stitch'.format(iteration, viewpoint.image_name) + "_" + name + ".png"))
-                            mask_gt_image = generate_circular_mask(viewpoint.original_image.shape, 400).cuda()
+                            mask_gt_image = generate_circular_mask(viewpoint.original_image.shape, 512).cuda()
                             torchvision.utils.save_image(final_image*mask_gt_image, os.path.join(scene.model_path, 'training_val_{}/renderred/{}_distorted_stitch_masked'.format(iteration, viewpoint.image_name) + "_" + name + ".png"))
                             gt_image = viewpoint.original_image.cuda()
                             torchvision.utils.save_image(gt_image, os.path.join(scene.model_path, 'training_val_{}/gt/{}_perspective'.format(iteration, viewpoint.image_name) + "_" + name + ".png"))
@@ -597,7 +612,7 @@ def training_report(use_wandb, iteration, Ll1, ssim_loss, loss, l1_loss, elapsed
                             ssims.append(ssim(image, gt_image))
                             lpipss.append(lpips(image, gt_image))
                         elif cubemap:
-                            mask_gt_image = generate_circular_mask(gt_image.shape, 400).cuda()
+                            mask_gt_image = generate_circular_mask(gt_image.shape, 512).cuda()
                             l1_test += l1_loss(final_image*mask_gt_image, gt_image*mask_gt_image).mean().double()
                             psnr_test += psnr(final_image*mask_gt_image, gt_image*mask_gt_image).mean().double()
                             ssims.append(ssim(final_image*mask_gt_image, gt_image*mask_gt_image))
