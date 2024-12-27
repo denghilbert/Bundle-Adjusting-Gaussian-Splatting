@@ -211,7 +211,7 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
             mask_fov90 = torch.zeros((1, viewpoint_cam.image_height, viewpoint_cam.image_width), dtype=torch.float32).cuda()
             mask_fov90[:, viewpoint_cam.image_height//2 - int(viewpoint_cam.focal_y) - 1:viewpoint_cam.image_height//2 + int(viewpoint_cam.focal_y) + 1, viewpoint_cam.image_width//2 - int(viewpoint_cam.focal_x) - 1:viewpoint_cam.image_width//2 + int(viewpoint_cam.focal_x) + 1] = 1
 
-            img_list, viewspace_point_tensor_list, visibility_filter_list, radii_list = render_cubemap(render, viewpoint_cam, cubemap_net, mask_fov90, 0., 0., gaussians, pipe, background, mlp_color, shift_factors, iteration, hybrid, scene)
+            img_list, viewspace_point_tensor_list, visibility_filter_list, radii_list = render_cubemap(render, viewpoint_cam, control_point_sample_scale, cubemap_net, mask_fov90, 0., 0., gaussians, pipe, background, mlp_color, shift_factors, iteration, hybrid, scene)
 
 
             img_mask_list = []
@@ -574,7 +574,7 @@ def training_report(use_wandb, iteration, Ll1, ssim_loss, loss, l1_loss, elapsed
                             mask_fov90 = torch.zeros((1, viewpoint.image_height, viewpoint.image_width), dtype=torch.float32).cuda()
                             mask_fov90[:, viewpoint.image_height//2 - int(viewpoint.focal_y) - 1:viewpoint.image_height//2 + int(viewpoint.focal_y) + 1, viewpoint.image_width//2 - int(viewpoint.focal_x) - 1:viewpoint.image_width//2 + int(viewpoint.focal_x) + 1] = 1
                             torchvision.utils.save_image(mask_fov90.float(), os.path.join(scene.model_path, 'mask1.png'))
-                            img_list, img_perspective_list = render_cubemap(render, viewpoint, cubemap_net, mask_fov90, 0., 0., scene.gaussians, *renderArgs, iteration, False, scene, validation=True)
+                            img_list, img_perspective_list = render_cubemap(render, viewpoint, control_point_sample_scale, cubemap_net, mask_fov90, 0., 0., scene.gaussians, *renderArgs, iteration, False, scene, validation=True)
                             direction_name = ['forward', 'up', 'down', 'left', 'right']
                             for i in range(5):
                                 torchvision.utils.save_image(img_perspective_list[i], os.path.join(scene.model_path, 'training_val_{}/renderred/{}/{}_perspective'.format(iteration, direction_name[i], viewpoint.image_name) + "_" + name + ".png"))

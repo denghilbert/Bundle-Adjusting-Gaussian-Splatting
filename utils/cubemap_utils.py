@@ -216,12 +216,12 @@ def mask_half(image: torch.Tensor, direction: str = "left") -> torch.Tensor:
     return masked_image, mask
 
 
-def render_cubemap(render, viewpoint_cam, cubemap_net, mask_fov90, shift_width, shift_height, gaussians, pipe, background, mlp_color, shift_factors, iteration, hybrid, scene, validation=False, control_theta=None):
+def render_cubemap(render, viewpoint_cam, control_point_sample_scale, cubemap_net, mask_fov90, shift_width, shift_height, gaussians, pipe, background, mlp_color, shift_factors, iteration, hybrid, scene, validation=False, control_theta=None):
     img_list, viewspace_point_tensor_list, visibility_filter_list, radii_list = [], [], [], []
     if validation:
         img_perspective_list = []
 
-    rays = generate_pts_up_down_left_right(viewpoint_cam, shift_width=0, shift_height=0, sample_rate=8)
+    rays = generate_pts_up_down_left_right(viewpoint_cam, shift_width=0, shift_height=0, sample_rate=control_point_sample_scale)
     render_pkg = render(viewpoint_cam, gaussians, pipe, background, mlp_color, shift_factors, iteration=iteration, hybrid=hybrid, global_alignment=scene.getGlobalAlignment())
     img_forward, viewspace_point_tensor, visibility_filter, radii = render_pkg["render"] * mask_fov90, render_pkg["viewspace_points"], render_pkg["visibility_filter"], render_pkg["radii"]
 
@@ -237,8 +237,7 @@ def render_cubemap(render, viewpoint_cam, cubemap_net, mask_fov90, shift_width, 
     scale = r_n * inv_r_d
     rays_dis = scale * rays
 
-    residual = (cubemap_net.forward(rays_dis, sensor_to_frustum=True)).reshape(height//8, width//8, 2).permute(2, 0, 1).unsqueeze(0)
-    residual = (rays_dis).reshape(height//8, width//8, 2).permute(2, 0, 1).unsqueeze(0)
+    residual = (cubemap_net.forward(rays_dis, sensor_to_frustum=True)).reshape(height//control_point_sample_scale, width//control_point_sample_scale, 2).permute(2, 0, 1).unsqueeze(0)
     if torch.isnan(residual).any():
         import pdb;pdb.set_trace()
     upsampled_residual = F.interpolate(residual, size=(height, width), mode='bilinear', align_corners=False).squeeze(0).permute(1, 2, 0).reshape(-1, 2)
