@@ -109,7 +109,7 @@ def generate_pts(scene, boundary_scale=4, sample_resolution=20):
     return P_sensor, P_view_insidelens_direction
 
 def read_colmap_coeff(dataset):
-    coeff = torch.tensor([0., 0, 0, 0]).cuda()
+    coeff = [0., 0, 0, 0]
     if 'fish' in dataset.source_path:
         path = os.path.join(dataset.source_path, 'sparse/0/cameras.bin')
     else:
@@ -180,14 +180,12 @@ def generate_circle_points(min_radius=0.0, max_radius=2.0, radius_step=0.2, num_
     return circle_points, radii
 
 def init_cubemap(scene, dataset, optimizer_lens_net, lens_net, scheduler_lens_net, resume_training=None, iresnet_lr=1e-7, cubemap=False):
-    #try:
-    #    coeff = read_colmap_coeff(scene)
-    #except:
-    #    coeff = [0., 0., 0., 0.]
+    try:
+        coeff = read_colmap_coeff(dataset)
+    except:
+        coeff = [0., 0., 0., 0.]
 
-    coeff = [-0.03936274483986258, 0.0058665450972623032, -0.0012988220238146179, 0.]
-
-    points_n, r_n = generate_circle_points(min_radius=0.05, max_radius=23.0, radius_step=0.05, num_angles=100)
+    points_n, r_n = generate_circle_points(min_radius=0.05, max_radius=20.0, radius_step=0.05, num_angles=100)
     r_d = torch.atan(r_n) + coeff[0] * torch.atan(r_n)**3 + coeff[1] * torch.atan(r_n)**5 + coeff[2] * torch.atan(r_n)**7 + coeff[3] * torch.atan(r_n)**9
     inv_r_n = 1 / (r_n + 1e-5)
     points_d = (r_d * inv_r_n).unsqueeze(-1) * points_n

@@ -221,27 +221,35 @@ def render_cubemap(render, viewpoint_cam, control_point_sample_scale, cubemap_ne
     if validation:
         img_perspective_list = []
 
+    width = viewpoint_cam.image_width
+    height = viewpoint_cam.image_height
+
+    rays_base = generate_pts_up_down_left_right(viewpoint_cam, shift_width=0, shift_height=0)
     rays = generate_pts_up_down_left_right(viewpoint_cam, shift_width=0, shift_height=0, sample_rate=control_point_sample_scale)
     render_pkg = render(viewpoint_cam, gaussians, pipe, background, mlp_color, shift_factors, iteration=iteration, hybrid=hybrid, global_alignment=scene.getGlobalAlignment())
     img_forward, viewspace_point_tensor, visibility_filter, radii = render_pkg["render"] * mask_fov90, render_pkg["viewspace_points"], render_pkg["visibility_filter"], render_pkg["radii"]
 
-    width = viewpoint_cam.image_width
-    height = viewpoint_cam.image_height
-    r_d = torch.sqrt(torch.sum(rays**2, dim=-1, keepdim=True))
-    inv_r_d = 1 / (r_d + 1e-5)
-    r_d[r_d > 1.54] = 1.54
+    # high resolution base distortion
+    r_d = torch.sqrt(torch.sum(rays_base**2, dim=-1, keepdim=True))
+    inv_r_d = 1 / (r_d + 1e-7)
     #theta = torch.tan(r) + interpolate_with_control(control_r, control_theta, r)
     #theta = torch.tan(r) + differentiable_interpolation(r, control_r, control_theta)
+    r_n = torch.tan(r_d)
+    scale = r_n * inv_r_d
+    rays_dis_base = scale * rays_base
 
+    r_d = torch.sqrt(torch.sum(rays**2, dim=-1, keepdim=True))
+    inv_r_d = 1 / (r_d + 1e-7)
+    r_d[r_d > 1.52] = 1.52
     r_n = torch.tan(r_d)
     scale = r_n * inv_r_d
     rays_dis = scale * rays
-
-    residual = (cubemap_net.forward(rays_dis, sensor_to_frustum=True)).reshape(height//control_point_sample_scale, width//control_point_sample_scale, 2).permute(2, 0, 1).unsqueeze(0)
+    residual = (cubemap_net.forward(rays_dis, sensor_to_frustum=True) - rays_dis).reshape(height//control_point_sample_scale, width//control_point_sample_scale, 2).permute(2, 0, 1).unsqueeze(0)
+    upsampled_residual = F.interpolate(residual, size=(height, width), mode='bilinear', align_corners=False).squeeze(0).permute(1, 2, 0).reshape(-1, 2)
     if torch.isnan(residual).any():
         import pdb;pdb.set_trace()
-    upsampled_residual = F.interpolate(residual, size=(height, width), mode='bilinear', align_corners=False).squeeze(0).permute(1, 2, 0).reshape(-1, 2)
-    rays_dis_hom = homogenize(upsampled_residual)
+    #rays_dis_hom = homogenize(rays_dis_base + upsampled_residual)
+    rays_dis_hom = homogenize(rays_dis_base)
 
     img_distorted, img_perspective = apply_flow_up_down_left_right(viewpoint_cam, rays_dis_hom, img_forward, types="forward", is_fisheye=True, iteration=iteration)
     img_list.append(img_distorted)

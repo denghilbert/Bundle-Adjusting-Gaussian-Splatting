@@ -90,7 +90,8 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
     l_cubemap_net = [{'params': cubemap_net.parameters(), 'lr': 1e-5}]
     optimizer_cubemap_net = torch.optim.Adam(l_cubemap_net, eps=1e-15)
     scheduler_cubemap_net = torch.optim.lr_scheduler.MultiStepLR(optimizer_cubemap_net, milestones=[2000, 7000, 9000], gamma=0.5)
-    init_cubemap(scene, dataset, optimizer_cubemap_net, cubemap_net, scheduler_cubemap_net, resume_training=checkpoint, iresnet_lr=iresnet_lr, cubemap=cubemap)
+    if cubemap:
+        init_cubemap(scene, dataset, optimizer_cubemap_net, cubemap_net, scheduler_cubemap_net, resume_training=checkpoint, iresnet_lr=iresnet_lr, cubemap=cubemap)
     for param_group in optimizer_cubemap_net.param_groups:
         param_group['lr'] = iresnet_lr
     print(f"The learning rate is reset to {param_group['lr']}")
@@ -265,7 +266,7 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
             ssim_loss = ssim(image, gt_image)
         elif cubemap:
             gt_image = viewpoint_cam.original_image.cuda()
-            mask_gt_image = generate_circular_mask(gt_image.shape, 512).cuda()
+            mask_gt_image = generate_circular_mask(gt_image.shape, 495).cuda()
 
             Ll1 = (
                 l1_loss(img_list[0]*mask_gt_image*img_mask_list[0], gt_image*mask_gt_image*img_mask_list[0]) +
@@ -588,7 +589,7 @@ def training_report(use_wandb, iteration, Ll1, ssim_loss, loss, l1_loss, elapsed
                                 intensity_final = torch.where(mask, intensity_img, intensity_final)  # Update intensity tracker
 
                             torchvision.utils.save_image(final_image, os.path.join(scene.model_path, 'training_val_{}/renderred/{}_distorted_stitch'.format(iteration, viewpoint.image_name) + "_" + name + ".png"))
-                            mask_gt_image = generate_circular_mask(viewpoint.original_image.shape, 512).cuda()
+                            mask_gt_image = generate_circular_mask(viewpoint.original_image.shape, 495).cuda()
                             torchvision.utils.save_image(final_image*mask_gt_image, os.path.join(scene.model_path, 'training_val_{}/renderred/{}_distorted_stitch_masked'.format(iteration, viewpoint.image_name) + "_" + name + ".png"))
                             gt_image = viewpoint.original_image.cuda()
                             torchvision.utils.save_image(gt_image, os.path.join(scene.model_path, 'training_val_{}/gt/{}_perspective'.format(iteration, viewpoint.image_name) + "_" + name + ".png"))
@@ -612,7 +613,7 @@ def training_report(use_wandb, iteration, Ll1, ssim_loss, loss, l1_loss, elapsed
                             ssims.append(ssim(image, gt_image))
                             lpipss.append(lpips(image, gt_image))
                         elif cubemap:
-                            mask_gt_image = generate_circular_mask(gt_image.shape, 512).cuda()
+                            mask_gt_image = generate_circular_mask(gt_image.shape, 495).cuda()
                             l1_test += l1_loss(final_image*mask_gt_image, gt_image*mask_gt_image).mean().double()
                             psnr_test += psnr(final_image*mask_gt_image, gt_image*mask_gt_image).mean().double()
                             ssims.append(ssim(final_image*mask_gt_image, gt_image*mask_gt_image))
