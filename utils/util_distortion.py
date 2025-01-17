@@ -185,7 +185,7 @@ def init_cubemap(scene, dataset, optimizer_lens_net, lens_net, scheduler_lens_ne
     except:
         coeff = [0., 0., 0., 0.]
 
-    points_n, r_n = generate_circle_points(min_radius=0.05, max_radius=20.0, radius_step=0.05, num_angles=100)
+    points_n, r_n = generate_circle_points(min_radius=0.05, max_radius=80.0, radius_step=0.05, num_angles=100)
     r_d = torch.atan(r_n) + coeff[0] * torch.atan(r_n)**3 + coeff[1] * torch.atan(r_n)**5 + coeff[2] * torch.atan(r_n)**7 + coeff[3] * torch.atan(r_n)**9
     inv_r_n = 1 / (r_n + 1e-5)
     points_d = (r_d * inv_r_n).unsqueeze(-1) * points_n
@@ -195,8 +195,8 @@ def init_cubemap(scene, dataset, optimizer_lens_net, lens_net, scheduler_lens_ne
     scale_ = r_n * inv_r_d
     train_x = (points_d * scale_.unsqueeze(-1)).cuda()
     train_y = points_n.cuda()
-    progress_bar_ires = tqdm(range(0, 1000), desc="Init Iresnet")
-    for i in range(1000):
+    progress_bar_ires = tqdm(range(0, 500), desc="Init Iresnet")
+    for i in range(500):
         pred_x = lens_net.forward(train_x, sensor_to_frustum=True)
         loss = ((pred_x - train_y)**2).mean()
         progress_bar_ires.set_postfix(loss=loss.item())

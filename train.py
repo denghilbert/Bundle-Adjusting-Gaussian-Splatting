@@ -63,7 +63,7 @@ if torch.cuda.is_available():
 np.random.seed(seed_value)
 random.seed(seed_value)
 
-def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoint_iterations, checkpoint, debug_from, use_wandb=False, random_init=False, hybrid=False, opt_cam=False, opt_shift=False, no_distortion_mask=False, opt_distortion=False, start_vignetting=10000000000, opt_intrinsic=False, r_t_noise=[0., 0.], r_t_lr=[0.001, 0.001], global_alignment_lr=0.001, extra_loss=False, start_opt_lens=1, extend_scale=2., control_point_sample_scale=8., outside_rasterizer=False, abs_grad=False, densi_num=0.0002, if_circular_mask=False, flow_scale=[1., 1.], render_resolution=1., apply2gt=False, iresnet_lr=1e-7, iresnet_opt_duration=[0, 30000], no_init_iresnet=False, opacity_threshold=0.005, mcmc=False, cubemap=False, table1=False):
+def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoint_iterations, checkpoint, debug_from, use_wandb=False, random_init=False, hybrid=False, opt_cam=False, opt_shift=False, no_distortion_mask=False, opt_distortion=False, start_vignetting=10000000000, opt_intrinsic=False, r_t_noise=[0., 0.], r_t_lr=[0.001, 0.001], global_alignment_lr=0.001, extra_loss=False, start_opt_lens=1, extend_scale=2., control_point_sample_scale=8., outside_rasterizer=False, abs_grad=False, densi_num=0.0002, mask_radius=512, if_circular_mask=False, flow_scale=[1., 1.], render_resolution=1., apply2gt=False, iresnet_lr=1e-7, iresnet_opt_duration=[0, 30000], no_init_iresnet=False, opacity_threshold=0.005, mcmc=False, cubemap=False, table1=False):
     if dataset.cap_max == -1 and mcmc:
         print("Please specify the maximum number of Gaussians using --cap_max.")
         exit()
@@ -266,7 +266,7 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
             ssim_loss = ssim(image, gt_image)
         elif cubemap:
             gt_image = viewpoint_cam.original_image.cuda()
-            mask_gt_image = generate_circular_mask(gt_image.shape, 495).cuda()
+            mask_gt_image = generate_circular_mask(gt_image.shape, mask_radius).cuda()
 
             Ll1 = (
                 l1_loss(img_list[0]*mask_gt_image*img_mask_list[0], gt_image*mask_gt_image*img_mask_list[0]) +
@@ -325,7 +325,7 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
                 P_view_insidelens_direction = None
                 P_sensor = None
 
-            training_report(use_wandb, iteration, Ll1, ssim_loss, loss, l1_loss, iter_start.elapsed_time(iter_end), testing_iterations, scene, render, (pipe, background, mlp_color, shift_factors), lens_net, cubemap_net, opt_distortion, no_distortion_mask, outside_rasterizer, flow_scale, control_point_sample_scale, flow_apply2_gt_or_img, apply2gt, cubemap, table1, opt_shift, shift_outside_factors)
+            training_report(use_wandb, iteration, Ll1, ssim_loss, loss, l1_loss, iter_start.elapsed_time(iter_end), testing_iterations, scene, render, (pipe, background, mlp_color, shift_factors), lens_net, cubemap_net, opt_distortion, no_distortion_mask, outside_rasterizer, flow_scale, control_point_sample_scale, flow_apply2_gt_or_img, apply2gt, cubemap, table1, opt_shift, shift_outside_factors, mask_radius)
 
             if (iteration in saving_iterations):
                 print("\n[ITER {}] Saving Gaussians".format(iteration))
@@ -459,7 +459,7 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
                     torch.save(scene.unnoisy_train_cameras, os.path.join(scene.model_path, 'gt_cams.pt'))
                     torch.save(scene.train_cameras, os.path.join(scene.model_path, f'cams_train{iteration}.pt'))
 
-def training_report(use_wandb, iteration, Ll1, ssim_loss, loss, l1_loss, elapsed, testing_iterations, scene : Scene, renderFunc, renderArgs, lens_net, cubemap_net, opt_distortion, no_distortion_mask, outside_rasterizer, flow_scale, control_point_sample_scale, flow_apply2_gt_or_img, apply2gt, cubemap, table1, opt_shift, shift_outside_factors):
+def training_report(use_wandb, iteration, Ll1, ssim_loss, loss, l1_loss, elapsed, testing_iterations, scene : Scene, renderFunc, renderArgs, lens_net, cubemap_net, opt_distortion, no_distortion_mask, outside_rasterizer, flow_scale, control_point_sample_scale, flow_apply2_gt_or_img, apply2gt, cubemap, table1, opt_shift, shift_outside_factors, mask_radius):
     if use_wandb and iteration % 10 == 0:
         scalars = {
             f"loss/l1_loss": Ll1,
@@ -589,7 +589,7 @@ def training_report(use_wandb, iteration, Ll1, ssim_loss, loss, l1_loss, elapsed
                                 intensity_final = torch.where(mask, intensity_img, intensity_final)  # Update intensity tracker
 
                             torchvision.utils.save_image(final_image, os.path.join(scene.model_path, 'training_val_{}/renderred/{}_distorted_stitch'.format(iteration, viewpoint.image_name) + "_" + name + ".png"))
-                            mask_gt_image = generate_circular_mask(viewpoint.original_image.shape, 495).cuda()
+                            mask_gt_image = generate_circular_mask(viewpoint.original_image.shape, mask_radius).cuda()
                             torchvision.utils.save_image(final_image*mask_gt_image, os.path.join(scene.model_path, 'training_val_{}/renderred/{}_distorted_stitch_masked'.format(iteration, viewpoint.image_name) + "_" + name + ".png"))
                             gt_image = viewpoint.original_image.cuda()
                             torchvision.utils.save_image(gt_image, os.path.join(scene.model_path, 'training_val_{}/gt/{}_perspective'.format(iteration, viewpoint.image_name) + "_" + name + ".png"))
@@ -613,7 +613,7 @@ def training_report(use_wandb, iteration, Ll1, ssim_loss, loss, l1_loss, elapsed
                             ssims.append(ssim(image, gt_image))
                             lpipss.append(lpips(image, gt_image))
                         elif cubemap:
-                            mask_gt_image = generate_circular_mask(gt_image.shape, 495).cuda()
+                            mask_gt_image = generate_circular_mask(gt_image.shape, mask_radius).cuda()
                             l1_test += l1_loss(final_image*mask_gt_image, gt_image*mask_gt_image).mean().double()
                             psnr_test += psnr(final_image*mask_gt_image, gt_image*mask_gt_image).mean().double()
                             ssims.append(ssim(final_image*mask_gt_image, gt_image*mask_gt_image))
@@ -696,6 +696,7 @@ if __name__ == "__main__":
     parser.add_argument("--abs_grad", action="store_true", default=False)
     parser.add_argument('--densi_num', type=float, default=0.0002)
     parser.add_argument("--if_circular_mask", action="store_true", default=False)
+    parser.add_argument('--mask_radius', type=int, default=512)
     # flow_scale[0] is width and flow_scale[1] is height
     parser.add_argument("--flow_scale", nargs="+", type=float, default=[1., 1.])
     parser.add_argument("--render_resolution", type=float, default=1.)
@@ -743,7 +744,7 @@ if __name__ == "__main__":
         start_vignetting=args.start_vignetting, opt_intrinsic=args.opt_intrinsic, r_t_lr=args.r_t_lr, r_t_noise=args.r_t_noise,
         global_alignment_lr=args.global_alignment_lr, extra_loss=args.extra_loss, start_opt_lens=args.start_opt_lens,
         extend_scale=args.extend_scale, control_point_sample_scale=args.control_point_sample_scale, outside_rasterizer=args.outside_rasterizer,
-        abs_grad=args.abs_grad, densi_num=args.densi_num, if_circular_mask=args.if_circular_mask, flow_scale=args.flow_scale,
+        abs_grad=args.abs_grad, densi_num=args.densi_num, mask_radius=args.mask_radius, if_circular_mask=args.if_circular_mask, flow_scale=args.flow_scale,
         render_resolution=args.render_resolution, apply2gt=args.apply2gt, iresnet_lr=args.iresnet_lr, iresnet_opt_duration=args.iresnet_opt_duration, no_init_iresnet=args.no_init_iresnet, opacity_threshold=args.opacity_threshold, mcmc=args.mcmc, cubemap=args.cubemap, table1=args.table1)
 
     # All done

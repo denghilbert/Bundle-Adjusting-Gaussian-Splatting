@@ -240,16 +240,16 @@ def render_cubemap(render, viewpoint_cam, control_point_sample_scale, cubemap_ne
 
     r_d = torch.sqrt(torch.sum(rays**2, dim=-1, keepdim=True))
     inv_r_d = 1 / (r_d + 1e-7)
-    r_d[r_d > 1.52] = 1.52
+    r_d[r_d > 1.55] = 1.55
     r_n = torch.tan(r_d)
     scale = r_n * inv_r_d
     rays_dis = scale * rays
+
     residual = (cubemap_net.forward(rays_dis, sensor_to_frustum=True) - rays_dis).reshape(height//control_point_sample_scale, width//control_point_sample_scale, 2).permute(2, 0, 1).unsqueeze(0)
     upsampled_residual = F.interpolate(residual, size=(height, width), mode='bilinear', align_corners=False).squeeze(0).permute(1, 2, 0).reshape(-1, 2)
     if torch.isnan(residual).any():
         import pdb;pdb.set_trace()
-    #rays_dis_hom = homogenize(rays_dis_base + upsampled_residual)
-    rays_dis_hom = homogenize(rays_dis_base)
+    rays_dis_hom = homogenize(rays_dis_base + upsampled_residual)
 
     img_distorted, img_perspective = apply_flow_up_down_left_right(viewpoint_cam, rays_dis_hom, img_forward, types="forward", is_fisheye=True, iteration=iteration)
     img_list.append(img_distorted)
