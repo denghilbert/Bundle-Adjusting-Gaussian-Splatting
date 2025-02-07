@@ -399,7 +399,7 @@ def readCamerasFromTransforms(path, transformsfile, white_background, extension=
             # NeRF 'transform_matrix' is a camera-to-world transform
             c2w = np.array(frame["transform_matrix"])
             # change from OpenGL/Blender camera axes (Y up, Z back) to COLMAP (Y down, Z forward)
-            if contents["type"] == "mitsuba":
+            if "type" in contents and contents["type"] == "mitsuba":
                 c2w[:3, 0:2] *= -1
             else:
                 c2w[:3, 1:3] *= -1
@@ -547,7 +547,8 @@ def readNerfSyntheticInfo(path, white_background, eval, extension=".png", init_t
         ply_path = os.path.join(path, "random.ply")
         print(f"Generating random point cloud ({num_pts})...")
 
-        xyz = np.random.random((num_pts, 3)) * nerf_normalization["radius"]* 3*2 -(nerf_normalization["radius"]*3)
+        #xyz = np.random.random((num_pts, 3)) * nerf_normalization["radius"]* 3*2 -(nerf_normalization["radius"]*3)
+        xyz = np.random.random((num_pts, 3)) * 2.6 - 1.3
 
         num_pts = xyz.shape[0]
         shs = np.random.random((num_pts, 3)) / 255.0
