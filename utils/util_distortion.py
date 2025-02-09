@@ -195,8 +195,8 @@ def init_cubemap(scene, dataset, optimizer_lens_net, lens_net, scheduler_lens_ne
     scale_ = r_n * inv_r_d
     train_x = (points_d * scale_.unsqueeze(-1)).cuda()
     train_y = points_n.cuda()
-    progress_bar_ires = tqdm(range(0, 500), desc="Init Iresnet")
-    for i in range(500):
+    progress_bar_ires = tqdm(range(0, 100), desc="Init Iresnet")
+    for i in range(100):
         pred_x = lens_net.forward(train_x, sensor_to_frustum=True)
         loss = ((pred_x - train_y)**2).mean()
         progress_bar_ires.set_postfix(loss=loss.item())
