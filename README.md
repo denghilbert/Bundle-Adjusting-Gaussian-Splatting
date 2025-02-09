@@ -100,6 +100,8 @@ Finally, our method optimizes from an inaccurate COLMAP prediction:
 python train.py -s example_datasets/single_planar/cube/ -m output/cube --r_t_noise 0.0 0.0 1. --test_iterations 3000 10000 20000 30000 --save_iterations 3000 10000 20000 30000 --checkpoint_iterations 3000 10000 20000 30000 --iterations 30000 --eval --r_t_lr 0.002 0.002 --control_point_sample_scale 16 --extend_scale 10000 --opt_distortion --outside_rasterizer --flow_scale 2. 2. --iresnet_lr 1e-7 --wandb_project_name release_code --wandb_mode online --port 11112 --opacity_reset_interval 100000 --densify_until_iter 100000 --iresnet_opt_duration 0 7000
 ```
 
+before running cubemap, we have a slight modification in [Gaussian sorting](https://github.com/denghilbert/3dgs-pose/blob/cd77ced15a278bd1e9c0e80c24d61de3a6fe1f3b/cuda_rasterizer/forward.cu#L647). Change to sorting with distance and then re-compile.
+
 We can also apply cubemap sampling to support wider FOV cameras:
 
 ```shell
