@@ -293,14 +293,20 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
                 for i in range(5)
             ]
             Ll1_list_ = [l for l in Ll1_list if not torch.isnan(l).any()]
-            Ll1 = sum(Ll1_list_) if Ll1_list_ else torch.tensor(0.0, device=img_list[0].device)
+            if Ll1_list_:
+                Ll1 = sum(Ll1_list_)
+            else:
+                continue
 
             ssim_list = [
                 ssim(img_list[i] * mask_gt_image * img_mask_list[i], gt_image * mask_gt_image * img_mask_list[i])
                 for i in range(5)
             ]
             ssim_list_ = [s for s in ssim_list if not torch.isnan(s).any()]
-            ssim_loss = sum(ssim_list_) if ssim_list_ else torch.tensor(0.0, device=img_list[0].device)
+            if ssim_list_:
+                ssim_loss = sum(ssim_list_)
+            else:
+                continue
         else:
             gt_image = viewpoint_cam.original_image.cuda()
             Ll1 = l1_loss(image, gt_image)
