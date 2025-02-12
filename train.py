@@ -63,6 +63,26 @@ if torch.cuda.is_available():
 np.random.seed(seed_value)
 random.seed(seed_value)
 
+def has_nan_in_model(model):
+    """Check if any weight or gradient in the model contains NaN."""
+    for name, param in model.named_parameters():
+        if torch.isnan(param).any():
+            print(f"⚠️ NaN detected in: {name} (weights)")
+            return True
+        if param.grad is not None and torch.isnan(param.grad).any():
+            print(f"⚠️ NaN detected in: {name} (gradients)")
+            return True
+    return False  # No NaNs found
+
+def has_nan_in_gradients(model):
+    """Check if any gradient in the model contains NaN."""
+    for name, param in model.named_parameters():
+        if param.grad is not None and torch.isnan(param.grad).any():
+            print(f"⚠️ NaN detected in: {name} (gradients)")
+            return True
+    return False  # No NaNs found in gradients
+
+
 def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoint_iterations, checkpoint, debug_from, use_wandb=False, random_init=False, hybrid=False, opt_cam=False, opt_shift=False, no_distortion_mask=False, opt_distortion=False, start_vignetting=10000000000, opt_intrinsic=False, r_t_noise=[0., 0.], r_t_lr=[0.001, 0.001], global_alignment_lr=0.001, extra_loss=False, start_opt_lens=1, extend_scale=2., control_point_sample_scale=8., outside_rasterizer=False, abs_grad=False, densi_num=0.0002, mask_radius=512, if_circular_mask=False, flow_scale=[1., 1.], render_resolution=1., apply2gt=False, iresnet_lr=1e-7, iresnet_opt_duration=[0, 30000], no_init_iresnet=False, opacity_threshold=0.005, mcmc=False, cubemap=False, table1=False):
     if dataset.cap_max == -1 and mcmc:
         print("Please specify the maximum number of Gaussians using --cap_max.")
@@ -210,7 +230,7 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
 
         if cubemap:
             mask_fov90 = torch.zeros((1, viewpoint_cam.image_height, viewpoint_cam.image_width), dtype=torch.float32).cuda()
-            mask_fov90[:, viewpoint_cam.image_height//2 - int(viewpoint_cam.focal_y) - 2:viewpoint_cam.image_height//2 + int(viewpoint_cam.focal_y) + 2, viewpoint_cam.image_width//2 - int(viewpoint_cam.focal_x) - 2:viewpoint_cam.image_width//2 + int(viewpoint_cam.focal_x) + 2] = 1
+            mask_fov90[:, viewpoint_cam.image_height//2 - int(viewpoint_cam.focal_y):viewpoint_cam.image_height//2 + int(viewpoint_cam.focal_y), viewpoint_cam.image_width//2 - int(viewpoint_cam.focal_x):viewpoint_cam.image_width//2 + int(viewpoint_cam.focal_x)] = 1
 
             img_list, viewspace_point_tensor_list, visibility_filter_list, radii_list = render_cubemap(render, viewpoint_cam, int(control_point_sample_scale), cubemap_net, mask_fov90, 0., 0., gaussians, pipe, background, mlp_color, shift_factors, iteration, hybrid, scene)
 
@@ -268,20 +288,19 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
             gt_image = viewpoint_cam.original_image.cuda()
             mask_gt_image = generate_circular_mask(gt_image.shape, mask_radius).cuda()
 
-            Ll1 = (
-                l1_loss(img_list[0]*mask_gt_image*img_mask_list[0], gt_image*mask_gt_image*img_mask_list[0]) +
-                l1_loss(img_list[1]*mask_gt_image*img_mask_list[1], gt_image*mask_gt_image*img_mask_list[1]) +
-                l1_loss(img_list[2]*mask_gt_image*img_mask_list[2], gt_image*mask_gt_image*img_mask_list[2]) +
-                l1_loss(img_list[3]*mask_gt_image*img_mask_list[3], gt_image*mask_gt_image*img_mask_list[3]) +
-                l1_loss(img_list[4]*mask_gt_image*img_mask_list[4], gt_image*mask_gt_image*img_mask_list[4])
-            )
-            ssim_loss = (
-                ssim(img_list[0]*mask_gt_image*img_mask_list[0], gt_image*mask_gt_image*img_mask_list[0]) +
-                ssim(img_list[1]*mask_gt_image*img_mask_list[1], gt_image*mask_gt_image*img_mask_list[1]) +
-                ssim(img_list[2]*mask_gt_image*img_mask_list[2], gt_image*mask_gt_image*img_mask_list[2]) +
-                ssim(img_list[3]*mask_gt_image*img_mask_list[3], gt_image*mask_gt_image*img_mask_list[3]) +
-                ssim(img_list[4]*mask_gt_image*img_mask_list[4], gt_image*mask_gt_image*img_mask_list[4])
-            )
+            Ll1_list = [
+                l1_loss(img_list[i] * mask_gt_image * img_mask_list[i], gt_image * mask_gt_image * img_mask_list[i])
+                for i in range(5)
+            ]
+            Ll1_list_ = [l for l in Ll1_list if not torch.isnan(l).any()]
+            Ll1 = sum(Ll1_list_) if Ll1_list_ else torch.tensor(0.0, device=img_list[0].device)
+
+            ssim_list = [
+                ssim(img_list[i] * mask_gt_image * img_mask_list[i], gt_image * mask_gt_image * img_mask_list[i])
+                for i in range(5)
+            ]
+            ssim_list_ = [s for s in ssim_list if not torch.isnan(s).any()]
+            ssim_loss = sum(ssim_list_) if ssim_list_ else torch.tensor(0.0, device=img_list[0].device)
         else:
             gt_image = viewpoint_cam.original_image.cuda()
             Ll1 = l1_loss(image, gt_image)
@@ -394,7 +413,14 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
                 gaussians.optimizer.zero_grad(set_to_none = True)
 
                 if cubemap and iteration > iresnet_opt_duration[0] and iteration < iresnet_opt_duration[1]:
+                    if has_nan_in_gradients(cubemap_net):
+                        print(iteration)
+                        import pdb; pdb.set_trace()  # Debug only if NaNs are found
+                        #cubemap_net.i_resnet_linear.module_list[0].residual[0].weight
+                        continue
                     optimizer_cubemap_net.step()
+                    if has_nan_in_model(cubemap_net):
+                        import pdb; pdb.set_trace()  # Debug only if NaNs are found
                     optimizer_cubemap_net.zero_grad(set_to_none = True)
 
                 if mcmc:

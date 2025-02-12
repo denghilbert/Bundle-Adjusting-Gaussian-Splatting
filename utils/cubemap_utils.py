@@ -240,7 +240,7 @@ def render_cubemap(render, viewpoint_cam, control_point_sample_scale, cubemap_ne
 
     r_d = torch.sqrt(torch.sum(rays**2, dim=-1, keepdim=True))
     inv_r_d = 1 / (r_d + 1e-7)
-    r_d[r_d > 1.5] = 1.5
+    r_d[r_d > 1.55] = 1.55
     r_n = torch.tan(r_d)
     scale = r_n * inv_r_d
     rays_dis = scale * rays
