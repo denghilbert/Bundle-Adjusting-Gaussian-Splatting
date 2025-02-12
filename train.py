@@ -395,6 +395,8 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
                             wandb.log(scalars, step=iteration)
                     elif cubemap:
                         for i in range(len(viewspace_point_tensor_list)):
+                            if viewspace_point_tensor_list[i].grad == None:
+                                continue
                             gaussians.max_radii2D[visibility_filter_list[i]] = torch.max(gaussians.max_radii2D[visibility_filter_list[i]], radii_list[i][visibility_filter_list[i]])
                             gaussians.add_densification_stats(viewspace_point_tensor_list[i], None, visibility_filter_list[i], abs_grad)
                             if use_wandb and iteration % 10 == 0:
