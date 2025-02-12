@@ -240,8 +240,8 @@ def init_iresnet(scene, dataset, optimizer_lens_net, lens_net, scheduler_lens_ne
     P_view_insidelens_direction =torch.cat((P_view_insidelens_direction0, P_view_insidelens_direction1), dim=0)
 
     if resume_training == None:
-        progress_bar_ires = tqdm(range(0, 10000), desc="Init Iresnet")
-        for i in range(10000):
+        progress_bar_ires = tqdm(range(0, 5000), desc="Init Iresnet")
+        for i in range(5000):
             P_view_outsidelens_direction = lens_net.forward(P_view_insidelens_direction, sensor_to_frustum=True)
             control_points = homogenize(P_view_outsidelens_direction)
             inf_mask = torch.isinf(control_points)
