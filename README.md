@@ -7,7 +7,7 @@
 The repository contains submodules. Please clone with:
 
 ```bash
-git clone --depth 1 git@github.com:denghilbert/Bundle-Adjusting-Gaussian-Splatting.git --recursive
+git clone --depth 1 git@github.com:denghilbert/Self-Cali-GS.git --recursive
 ```
 
 ***
