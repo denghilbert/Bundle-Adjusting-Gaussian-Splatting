@@ -2,6 +2,29 @@
 
 ***
 
+<a href="https://arxiv.org" target="_blank">
+    <img alt="arXiv" src="https://img.shields.io/badge/arXiv-self--cali--gs-red?logo=arxiv" height="20" />
+</a>
+<a href="https://denghilbert.github.io/self-cali/" target="_blank">
+    <img alt="Website" src="https://img.shields.io/badge/🌎_Website-self--cali--gs-blue.svg" height="20" />
+</a>
+
+<div>
+    <a href="https://denghilbert.github.io/" target="_blank">Youming Deng</a><sup>1</sup>,</span>
+    <a href="https://www.cs.cornell.edu/~wenqixian/" target="_blank">Wenqi Xian</a><sup>2</sup>, </span>
+    <a href="https://www.guandaoyang.com/" target="_blank">Guandao Yang</a><sup>3</sup>,</span>
+    <a href="https://profiles.stanford.edu/leonidas-guibas" target="_blank">Leonidas Guibas</a><sup>3</sup>,</span>
+    <a href="https://stanford.edu/~gordonwz/" target="_blank">Gordon Wetzstein</a><sup>3</sup>,</span>
+    <a href="https://www.cs.cornell.edu/~srm/" target="_blank">Steve Marschner</a><sup>1</sup>,</span>
+    <a href="https://www.pauldebevec.com/" target="_blank">Paul Debevec</a><sup>2</sup>,</span>
+</div>
+
+<div>
+    <sup>1</sup>Cornell University&emsp;
+    <sup>2</sup>Netflix Eyeline Studio&emsp;
+    <sup>3</sup>Stanford University&emsp;
+</div>
+
 ## Cloning the Repository
 
 The repository contains submodules. Please clone with:
