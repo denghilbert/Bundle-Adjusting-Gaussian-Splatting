@@ -2,7 +2,7 @@
 
 ***
 
-<a href="https://arxiv.org" target="_blank">
+<a href="https://arxiv.org/abs/2502.09563" target="_blank">
     <img alt="arXiv" src="https://img.shields.io/badge/arXiv-self--cali--gs-red?logo=arxiv" height="20" />
 </a>
 <a href="https://denghilbert.github.io/self-cali/" target="_blank">
