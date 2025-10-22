@@ -128,6 +128,7 @@ def readColmapCameras(cam_extrinsics, cam_intrinsics, images_folder):
         #    return mat
         #R_test = mat_from_quat(extr.qvec)
 
+        focal_length_y = None
         if intr.model=="SIMPLE_PINHOLE" or intr.model=="RADIAL":
             focal_length_x = intr.params[0]
             FovY = focal2fov(focal_length_x, height)
@@ -208,7 +209,7 @@ def readColmapCameras(cam_extrinsics, cam_intrinsics, images_folder):
             cam_info = CameraInfo(uid=uid, R=R, T=T, FovY=FovY, FovX=FovX, focal_length_x=focal_length_x, focal_length_y=focal_length_y, image=image, intrinsic_matrix=intrinsic_matrix,                              image_path=image_path, image_name=image_name, width=width, height=height)
             cam_infos.append(cam_info)
         else:
-            cam_info = CameraInfo(uid=uid, R=R, T=T, FovY=FovY, FovX=FovX, focal_length_x=focal_length_x, focal_length_y=focal_length_y, image=image, intrinsic_matrix=intrinsic_matrix,                              image_path=image_path, image_name=image_name, width=width, height=height)
+            cam_info = CameraInfo(uid=uid, R=R, T=T, FovY=FovY, FovX=FovX, focal_length_x=focal_length_x, focal_length_y=focal_length_x, image=image, intrinsic_matrix=intrinsic_matrix,                              image_path=image_path, image_name=image_name, width=width, height=height)
             cam_infos.append(cam_info)
 
     sys.stdout.write('\n')
